@@ -66,11 +66,80 @@ function compressImage(dataUrl, maxSize, quality) {
 }
 
 /* ───────── STORAGE ───────── */
-const SK_LOGOS = "wo-brand-logos-v2";
 const SK_LIB = "wo-image-library";
 const SK_HIST = "wo-asset-history";
 const MAX_LIB = 15;
 const MAX_HIST = 20;
+
+/* ───────── TWO LOGO SYSTEM ───────── */
+const LOGO_VARIANTS = [
+  // Primary
+  { id:"p1-green",  label:"Primary 1",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-1-green.svg" },
+  { id:"p1-ivory",  label:"Primary 1",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-1-ivory.svg" },
+  { id:"p2-green",  label:"Primary 2",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-2-green.svg" },
+  { id:"p2-ivory",  label:"Primary 2",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-2-ivory.svg" },
+  { id:"p3-green",  label:"Primary 3",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-3-green.svg" },
+  { id:"p3-ivory",  label:"Primary 3",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-3-flat-ivory.svg" },
+  { id:"p3f-green", label:"Primary 3 Flat", group:"primary", color:"green", src:"/assets/logos/primary/primary-3-flat-green.svg" },
+  { id:"p4",        label:"Primary 4",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-4.svg" },
+  { id:"p-central", label:"Central",    group:"primary",  color:"green", src:"/assets/logos/primary/primary-central-green.svg" },
+  { id:"p-circle",  label:"Circle",     group:"primary",  color:"green", src:"/assets/logos/primary/primary-circle.svg" },
+  { id:"p-bg",      label:"With BG",    group:"primary",  color:"green", src:"/assets/logos/primary/primary-bg-green.svg" },
+  // Secondary
+  { id:"s1-green",  label:"Secondary 1", group:"secondary", color:"green", src:"/assets/logos/secondary/secondary-1-green.svg" },
+  { id:"s1-ivory",  label:"Secondary 1", group:"secondary", color:"ivory", src:"/assets/logos/secondary/secondary-1-ivory.svg" },
+  { id:"s2-green",  label:"Secondary 2", group:"secondary", color:"green", src:"/assets/logos/secondary/secondary-2-green.svg" },
+];
+
+// Contrast ratio helper (WCAG relative luminance)
+function getLuminance(r,g,b){
+  const s=[r,g,b].map(v=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);});
+  return 0.2126*s[0]+0.7152*s[1]+0.0722*s[2];
+}
+function contrastRatio(l1,l2){const hi=Math.max(l1,l2),lo=Math.min(l1,l2);return(hi+0.05)/(lo+0.05);}
+
+// Sample dominant brightness from a canvas image region
+function sampleImageBrightness(imgObj, x, y, w, h, logoW, logoH) {
+  const size = 80;
+  const c = document.createElement("canvas"); c.width=size; c.height=size;
+  const ctx = c.getContext("2d");
+  // draw only the region where the logo will sit
+  const sx = Math.max(0, x - logoW/2), sy = Math.max(0, y - logoH/2);
+  ctx.drawImage(imgObj, sx, sy, Math.min(logoW, imgObj.width), Math.min(logoH, imgObj.height), 0, 0, size, size);
+  const d = ctx.getImageData(0,0,size,size).data;
+  let r=0,g=0,b=0,count=0;
+  for(let i=0;i<d.length;i+=16){r+=d[i];g+=d[i+1];b+=d[i+2];count++;}
+  return getLuminance(r/count,g/count,b/count);
+}
+
+// Given image luminance, suggest green or ivory logo color
+function suggestLogoColor(bgLuminance) {
+  const greenL = getLuminance(43,80,64);  // #2B5040
+  const ivoryL = getLuminance(245,240,232); // #F5F0E8
+  const greenContrast = contrastRatio(bgLuminance, greenL);
+  const ivoryContrast = contrastRatio(bgLuminance, ivoryL);
+  return ivoryContrast >= greenContrast ? "ivory" : "green";
+}
+
+// Fixed placement presets
+const LOGO_POSITIONS = {
+  "top-left":      { label:"Top Left",     x:0.12, y:0.12 },
+  "top-center":    { label:"Top Center",   x:0.50, y:0.10 },
+  "top-right":     { label:"Top Right",    x:0.88, y:0.12 },
+  "mid-left":      { label:"Mid Left",     x:0.12, y:0.50 },
+  "mid-right":     { label:"Mid Right",    x:0.88, y:0.50 },
+  "center":        { label:"Center",       x:0.50, y:0.50 },
+  "bottom-left":   { label:"Bottom Left",  x:0.12, y:0.88 },
+  "bottom-center": { label:"Bottom Center",x:0.50, y:0.90 },
+  "bottom-right":  { label:"Bottom Right", x:0.88, y:0.88 },
+};
+
+const LOGO_SIZES = [
+  { id:"s",  label:"S",  pct:0.12 },
+  { id:"m",  label:"M",  pct:0.22 },
+  { id:"l",  label:"L",  pct:0.38 },
+  { id:"xl", label:"XL", pct:0.55 },
+];
 
 async function sGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } }
 async function sSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) { console.error("Storage error:", e); } }
@@ -82,8 +151,6 @@ export default function App() {
   const canvasRef = useRef(null);
   const previewRef = useRef(null);
   const imgRef = useRef(null);
-  const iconRef = useRef(null);
-  const wmRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
@@ -91,20 +158,19 @@ export default function App() {
   const [bgColor, setBgColor] = useState("burnham");
   const [image, setImage] = useState(null);
   const [imageObj, setImageObj] = useState(null);
-  const [iconData, setIconData] = useState(null);
-  const [iconObj, setIconObj] = useState(null);
-  const [wmData, setWmData] = useState(null);
-  const [wmObj, setWmObj] = useState(null);
-  const [activeSlot, setActiveSlot] = useState("icon");
   const [headline, setHeadline] = useState("");
   const [subtext, setSubtext] = useState("");
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
-  const [logoX, setLogoX] = useState(0.88);
-  const [logoY, setLogoY] = useState(0.88);
-  const [logoSc, setLogoSc] = useState(25);
-  const [logoOp, setLogoOp] = useState(100);
-  const [dragging, setDragging] = useState(false);
+
+  // TWO Logo system
+  const [selectedLogoId, setSelectedLogoId] = useState("p1-green");
+  const [logoPosition, setLogoPosition] = useState("bottom-right");
+  const [logoSize, setLogoSize] = useState("m");
+  const [logoObj, setLogoObj] = useState(null);
+  const [suggestedColor, setSuggestedColor] = useState("ivory");
+  const [logoGroupFilter, setLogoGroupFilter] = useState("primary");
+
 
   // Library & History
   const [library, setLibrary] = useState([]); // [{id, thumb, full}]
@@ -115,8 +181,10 @@ export default function App() {
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
   const tc = curBg?.light ? B.whiteSmoke : B.jet;
-  const logo = activeSlot === "wordmark" ? wmObj : iconObj;
   const showLogoCtrl = postType === "photo_logo" || postType === "texture_text";
+  const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
+  const logoPos = LOGO_POSITIONS[logoPosition];
+  const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
 
   /* ── Load fonts ── */
   useEffect(() => {
@@ -130,9 +198,6 @@ export default function App() {
   /* ── Load everything from storage ── */
   useEffect(() => {
     (async () => {
-      const logos = await sGet(SK_LOGOS);
-      if (logos?.icon) { setIconData(logos.icon); setIconObj(await imgFrom(logos.icon)); }
-      if (logos?.wordmark) { setWmData(logos.wordmark); setWmObj(await imgFrom(logos.wordmark)); }
       const lib = await sGet(SK_LIB);
       if (lib) setLibrary(lib);
       const hist = await sGet(SK_HIST);
@@ -141,26 +206,32 @@ export default function App() {
     })();
   }, []);
 
-  /* ── Save logos ── */
-  useEffect(() => { if (ready) sSet(SK_LOGOS, {icon:iconData,wordmark:wmData}); }, [iconData, wmData, ready]);
-
-  /* ── Save library to storage when it changes ── */
+  /* ── Save library/history to storage ── */
   useEffect(() => { if (ready && library.length >= 0) sSet(SK_LIB, library); }, [library, ready]);
-
-  /* ── Save history to storage when it changes ── */
   useEffect(() => { if (ready && history.length >= 0) sSet(SK_HIST, history); }, [history, ready]);
 
-  /* ── Upload handlers ── */
-  const uploadLogo = (file, slot) => {
-    if (!file) return;
-    const r = new FileReader();
-    r.onload = async (e) => {
-      const d = e.target.result, img = await imgFrom(d);
-      if (slot==="icon"){setIconData(d);setIconObj(img);}else{setWmData(d);setWmObj(img);}
-    };
-    r.readAsDataURL(file);
-  };
-  const rmLogo = s => { if(s==="icon"){setIconData(null);setIconObj(null);}else{setWmData(null);setWmObj(null);} };
+  /* ── Load selected logo from static asset ── */
+  useEffect(() => {
+    if (!selectedLogoVariant) return;
+    imgFrom(selectedLogoVariant.src).then(img => setLogoObj(img));
+  }, [selectedLogoId, selectedLogoVariant]);
+
+  /* ── Auto-suggest logo color when image + position changes ── */
+  useEffect(() => {
+    if (!imageObj || !logoPos) return;
+    const w = imageObj.width, h = imageObj.height;
+    const logoW = w * logoSizePct, logoH = h * logoSizePct;
+    const lx = logoPos.x * w, ly = logoPos.y * h;
+    const bgL = sampleImageBrightness(imageObj, lx, ly, w, h, logoW, logoH);
+    const suggested = suggestLogoColor(bgL);
+    setSuggestedColor(suggested);
+    // Auto-switch to suggested color variant of current logo group
+    const cur = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
+    if (cur && cur.color !== suggested) {
+      const match = LOGO_VARIANTS.find(v => v.group === cur.group && v.label === cur.label && v.color === suggested);
+      if (match) setSelectedLogoId(match.id);
+    }
+  }, [imageObj, logoPosition, logoSizePct]);
 
   /* ── Load image + auto-save to library ── */
   const loadImage = useCallback(async (dataUrl) => {
@@ -195,19 +266,9 @@ export default function App() {
   const clearHistory = () => setHistory([]);
 
   /* ── Presets ── */
-  const applyPreset = k => { const [x,y]=PRESETS[k]; setLogoX(x); setLogoY(y); };
-  const activePreset = Object.entries(PRESETS).find(([,v])=>Math.abs(v[0]-logoX)<0.03&&Math.abs(v[1]-logoY)<0.03)?.[0]||null;
 
   /* ── Drag + scroll ── */
-  const toCanvas = (cx,cy) => {
-    const el=previewRef.current; if(!el) return [0.5,0.5];
-    const r=el.getBoundingClientRect();
-    return [Math.max(0,Math.min(1,(cx-r.left)/r.width)),Math.max(0,Math.min(1,(cy-r.top)/r.height))];
-  };
-  const onPtrDown = e => { if(!showLogoCtrl) return; e.preventDefault(); setDragging(true); const [x,y]=toCanvas(e.clientX,e.clientY); setLogoX(x);setLogoY(y); previewRef.current?.setPointerCapture(e.pointerId); };
-  const onPtrMove = e => { if(!dragging) return; const [x,y]=toCanvas(e.clientX,e.clientY); setLogoX(x);setLogoY(y); };
-  const onPtrUp = e => { setDragging(false); previewRef.current?.releasePointerCapture(e.pointerId); };
-  const onWheel = e => { if(!showLogoCtrl) return; e.preventDefault(); setLogoSc(p=>Math.max(5,Math.min(80,p-e.deltaY*0.05))); };
+
 
   /* ───────── CANVAS RENDER ───────── */
   const draw = useCallback(() => {
@@ -215,14 +276,14 @@ export default function App() {
     const ctx=c.getContext("2d");
     const w=SIZE,h=SIZE;
     ctx.clearRect(0,0,w,h);
-    const m=w*0.12, lSz=w*(logoSc/100), lx=logoX*w, ly=logoY*h;
-    const putLogo=(cx,cy,sz,a)=>{if(logo)containDraw(ctx,logo,cx,cy,sz,sz,a);};
-    const pattern=a=>{if(!logo)return;containDraw(ctx,logo,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logo,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logo,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
+    const m=w*0.12, lSz=w*logoSizePct, lx=(logoPos?.x??0.88)*w, ly=(logoPos?.y??0.88)*h;
+    const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
+    const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 24px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
 
     if(postType==="photo_logo"){
       if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
-      putLogo(lx,ly,lSz,logoOp/100);
+      putLogo();
     }else if(postType==="quote"){
       ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);pattern(0.10);
       const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D";
@@ -243,10 +304,10 @@ export default function App() {
       drawArrow(ctx,m,h*0.89,w*0.24,curBg?.light?B.whiteSmoke:B.burnham);
     }else if(postType==="texture_text"){
       if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
-      if(logo)containDraw(ctx,logo,lx,ly,lSz,lSz,logoOp/100);
+      putLogo();
       if(headline){ctx.save();ctx.fillStyle=B.whiteSmoke;ctx.font=`700 48px ${F.subtitle}`;ctx.textAlign="right";ctx.shadowColor="rgba(0,0,0,0.45)";ctx.shadowBlur=16;ctx.letterSpacing="3px";ctx.fillText(headline.toUpperCase(),w-m,h*0.88);ctx.restore();}
     }
-  },[postType,bgColor,imageObj,logo,headline,subtext,attribution,dateText,logoX,logoY,logoOp,logoSc,curBg,tc]);
+  },[postType,bgColor,imageObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
 
@@ -290,16 +351,30 @@ export default function App() {
             </div>
           </Sec>
 
-          <Sec label="Brand Logos">
-            <div style={{display:"flex",gap:12,marginBottom:10}}>
-              <LogoSlot label="Icon" data={iconData} inputRef={iconRef} onUpload={f=>uploadLogo(f,"icon")} onRemove={()=>rmLogo("icon")} />
-              <LogoSlot label="Wordmark" data={wmData} inputRef={wmRef} onUpload={f=>uploadLogo(f,"wordmark")} onRemove={()=>rmLogo("wordmark")} />
+          <Sec label="TWO Logo">
+            {/* Group filter */}
+            <div style={{display:"flex",gap:6,marginBottom:10}}>
+              {["primary","secondary"].map(g=>(
+                <Chip key={g} on={logoGroupFilter===g} click={()=>setLogoGroupFilter(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
+              ))}
             </div>
-            {(iconData||wmData)&&<div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <span style={{fontSize:12,fontFamily:F.subtitle,color:B.ash}}>Use:</span>
-              {iconData&&<Chip on={activeSlot==="icon"} click={()=>setActiveSlot("icon")} sm>Icon</Chip>}
-              {wmData&&<Chip on={activeSlot==="wordmark"} click={()=>setActiveSlot("wordmark")} sm>Wordmark</Chip>}
-            </div>}
+            {/* Logo grid */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
+              {LOGO_VARIANTS.filter(v=>v.group===logoGroupFilter).map(v=>{
+                const isSel = selectedLogoId===v.id;
+                const isAuto = suggestedColor===v.color && !isSel && imageObj;
+                return (
+                  <button key={v.id} onClick={()=>setSelectedLogoId(v.id)}
+                    title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
+                    style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
+                    <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
+                    <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
+                    {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
+                    {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                  </button>
+                );
+              })}
+            </div>
           </Sec>
 
           {(postType==="quote"||postType==="text_post"||postType==="event")&&(
@@ -378,14 +453,29 @@ export default function App() {
 
           {showLogoCtrl&&(
             <Sec label="Logo Placement">
-              <div style={{display:"flex",alignItems:"flex-start",gap:16,marginBottom:12}}>
-                <PosGrid value={activePreset} onChange={applyPreset} />
-                <div style={{flex:1,fontSize:11,color:B.ash,lineHeight:1.5,paddingTop:2}}>
-                  Click preset or drag<br/>directly on preview.<br/>Scroll to resize.
-                </div>
+              {/* 3x3 position grid */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
+                {[
+                  "top-left","top-center","top-right",
+                  "mid-left","center","mid-right",
+                  "bottom-left","bottom-center","bottom-right"
+                ].map(pos=>{
+                  const on=logoPosition===pos;
+                  return(
+                    <button key={pos} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
+                      style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
+                      <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
+                    </button>
+                  );
+                })}
               </div>
-              <Slider label="Size" min={5} max={80} val={logoSc} set={setLogoSc} />
-              <Slider label="Opacity" min={10} max={100} val={logoOp} set={setLogoOp} />
+              {/* Size buttons */}
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
+                {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
+                  <Chip key={s.id} on={logoSize===s.id} click={()=>setLogoSize(s.id)} sm>{s.label}</Chip>
+                ))}
+              </div>
             </Sec>
           )}
 
@@ -432,11 +522,11 @@ export default function App() {
         {/* ── PREVIEW ── */}
         <div style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
           <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
-          <div ref={previewRef} onPointerDown={onPtrDown} onPointerMove={onPtrMove} onPointerUp={onPtrUp} onPointerCancel={onPtrUp} onWheel={onWheel}
-            style={{width:"100%",maxWidth:540,aspectRatio:"1/1",borderRadius:8,overflow:"hidden",boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:showLogoCtrl?(dragging?"grabbing":"grab"):"default",touchAction:showLogoCtrl?"none":"auto"}}>
+          <div ref={previewRef}
+            style={{width:"100%",maxWidth:540,aspectRatio:"1/1",borderRadius:8,overflow:"hidden",boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke}}>
             <canvas ref={canvasRef} width={SIZE} height={SIZE} style={{width:"100%",height:"100%",display:"block",pointerEvents:"none"}} />
           </div>
-          {showLogoCtrl&&<p style={{fontSize:11,color:B.ash,marginTop:8,textAlign:"center"}}>Drag to move logo · Scroll to resize</p>}
+
         </div>
       </div>
     </div>
@@ -447,26 +537,8 @@ export default function App() {
 const FU={subtitle:"'Syne','Helvetica Neue',sans-serif",body:"'Fira Sans','Helvetica Neue',sans-serif"};
 const xBtnAbs={position:"absolute",top:6,right:6,width:24,height:24,borderRadius:"50%",background:"rgba(0,0,0,0.45)",color:"#fff",border:"none",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"};
 
-function LogoSlot({label,data,inputRef,onUpload,onRemove}){
-  return <div style={{flex:1}}>
-    <div style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,color:"#888",marginBottom:5}}>{label}</div>
-    {data?(<div style={{position:"relative",height:64,borderRadius:8,border:`1px solid ${B.ash}44`,background:"#FAFAF7",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <img src={data} alt="" style={{maxHeight:50,maxWidth:"85%",objectFit:"contain"}} />
-      <button onClick={onRemove} style={{position:"absolute",top:3,right:3,width:20,height:20,borderRadius:"50%",background:"rgba(0,0,0,0.4)",color:"#fff",border:"none",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
-    </div>):(<div onClick={()=>inputRef.current?.click()} style={{height:64,border:`2px dashed ${B.ash}55`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",background:"#FAFAF7"}}>
-      <span style={{fontSize:20,color:B.ash}}>+</span>
-    </div>)}
-    <input ref={inputRef} type="file" accept="image/*,.svg" onChange={e=>onUpload(e.target.files?.[0])} style={{display:"none"}} />
-  </div>;
-}
-function PosGrid({value,onChange}){
-  const grid=[["top-left","top-center","top-right"],[null,"center",null],["bottom-left","bottom-center","bottom-right"]];
-  return <div style={{display:"inline-grid",gridTemplateColumns:"repeat(3,1fr)",gap:3,background:`${B.ash}22`,borderRadius:8,padding:4}}>
-    {grid.flat().map((pos,i)=>{if(!pos)return<div key={i} style={{width:30,height:30}}/>;const on=value===pos;
-    return<button key={pos} onClick={()=>onChange(pos)} title={pos.replace(/-/g," ")} style={{width:30,height:30,borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
-      <div style={{width:on?9:5,height:on?9:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} /></button>;})}
-  </div>;
-}
+
+
 function Sec({label,children}){return<div style={{marginBottom:22}}><div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:2.5,textTransform:"uppercase",color:B.ash,marginBottom:8}}>{label}</div>{children}</div>;}
 function Chip({on,click,children,sm}){return<button onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
 function In({mt,...p}){return<input {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
