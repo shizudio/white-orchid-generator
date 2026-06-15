@@ -181,7 +181,7 @@ export default function App() {
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
   const tc = curBg?.light ? B.whiteSmoke : B.jet;
-  const showLogoCtrl = postType === "photo_logo" || postType === "texture_text";
+  const showLogoCtrl = true;
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
@@ -290,17 +290,20 @@ export default function App() {
       ctx.fillStyle=tc;ctx.font=`italic 500 64px ${F.quote}`;ctx.textAlign="left";
       const nl=wrapText(ctx,q,m,h*0.26,w-m*2,86);
       if(attribution||subtext){ctx.font=`600 22px ${F.subtitle}`;ctx.letterSpacing="3px";ctx.fillText((attribution||subtext).toUpperCase(),m,h*0.26+nl*86+56);ctx.letterSpacing="0px";}
+      putLogo();
     }else if(postType==="event"){
       if(imageObj){coverDraw(ctx,imageObj,w,h);ctx.fillStyle=curBg.color+"CC";ctx.fillRect(0,0,w,h);}else{ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);}
       if(headline){ctx.fillStyle=tc;ctx.font=`700 26px ${F.subtitle}`;ctx.textAlign="left";ctx.letterSpacing="2px";wrapText(ctx,headline.toUpperCase(),m,h*0.18,w-m*2,38);ctx.letterSpacing="0px";}
       if(dateText){const parts=dateText.split(" ");ctx.fillStyle=tc;ctx.font=`300 200px ${F.title}`;ctx.textAlign="left";ctx.fillText(parts[0]||"",m,h*0.62);ctx.font=`600 28px ${F.subtitle}`;ctx.letterSpacing="4px";ctx.fillText((parts.slice(1).join(" ")||"").toUpperCase(),m,h*0.70);ctx.letterSpacing="0px";}
       if(subtext){ctx.fillStyle=tc;ctx.font=`400 20px ${F.body}`;ctx.textAlign="left";wrapText(ctx,subtext,m,h*0.82,w-m*2,30);drawArrow(ctx,m,h*0.92,w*0.22,tc);}
+      putLogo();
     }else if(postType==="text_post"){
       ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);pattern(0.08);
       let y=h*0.30;
       if(subtext){ctx.fillStyle=tc;ctx.font=`italic 400 42px ${F.quote}`;ctx.textAlign="left";y+=wrapText(ctx,subtext,m,y,w-m*2,56)*56+12;}
       if(headline){ctx.fillStyle=tc;ctx.font=`700 62px ${F.subtitle}`;ctx.textAlign="left";y+=wrapText(ctx,headline.toUpperCase(),m,y,w-m*2,76)*76+24;}
       if(attribution){ctx.fillStyle=tc;ctx.font=`400 20px ${F.body}`;ctx.textAlign="left";wrapText(ctx,attribution,m,y+16,w-m*2,28);}
+      putLogo();
       drawArrow(ctx,m,h*0.89,w*0.24,curBg?.light?B.whiteSmoke:B.burnham);
     }else if(postType==="texture_text"){
       if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
