@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import Nav from '@/components/Nav';
 
 const CONSENT_OPTIONS = [
   { value: 'cleared', label: 'Cleared for public posting', desc: 'Written consent obtained from all identifiable individuals', color: '#2B5040' },
@@ -71,19 +72,11 @@ export default function UploadPage() {
   const anyPending = files.some(f => f.status === 'pending');
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--ivory)' }}>
-      {/* Nav */}
-      <nav style={{ background: 'var(--burnham)', padding: '16px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 3, color: 'var(--ivory)', textTransform: 'uppercase' }}>The White Orchid — Upload</span>
-        <div style={{ display: 'flex', gap: 24 }}>
-          <Link href="/library" style={navLink}>Library</Link>
-          <Link href="/generate" style={navLink}>Create Post</Link>
-          <Link href="/" style={navLink}>Home</Link>
-        </div>
-      </nav>
+    <div style={{ minHeight: '100vh', background: 'var(--fg-on-deep)' }}>
+      <Nav section="upload" />
 
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '40px 24px' }}>
-        <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 36, fontWeight: 400, color: 'var(--burnham)', marginBottom: 6 }}>Upload Images</h1>
+        <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 400, color: 'var(--fg-strong)', letterSpacing: '-0.01em', marginBottom: 6 }}>Upload Images</h1>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: '#6B6560', marginBottom: 32, lineHeight: 1.6 }}>
           Every image must be tagged as a Midjourney render or real photo. Real photos require a consent status before they can be exported.
         </p>
@@ -95,7 +88,7 @@ export default function UploadPage() {
           onDragLeave={() => setDragging(false)}
           onClick={() => inputRef.current?.click()}
           style={{
-            border: `2px dashed ${dragging ? 'var(--burnham)' : 'rgba(43,80,64,0.25)'}`,
+            border: `2px dashed ${dragging ? 'var(--tw-burnham)' : 'rgba(43,80,64,0.25)'}`,
             borderRadius: 16,
             padding: '48px 32px',
             textAlign: 'center',
@@ -107,7 +100,7 @@ export default function UploadPage() {
           }}
         >
           <div style={{ fontSize: 32, marginBottom: 12 }}>📁</div>
-          <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15, color: 'var(--burnham)', marginBottom: 6 }}>
+          <div style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 15, color: 'var(--tw-burnham)', marginBottom: 6 }}>
             Drop images here
           </div>
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#6B6560' }}>
@@ -132,7 +125,7 @@ export default function UploadPage() {
                   disabled={!allReady}
                   style={{
                     padding: '14px 40px',
-                    background: allReady ? 'var(--burnham)' : '#ccc',
+                    background: allReady ? 'var(--tw-burnham)' : '#ccc',
                     color: '#fff',
                     border: 'none',
                     borderRadius: 40,
@@ -157,10 +150,10 @@ export default function UploadPage() {
             {files.every(f => f.status === 'done') && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                 <div style={{ fontSize: 20 }}>✅</div>
-                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--burnham)' }}>
+                <span style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--tw-burnham)' }}>
                   All uploaded successfully
                 </span>
-                <Link href="/library" style={{ marginLeft: 8, padding: '10px 24px', background: 'var(--tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
+                <Link href="/library" style={{ marginLeft: 8, padding: '10px 24px', background: 'var(--tw-tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
                   View Library →
                 </Link>
               </div>
@@ -201,7 +194,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
 
       {/* Controls */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--jet)', marginBottom: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--tw-jet)', marginBottom: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.file.name}
         </div>
 
@@ -221,9 +214,9 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
                     style={{
                       padding: '7px 14px',
                       borderRadius: 40,
-                      border: `1.5px solid ${entry.sourceType === opt.value ? 'var(--burnham)' : 'rgba(184,176,168,0.5)'}`,
-                      background: entry.sourceType === opt.value ? 'var(--burnham)' : 'transparent',
-                      color: entry.sourceType === opt.value ? '#fff' : 'var(--jet)',
+                      border: `1.5px solid ${entry.sourceType === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`,
+                      background: entry.sourceType === opt.value ? 'var(--tw-burnham)' : 'transparent',
+                      color: entry.sourceType === opt.value ? '#fff' : 'var(--tw-jet)',
                       fontFamily: 'var(--font-ui)',
                       fontSize: 12,
                       fontWeight: 600,
@@ -271,7 +264,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
         )}
 
         {isDone && (
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--burnham)' }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--tw-burnham)' }}>
             Uploaded · {entry.result?.source_type === 'real_photo' ? `Consent: ${entry.result?.consent_status}` : 'Midjourney render'} · Ready to use
           </div>
         )}
@@ -286,7 +279,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
               disabled={!entry.sourceType}
               style={{
                 padding: '8px 18px',
-                background: entry.sourceType ? 'var(--tangerine)' : '#ddd',
+                background: entry.sourceType ? 'var(--tw-tangerine)' : '#ddd',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 20,
@@ -303,11 +296,11 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
             <button onClick={() => onRemove(entry.id)} style={{ background: 'none', border: 'none', color: '#aaa', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
           </>
         )}
-        {isUploading && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--burnham)', letterSpacing: 1 }}>Uploading…</div>}
+        {isUploading && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--tw-burnham)', letterSpacing: 1 }}>Uploading…</div>}
       </div>
     </div>
   );
 }
 
-const navLink = { fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 2, color: 'var(--celadon)', textTransform: 'uppercase' };
+const navLink = { fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 2, color: 'var(--tw-celadon)', textTransform: 'uppercase' };
 const sectionLabel = { fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: '#6B6560', marginBottom: 6, display: 'block' };

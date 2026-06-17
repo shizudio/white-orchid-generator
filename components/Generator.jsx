@@ -2,18 +2,21 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 /* ───────── BRAND ───────── */
 const B = {
-  burnham:"#2B5040", whiteSmoke:"#F5F0E8", wisteria:"#C9B2CB",
-  tangerine:"#FF6347", yellowGreen:"#A5C32C", celadon:"#87C4A0",
-  ash:"#B8B0A8", jet:"#2D2D2D",
+  burnham:"#254E48", whiteSmoke:"#F5F6E7", wisteria:"#DEC5D8",
+  tangerine:"#F6644E", yellowGreen:"#A5CF61", celadon:"#B4D6C0",
+  ash:"#D1C8C8", jet:"#282B28",
+  burnhamDk:"#1B3B36", celadonDeep:"#7FA88C",
 };
-const FONT_URL = "https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Fira+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400;1,500&family=Aboreto&display=swap";
+
 const F = {
-  title:"'Cormorant Garamond',Georgia,serif",
-  quote:"'Cormorant Garamond',Georgia,serif",
+  title:"'Romie','Cormorant Garamond',Georgia,serif",
+  quote:"'Romie','Cormorant Garamond',Georgia,serif",
   subtitle:"'Syne','Helvetica Neue',sans-serif",
   body:"'Fira Sans','Helvetica Neue',sans-serif",
   logo:"'Aboreto',sans-serif",
 };
+// Load fonts from local public/fonts
+const FONT_URL = null; // Fonts are loaded via globals.css @font-face
 const POST_TYPES = [
   {id:"photo_logo",label:"Photo + Logo",needsImage:true},
   {id:"quote",label:"Quote",needsImage:false},
@@ -210,11 +213,8 @@ export default function App() {
 
   /* ── Load fonts ── */
   useEffect(() => {
-    const link = document.createElement("link");
-    link.href = FONT_URL; link.rel = "stylesheet";
-    document.head.appendChild(link);
+    // Fonts are self-hosted via globals.css — just wait for them to load
     document.fonts.ready.then(() => setFontsLoaded(true));
-    return () => { try { document.head.removeChild(link); } catch(e){} };
   }, []);
 
   /* ── Load everything from storage ── */

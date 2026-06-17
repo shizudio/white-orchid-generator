@@ -1,0 +1,265 @@
+<!doctype html>
+<!-- @dsCard group="UI Kit — Social Pack" name="Social media pack" subtitle="Instagram 1:1 · 9 feed templates across text · photo · event" viewport="1440x1080" -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>The White Orchid — Social Media Pack</title>
+<link rel="stylesheet" href="../../colors_and_type.css?v=8"/>
+<style>
+  html, body { margin:0; height:100%; background:#E8E5DC; }
+  /* IG post = 1080×1080. We render at 540 for canvas density and let it scale */
+  .ig {
+    width: 540px; height: 540px;
+    background: var(--tw-smoke);
+    position: relative;
+    overflow: hidden;
+    font-family: var(--font-body);
+    color: var(--tw-burnham);
+  }
+  .ig.dark { background: var(--tw-burnham); color: var(--tw-smoke); }
+  .ig.wisteria { background: var(--tw-wisteria); }
+  .ig.celadon { background: var(--tw-celadon); }
+  .ig.tangerine { background: var(--tw-tangerine); color: #fff; }
+
+  .ig .pad { position:absolute; inset: 60px; }
+  .ig .corner-logo { position:absolute; top:24px; left:24px; width:36px; height:36px; opacity:.85; }
+  .ig .footer-mark { position:absolute; bottom:22px; left:24px; font-family:var(--font-syne); font-weight:600; font-size:10px; letter-spacing:0.18em; text-transform:uppercase; opacity:.85; }
+  .ig .swipe { position:absolute; bottom:22px; right:24px; display:flex; align-items:center; gap:6px; font-family:var(--font-syne); font-size:10px; letter-spacing:0.18em; text-transform:uppercase; opacity:.85; font-weight:500; }
+
+  .h-romie { font-family:var(--font-serif); font-weight:400; letter-spacing:-0.01em; line-height:1.02; }
+  .h-syne  { font-family:var(--font-syne); font-weight:600; letter-spacing:0.02em; }
+  .all-caps { text-transform:uppercase; letter-spacing:0.12em; }
+
+  /* a placeholder photo "tile" */
+  .photo {
+    background-color: #B6B0A4;
+    background-image:
+      radial-gradient(circle at 30% 30%, rgba(255,255,255,0.18), transparent 40%),
+      radial-gradient(circle at 70% 70%, rgba(0,0,0,0.18), transparent 50%);
+    position: relative;
+  }
+  .photo::after {
+    content: attr(data-label);
+    position:absolute; bottom:8px; left:10px;
+    font-family: var(--font-syne); font-size: 9px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: rgba(255,255,255,0.85);
+  }
+
+  .pattern-bg {
+    position:absolute; inset:0;
+    background-image: url('../../assets/pattern-1.svg');
+    background-size: 220px;
+    background-repeat: repeat;
+    opacity: 0.10;
+    mix-blend-mode: multiply;
+  }
+  .ig.dark .pattern-bg { mix-blend-mode: screen; opacity: 0.08; }
+
+  .arrow-cta {
+    display:inline-flex; align-items:center; gap:8px;
+    font-family: var(--font-syne); font-weight:600; font-size:11px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+
+<script type="text/babel">
+const Logo = ({color}) => (
+  <svg className="corner-logo" viewBox="0 0 100 100" fill="none" stroke={color || 'currentColor'} strokeWidth="3">
+    <ellipse cx="50" cy="22" rx="13" ry="22"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(72 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(144 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(216 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(288 50 50)"/>
+    <circle cx="50" cy="50" r="6" fill={color || 'currentColor'} stroke="none"/>
+  </svg>
+);
+
+// 1. Quote post (text only, dark)
+const Post1 = () => (
+  <div className="ig dark">
+    <div className="pattern-bg"/>
+    <Logo color="#F5F6E7"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'center'}}>
+      <div className="h-romie" style={{fontStyle:'italic', fontSize:46, lineHeight:1.08, color:'var(--tw-celadon)', maxWidth:380}}>
+        The mind is not a vessel to be filled,
+      </div>
+      <div className="h-romie" style={{fontStyle:'italic', fontSize:46, lineHeight:1.08, color:'var(--tw-smoke)', maxWidth:380, marginTop:6}}>
+        but a fire to be kindled.
+      </div>
+      <div className="h-syne all-caps" style={{fontSize:10, marginTop:24, color:'var(--tw-celadon)'}}>— Plutarch</div>
+    </div>
+    <div className="footer-mark">The White Orchid</div>
+  </div>
+);
+
+// 2. Numbered carousel cover (5 things)
+const Post2 = () => (
+  <div className="ig">
+    <Logo color="#254E48"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      <div className="h-syne all-caps" style={{fontSize:11,color:'var(--tw-tangerine)',marginBottom:12}}>5 things you should know</div>
+      <div className="h-romie" style={{fontSize:54,lineHeight:0.95,color:'var(--tw-burnham)'}}>
+        Nurturing<br/><em style={{color:'var(--tw-tangerine)'}}>curiosity,</em><br/>creating<br/><em>learners.</em>
+      </div>
+      <div style={{height:1,background:'var(--line-strong)',margin:'24px 0 14px'}}/>
+      <div className="h-syne all-caps" style={{fontSize:10,color:'var(--tw-burnham)'}}>About our pedagogy</div>
+    </div>
+    <div className="swipe">Swipe → <span style={{fontSize:14}}>›</span></div>
+  </div>
+);
+
+// 3. Open House announcement
+const Post3 = () => (
+  <div className="ig wisteria">
+    <Logo color="#254E48"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'space-between'}}>
+      <div>
+        <div className="h-syne all-caps" style={{fontSize:11,color:'var(--tw-burnham)',marginBottom:60}}>Now Open</div>
+        <div className="h-romie" style={{fontSize:64,lineHeight:0.95,color:'var(--tw-burnham)',letterSpacing:'-0.02em'}}>
+          Open<br/>House<br/><em style={{fontSize:42}}>schedule</em>
+        </div>
+      </div>
+      <div>
+        <div style={{height:1,background:'var(--tw-burnham)',opacity:0.4,marginBottom:12}}/>
+        <div className="h-syne all-caps" style={{fontSize:14,color:'var(--tw-burnham)',fontWeight:700}}>March 2025</div>
+      </div>
+    </div>
+  </div>
+);
+
+// 4. Photo post w/ overlay text
+const Post4 = () => (
+  <div className="ig">
+    <div className="photo" style={{position:'absolute',inset:0,filter:'brightness(0.78)'}} data-label="placeholder · garden, child reading"></div>
+    <div style={{position:'absolute',inset:0,background:'linear-gradient(180deg, transparent 30%, rgba(37,78,72,0.35) 100%)'}}/>
+    <Logo color="#F5F6E7"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'flex-end',color:'#F5F6E7'}}>
+      <div className="h-romie" style={{fontSize:36,lineHeight:1.05}}>Enabling<br/><em>self-reliance</em></div>
+      <div className="h-syne all-caps" style={{fontSize:10,marginTop:14,opacity:0.85}}>In early childhood</div>
+    </div>
+    <div className="swipe">Swipe to see 3 ways →</div>
+  </div>
+);
+
+// 5. Date / event card (Tangerine accent)
+const Post5 = () => (
+  <div className="ig celadon">
+    <Logo color="#254E48"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'center'}}>
+      <div className="h-syne all-caps" style={{fontSize:11,color:'var(--tw-tangerine)',marginBottom:8}}>Application Support Webinar</div>
+      <div className="h-romie" style={{fontSize:160,lineHeight:0.85,color:'var(--tw-burnham)',letterSpacing:'-0.04em'}}>15</div>
+      <div className="h-romie" style={{fontStyle:'italic',fontSize:48,lineHeight:0.9,color:'var(--tw-burnham)'}}>january</div>
+      <div style={{height:1,background:'var(--tw-burnham)',opacity:0.3,margin:'22px 0 14px',width:80}}/>
+      <div className="h-syne" style={{fontSize:13,color:'var(--tw-burnham)'}}>1900 SGT · Live on Zoom</div>
+    </div>
+  </div>
+);
+
+// 6. Programme card (afterschool)
+const Post6 = () => (
+  <div className="ig dark">
+    <Logo color="#F5F6E7"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      <div className="h-syne all-caps" style={{fontSize:10,color:'var(--tw-celadon)',marginBottom:14}}>After-school</div>
+      <div className="h-romie" style={{fontSize:62,lineHeight:0.92,color:'var(--tw-smoke)'}}>
+        Children's<br/><em style={{color:'var(--tw-wisteria)'}}>clubs.</em>
+      </div>
+      <div className="body" style={{fontFamily:'var(--font-body)',fontSize:14,color:'var(--tw-celadon)',marginTop:18,maxWidth:340,lineHeight:1.5}}>
+        Where curiosity becomes mastery. Long projects, mixed ages, real ownership.
+      </div>
+      <div style={{display:'flex',gap:10,marginTop:24}}>
+        <span style={{padding:'5px 14px',borderRadius:999,border:'1px solid rgba(245,246,231,0.4)',fontFamily:'var(--font-syne)',fontSize:10,letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--tw-celadon)'}}>Ages 6–9</span>
+        <span style={{padding:'5px 14px',borderRadius:999,border:'1px solid rgba(245,246,231,0.4)',fontFamily:'var(--font-syne)',fontSize:10,letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--tw-celadon)'}}>Tue · Thu</span>
+      </div>
+    </div>
+  </div>
+);
+
+// 7. Story / takeover header (small caps stat)
+const Post7 = () => (
+  <div className="ig tangerine">
+    <Logo color="#F5F6E7"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'center',color:'#fff'}}>
+      <div className="h-syne all-caps" style={{fontSize:11,opacity:0.9,marginBottom:14}}>One ratio · Six children</div>
+      <div className="h-romie" style={{fontSize:200,lineHeight:0.85,letterSpacing:'-0.05em'}}>1:6</div>
+      <div className="body" style={{fontSize:15,marginTop:8,maxWidth:340,lineHeight:1.5,opacity:0.95}}>
+        The smallest adult-to-child ratio in our programme. Every voice gets heard.
+      </div>
+    </div>
+  </div>
+);
+
+// 8. Pattern-only branding moment
+const Post8 = () => (
+  <div className="ig" style={{background:'#EDEFE1'}}>
+    <div style={{position:'absolute',inset:0,backgroundImage:`url(../../assets/pattern-1.svg)`,backgroundSize:'140px',opacity:0.32}}/>
+    <Logo color="#254E48"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',justifyContent:'center',alignItems:'center',textAlign:'center'}}>
+      <div className="h-romie" style={{fontStyle:'italic',fontSize:54,lineHeight:1.0,color:'var(--tw-burnham)',maxWidth:380}}>
+        A school led by children.
+      </div>
+      <div className="h-syne all-caps" style={{fontSize:10,color:'var(--tw-burnham)',marginTop:32,opacity:0.65}}>thewhiteorchid.sg</div>
+    </div>
+  </div>
+);
+
+// 9. Three-petal photo grid
+const Post9 = () => (
+  <div className="ig">
+    <Logo color="#254E48"/>
+    <div className="pad" style={{display:'flex',flexDirection:'column',gap:14}}>
+      <div className="h-syne all-caps" style={{fontSize:10,color:'var(--tw-tangerine)'}}>This week at TWO</div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gridTemplateRows:'1fr 1fr',gap:6,flex:1}}>
+        <div className="photo" style={{borderRadius:'50% 50% 50% 8px'}} data-label="cooking"></div>
+        <div className="photo" style={{borderRadius:'50% 50% 8px 50%',background:'#9DB89A'}} data-label="garden"></div>
+        <div className="photo" style={{borderRadius:'50% 8px 50% 50%',background:'#C4A78F'}} data-label="studio"></div>
+        <div className="photo" style={{borderRadius:'8px 50% 50% 50%'}} data-label="sea wall"></div>
+      </div>
+      <div className="h-romie" style={{fontSize:30,lineHeight:1.05,color:'var(--tw-burnham)'}}>
+        Four ordinary mornings.
+      </div>
+    </div>
+  </div>
+);
+
+const Wrap = ({children, w=540, h=540}) => (
+  <div style={{width:w,height:h,position:'relative',display:'flex',alignItems:'center',justifyContent:'center'}}>
+    {children}
+  </div>
+);
+
+const App = () => (
+  <DesignCanvas title="The White Orchid · Social Pack" subtitle="Instagram 1:1 · feed templates per p.61–66" minScale={0.25} maxScale={2}>
+    <DCSection id="text" title="Text-led posts">
+      <DCArtboard id="quote" label="Quote · pull-quote dark" width={540} height={540}><Wrap><Post1/></Wrap></DCArtboard>
+      <DCArtboard id="cover" label="Carousel cover · 5 things" width={540} height={540}><Wrap><Post2/></Wrap></DCArtboard>
+      <DCArtboard id="open-house" label="Open house · wisteria" width={540} height={540}><Wrap><Post3/></Wrap></DCArtboard>
+      <DCArtboard id="brand" label="Brand moment · pattern" width={540} height={540}><Wrap><Post8/></Wrap></DCArtboard>
+    </DCSection>
+    <DCSection id="photo" title="Photo-led posts">
+      <DCArtboard id="photo-overlay" label="Photo · overlay headline" width={540} height={540}><Wrap><Post4/></Wrap></DCArtboard>
+      <DCArtboard id="petal-grid" label="Petal grid · weekly recap" width={540} height={540}><Wrap><Post9/></Wrap></DCArtboard>
+    </DCSection>
+    <DCSection id="event" title="Event &amp; programme">
+      <DCArtboard id="date" label="Event · big date" width={540} height={540}><Wrap><Post5/></Wrap></DCArtboard>
+      <DCArtboard id="programme" label="Programme · after-school" width={540} height={540}><Wrap><Post6/></Wrap></DCArtboard>
+      <DCArtboard id="stat" label="Stat · 1:6 ratio" width={540} height={540}><Wrap><Post7/></Wrap></DCArtboard>
+    </DCSection>
+  </DesignCanvas>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+
+</body>
+</html>

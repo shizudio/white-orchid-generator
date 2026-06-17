@@ -1,0 +1,506 @@
+/* ==========================================================================
+   The White Orchid — Colors & Type
+   --------------------------------------------------------------------------
+   Canonical, derived from official Brand Guidelines (PDFs).
+   Palette: Burnham (primary green), Ash, Ivory (White Smoke), Wisteria,
+            Tangerine (accent CTA), Yellow Green, Celadon, Jet.
+   Type:    Aboreto (logo) · Romie (display/serif) · Syne (subhead)
+            · Fira Sans (body — web, print, UI)
+   ========================================================================== */
+
+/* ---------- FONTS ---------- */
+
+/* Aboreto — logo wordmark only */
+@font-face {
+  font-family: "Aboreto";
+  src: url("fonts/Aboreto-Regular.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+
+/* Romie — licensed editorial serif (display, headings, italic quotes) */
+@font-face {
+  font-family: "Romie";
+  src: url("fonts/Romie-Regular.otf?v=2") format("opentype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Romie";
+  src: url("fonts/Romie-Italic.otf?v=2") format("opentype");
+  font-weight: 400; font-style: italic; font-display: swap;
+}
+
+/* Syne — variable, geometric sans (subheads, eyebrows, sub-brand lockups) */
+@font-face {
+  font-family: "Syne";
+  src: url("fonts/Syne-VariableFont_wght.ttf?v=2") format("truetype-variations"),
+       url("fonts/Syne-VariableFont_wght.ttf?v=2") format("truetype");
+  font-weight: 400 800; font-style: normal; font-display: swap;
+}
+
+/* Fira Sans — body face (web, print, UI) — guidelines p.71 */
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-Light.ttf") format("truetype");    font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-Regular.ttf") format("truetype");  font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-Italic.ttf") format("truetype");   font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-Medium.ttf") format("truetype");   font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-SemiBold.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Fira Sans"; src: url("fonts/FiraSans-Bold.ttf") format("truetype");     font-weight: 700; font-style: normal; font-display: swap; }
+
+:root {
+  /* =========================================================
+     COLOUR — CANONICAL PALETTE (Brand Guidelines p.27)
+     —————————————————————————————————————————————————————————
+     PRIMARY     · Burnham #254E48 · White Smoke #F5F6E7 · Wisteria #DEC5D8
+     COMPLIMENTS · Celadon #B4D6C0 · Ash #D1C8C8 · Jet #282B28
+     ACCENTS     · Tangerine #F6644E · Yellow Green #A5CF61
+     ========================================================= */
+
+  /* ----- PRIMARY ----- */
+
+  /* Burnham (deep forest green): logo, primary text, dark backgrounds */
+  --tw-burnham:        #254E48;
+  --tw-burnham-dk:     #1B3B36;     /* hover-deeper, pressed */
+  --tw-burnham-tint:   #4F7A73;     /* lighter mix for ornament */
+
+  /* White Smoke (ivory page bg) */
+  --tw-smoke:          #F5F6E7;
+  --tw-smoke-warm:     #EFF1DC;     /* slight tint for raised cards on smoke */
+
+  /* Wisteria (soft lilac) */
+  --tw-wisteria:       #DEC5D8;
+  --tw-wisteria-soft:  #ECDDE7;
+  --tw-wisteria-deep:  #B89AB1;
+
+  /* ----- COMPLIMENTS ----- */
+
+  /* Celadon (mint petal) */
+  --tw-celadon:        #B4D6C0;
+  --tw-celadon-soft:   #D6E8DC;
+  --tw-celadon-deep:   #7FA88C;
+
+  /* Ash (warm dove grey) */
+  --tw-ash:            #D1C8C8;
+  --tw-ash-soft:       #E5DFDF;
+  --tw-ash-deep:       #A89E9E;
+
+  /* Jet (near-black, never pure black) — text + bold type */
+  --tw-jet:            #282B28;
+  --tw-jet-soft:       #4D504D;
+
+  /* ----- ACCENTS ----- */
+
+  /* Tangerine — primary CTA */
+  --tw-tangerine:      #F6644E;
+  --tw-tangerine-dk:   #DA4A35;
+  --tw-tangerine-soft: #FBC8BE;
+
+  /* Yellow Green — energy / status-ok */
+  --tw-yellowgreen:    #A5CF61;
+  --tw-yellowgreen-soft: #D5E8AE;
+  --tw-yellowgreen-deep: #7FA63D;
+
+  /* =========================================================
+     SEMANTIC TOKENS
+     ========================================================= */
+  --bg:            var(--tw-smoke);          /* default page */
+  --bg-soft:       var(--tw-smoke-warm);
+  --bg-raised:     #FFFFFF;
+  --bg-deep:       var(--tw-burnham);        /* inverted hero */
+  --bg-deeper:     var(--tw-burnham-dk);
+
+  --fg:            var(--tw-burnham);        /* body on smoke uses burnham, per p.68 */
+  --fg-strong:     var(--tw-jet);            /* darkest type */
+  --fg-muted:      var(--tw-jet-soft);
+  --fg-subtle:     var(--tw-ash-deep);
+  --fg-on-deep:    var(--tw-smoke);
+  --fg-on-deep-soft: var(--tw-celadon);
+  --fg-on-deep-muted: color-mix(in srgb, var(--tw-smoke) 70%, transparent);
+
+  --line:          color-mix(in srgb, var(--tw-burnham) 14%, transparent);
+  --line-strong:   color-mix(in srgb, var(--tw-burnham) 26%, transparent);
+  --line-on-deep:  color-mix(in srgb, var(--tw-smoke) 22%, transparent);
+
+  --accent:        var(--tw-tangerine);
+  --accent-hover:  var(--tw-celadon);        /* p.69 — hover state mint or lilac */
+  --accent-soft:   var(--tw-tangerine-soft);
+
+  --focus-ring:    color-mix(in srgb, var(--tw-tangerine) 50%, white);
+
+  --status-ok:     var(--tw-yellowgreen);
+  --status-warn:   var(--tw-tangerine);
+  --status-error:  #B23A2B;
+
+  /* =========================================================
+     TYPE — FAMILIES (per Brand Guidelines p.32–37, p.71)
+     ========================================================= */
+  --font-wordmark: "Aboreto", "Cormorant Garamond", Georgia, serif;    /* LOGO ONLY */
+  --font-display: var(--font-wordmark);                                /* legacy alias — prefer --font-wordmark */
+  --font-serif:   "Romie", "Cormorant Garamond", "Iowan Old Style", Georgia, serif; /* hero, headlines, italic quotes */
+  --font-syne:    "Syne", ui-sans-serif, system-ui, sans-serif;        /* subheads, sub-brand lockups, eyebrows */
+  --font-body:    "Fira Sans", ui-sans-serif, system-ui, sans-serif;   /* body — web, print, UI */
+  --font-print:   "Fira Sans", ui-sans-serif, system-ui, sans-serif;   /* alias of body, kept for clarity */
+  --font-ui:      "Fira Sans", ui-sans-serif, system-ui, sans-serif;   /* alias of body, kept for clarity */
+  --font-mono:    ui-monospace, "SF Mono", Menlo, monospace;       /* system mono — brand has no bespoke mono */
+
+  /* =========================================================
+     TYPE — SCALE (web; per p.71 desktop/mobile spec)
+     =========================================================
+     Title H1: Romie Regular 48 / 32
+     Subtitle H2: Syne Regular 28 / 24
+     Subhead: Syne SemiBold 16 / 14
+     Body: Fira Sans Regular 14 / 14
+     Quotes: Romie Italic 32 (1.45 line)
+  */
+  --fs-12: 0.75rem;
+  --fs-14: 0.875rem;
+  --fs-16: 1rem;
+  --fs-18: 1.125rem;
+  --fs-20: 1.25rem;
+  --fs-22: 1.375rem;
+  --fs-24: 1.5rem;
+  --fs-28: 1.75rem;
+  --fs-32: 2rem;
+  --fs-40: 2.5rem;
+  --fs-48: 3rem;
+  --fs-56: 3.5rem;
+  --fs-64: 4rem;
+  --fs-80: 5rem;
+  --fs-96: 6rem;
+
+  --lh-tight:   1.05;   /* @kind font */
+  --lh-snug:    1.18;   /* @kind font */
+  --lh-normal:  1.45;   /* @kind font */
+  --lh-relaxed: 1.6;    /* @kind font */
+
+  --tracking-tight:  -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+  --tracking-wider:  0.10em;   /* sub-brand: Syne Regular 10% kerning per p.12 */
+  --tracking-widest: 0.18em;   /* Aboreto wordmark */
+
+  /* =========================================================
+     SPACING (4px base, generous)
+     ========================================================= */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+  --space-32: 8rem;
+
+  /* =========================================================
+     RADII — Buttons 40px per p.69; cards softer
+     ========================================================= */
+  --radius-xs:   4px;
+  --radius-sm:   8px;
+  --radius-md:   14px;
+  --radius-lg:   20px;
+  --radius-xl:   28px;
+  --radius-2xl:  40px;       /* button radius — canonical */
+  --radius-pill: 999px;
+
+  /* =========================================================
+     SHADOWS — naturalistic, burnham-tinted
+     ========================================================= */
+  --shadow-xs:    0 1px 2px rgba(37,78,72,0.06);
+  --shadow-sm:    0 2px 6px rgba(37,78,72,0.07), 0 1px 2px rgba(37,78,72,0.04);
+  --shadow-md:    0 8px 22px -8px rgba(37,78,72,0.18), 0 2px 6px rgba(37,78,72,0.06);
+  --shadow-lg:    0 24px 48px -16px rgba(37,78,72,0.22), 0 6px 14px rgba(37,78,72,0.08);
+  --shadow-inset: inset 0 0 0 1px var(--line);
+
+  /* =========================================================
+     MOTION — quiet
+     ========================================================= */
+  --ease-out:    cubic-bezier(0.22, 1, 0.36, 1);   /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);   /* @kind other */
+  --dur-fast:    140ms;   /* @kind other */
+  --dur-base:    240ms;   /* @kind other */
+  --dur-slow:    420ms;   /* @kind other */
+
+  /* =========================================================
+     LAYOUT
+     ========================================================= */
+  --container:        76rem;
+  --container-narrow: 48rem;
+  --container-wide:   88rem;
+}
+
+/* =============================================================
+   SEMANTIC TYPE STYLES
+   ============================================================= */
+
+html {
+  font-family: var(--font-body);
+  font-size: 16px;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body { line-height: var(--lh-normal); }
+
+/* --- Wordmark (Aboreto, all-caps wide-tracked) --- */
+.tw-wordmark {
+  font-family: var(--font-display);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-widest);
+  color: var(--fg);
+}
+
+/* --- Eyebrow / micro label (Syne 12px, +0.18em) --- */
+.tw-eyebrow {
+  font-family: var(--font-syne);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-widest);
+  color: var(--fg-muted);
+}
+
+/* --- Hero (Romie, mixed case) --- */
+.tw-hero {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: clamp(var(--fs-48), 6vw, var(--fs-96));
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-strong);
+  text-wrap: balance;
+}
+
+/* --- Headings — canonical web spec (p.71) --- */
+h1, .h1 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: clamp(2rem, 4vw, var(--fs-48));   /* 32 mobile → 48 desktop */
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-strong);
+  text-wrap: balance;
+  margin: 0;
+}
+h2, .h2 {
+  font-family: var(--font-syne);
+  font-weight: 400;
+  font-size: clamp(1.5rem, 2.4vw, var(--fs-28));  /* 24 mobile → 28 desktop */
+  line-height: var(--lh-snug);
+  color: var(--fg-strong);
+  margin: 0;
+}
+h3, .h3 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: var(--fs-32);
+  line-height: var(--lh-snug);
+  color: var(--fg-strong);
+  text-wrap: balance;
+  margin: 0;
+}
+h4, .h4 {
+  font-family: var(--font-syne);
+  font-weight: 600;
+  font-size: var(--fs-16);            /* 16 desktop / 14 mobile */
+  line-height: var(--lh-snug);
+  color: var(--fg-strong);
+  letter-spacing: 0;
+  margin: 0;
+}
+h5, .h5 {
+  font-family: var(--font-syne);
+  font-weight: 600;
+  font-size: var(--fs-14);
+  line-height: var(--lh-snug);
+  color: var(--fg-strong);
+  margin: 0;
+}
+h6, .h6 {
+  font-family: var(--font-syne);
+  font-weight: 500;
+  font-size: var(--fs-12);
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+/* --- Body (Fira Sans 14px) --- */
+p, .body {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: var(--fs-14);
+  line-height: var(--lh-relaxed);
+  color: var(--fg);
+  text-wrap: pretty;
+}
+.body-lg {
+  font-size: var(--fs-16);
+  line-height: var(--lh-relaxed);
+}
+.body-sm {
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  color: var(--fg-muted);
+}
+.lede {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--fs-22);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-strong);
+}
+
+/* --- Pull quote: Romie Italic 32px, 1.45 line (p.71) --- */
+blockquote, .quote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: var(--fs-32);
+  line-height: 1.45;
+  color: var(--fg-strong);
+  text-wrap: balance;
+  margin: 0;
+}
+
+/* --- Caption / micro --- */
+.caption {
+  font-family: var(--font-body);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  color: var(--fg-muted);
+}
+
+/* --- Sub-brand lockup label (p.12: Syne Regular, 10% tracking, centred) --- */
+.tw-subbrand {
+  font-family: var(--font-syne);
+  font-weight: 400;
+  font-size: var(--fs-14);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: inherit;
+  text-align: center;
+}
+
+/* --- Links --- */
+a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 1px;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+a:hover { opacity: 0.65; }
+
+/* --- On deep-green sections --- */
+.on-deep {
+  color: var(--fg-on-deep);
+  background: var(--bg-deep);
+}
+.on-deep h1, .on-deep h2, .on-deep h3, .on-deep h4, .on-deep h5,
+.on-deep p, .on-deep .body, .on-deep blockquote, .on-deep .quote,
+.on-deep .lede {
+  color: var(--fg-on-deep);
+}
+.on-deep .tw-eyebrow,
+.on-deep h6 { color: var(--fg-on-deep-soft); }
+
+/* =============================================================
+   BUTTONS — canonical (p.69)
+   Shape: 40px radius, 14×40 padding
+   Type:  Syne Bold, ALL CAPS
+   First priority:  filled tangerine accent
+   Second priority: outlined 1–2px stroke
+   Hover:  Mint green or light purple bg with dark green text
+   ============================================================= */
+.tw-btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--font-syne);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 13px;
+  padding: 14px 40px;
+  border-radius: var(--radius-2xl);
+  border: 0;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tw-btn:active { transform: translateY(1px); }
+.tw-btn--primary {
+  background: var(--tw-tangerine);
+  color: #fff;
+}
+.tw-btn--primary:hover {
+  background: var(--tw-celadon);
+  color: var(--tw-burnham);
+}
+.tw-btn--secondary {
+  background: transparent;
+  color: var(--tw-burnham);
+  box-shadow: inset 0 0 0 2px var(--tw-burnham);
+}
+.tw-btn--secondary:hover {
+  background: var(--tw-celadon);
+  color: var(--tw-burnham);
+  box-shadow: inset 0 0 0 2px var(--tw-burnham);
+}
+.tw-btn--on-deep {
+  background: var(--tw-tangerine);
+  color: #fff;
+}
+.tw-btn--on-deep:hover {
+  background: var(--tw-wisteria);
+  color: var(--tw-burnham);
+}
+.tw-btn--ghost-on-deep {
+  background: transparent;
+  color: var(--tw-smoke);
+  box-shadow: inset 0 0 0 2px var(--tw-smoke);
+}
+.tw-btn--ghost-on-deep:hover {
+  background: var(--tw-smoke);
+  color: var(--tw-burnham);
+}
+.tw-btn--sm { padding: 10px 22px; font-size: 12px; }
+.tw-btn--lg { padding: 18px 48px; font-size: 14px; }
+
+/* =============================================================
+   PILLS / TAGS
+   ============================================================= */
+.tw-tag {
+  display: inline-flex; align-items: center;
+  font-family: var(--font-syne);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--tw-celadon-soft);
+  color: var(--tw-burnham);
+}
+.tw-tag--wisteria { background: var(--tw-wisteria-soft); color: var(--tw-burnham); }
+.tw-tag--tangerine { background: var(--tw-tangerine-soft); color: var(--tw-burnham-dk); }
+.tw-tag--ash { background: var(--tw-ash-soft); color: var(--tw-jet); }
+.tw-tag--on-deep { background: color-mix(in srgb, var(--tw-celadon) 30%, transparent); color: var(--tw-smoke); }
+
+/* =============================================================
+   UTILITIES
+   ============================================================= */
+.tw-rule { height: 1px; background: var(--line); border: 0; margin: var(--space-8) 0; }
+.tw-rule--on-deep { background: var(--line-on-deep); }
+.tw-container { max-width: var(--container); margin: 0 auto; padding: 0 var(--space-8); }
+.tw-container-narrow { max-width: var(--container-narrow); margin: 0 auto; padding: 0 var(--space-8); }
+.tw-container-wide { max-width: var(--container-wide); margin: 0 auto; padding: 0 var(--space-8); }

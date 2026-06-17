@@ -1,0 +1,237 @@
+<!doctype html>
+<!-- @dsCard group="UI Kit — Print Collateral" name="Print collateral" subtitle="A4 · letterhead, report cover, brochure, programme one-pager" viewport="1440x1080" -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>The White Orchid — Print Collateral</title>
+<link rel="stylesheet" href="../../colors_and_type.css?v=8"/>
+<style>
+  html, body { margin:0; height:100%; background:#E8E5DC; }
+  /* A4 = 210×297mm. Render at 1mm = 2.4px → 504×713 (canvas-friendly). */
+  .a4 {
+    width: 504px; height: 713px;
+    background: var(--tw-smoke);
+    position: relative; overflow:hidden;
+    font-family: var(--font-print);
+    color: var(--tw-burnham);
+    box-shadow: 0 30px 60px -20px rgba(37,78,72,0.18);
+  }
+  .a4.deep { background: var(--tw-burnham); color: var(--tw-smoke); }
+  /* Margins: 2.54cm = 25.4mm = 61px at our scale */
+  .margins { position:absolute; inset: 61px; }
+
+  .h-romie { font-family: var(--font-serif); font-weight: 400; letter-spacing:-0.01em; }
+  .h-syne  { font-family: var(--font-syne); }
+  .ucaps   { text-transform:uppercase; letter-spacing:0.18em; }
+  .body14  { font-family: var(--font-print); font-size: 11px; line-height:1.55; }
+
+  .corner-mark { position:absolute; bottom:30px; left:61px; display:flex; align-items:center; gap:10px; font-family:var(--font-syne); font-weight:600; font-size:9px; letter-spacing:0.18em; text-transform:uppercase; opacity:0.85; }
+  .corner-mark .dot { width: 6px; height:6px; border-radius:50%; background: currentColor; }
+
+  .pattern-overlay { position:absolute; inset:0; background-image: url('../../assets/pattern-1.svg'); background-size: 280px; opacity: 0.08; pointer-events:none; }
+
+  .photo {
+    background-color: #B6B0A4;
+    background-image:
+      radial-gradient(circle at 30% 30%, rgba(255,255,255,0.18), transparent 40%),
+      radial-gradient(circle at 70% 70%, rgba(0,0,0,0.18), transparent 50%);
+    position: relative;
+  }
+  .photo::after {
+    content: attr(data-label);
+    position:absolute; bottom:6px; left:8px;
+    font-family: var(--font-syne); font-size: 8px; letter-spacing:0.18em;
+    text-transform: uppercase; color: rgba(255,255,255,0.85);
+  }
+</style>
+</head>
+<body>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<div id="root"></div>
+<script type="text/babel" src="design-canvas.jsx"></script>
+
+<script type="text/babel">
+const Logo = ({color, size=42}) => (
+  <svg width={size} height={size} viewBox="0 0 100 100" fill="none" stroke={color || 'currentColor'} strokeWidth="3">
+    <ellipse cx="50" cy="22" rx="13" ry="22"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(72 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(144 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(216 50 50)"/>
+    <ellipse cx="50" cy="22" rx="13" ry="22" transform="rotate(288 50 50)"/>
+    <circle cx="50" cy="50" r="6" fill={color || 'currentColor'} stroke="none"/>
+  </svg>
+);
+const Wordmark = ({color}) => (
+  <div style={{fontFamily:'var(--font-display)',fontSize:13,letterSpacing:'0.20em',textTransform:'uppercase',color:color||'currentColor'}}>The White Orchid</div>
+);
+
+// ===== 1. Letterhead (A4) =====
+const Letterhead = () => (
+  <div className="a4">
+    <div className="margins" style={{display:'flex',flexDirection:'column'}}>
+      <header style={{display:'flex',alignItems:'center',gap:14,marginBottom:36}}>
+        <Logo color="#254E48" size={36}/>
+        <div>
+          <Wordmark color="#254E48"/>
+          <div className="h-syne" style={{fontSize:8,letterSpacing:'0.10em',textTransform:'uppercase',color:'var(--fg-muted)',marginTop:3}}>Preschool · East Coast</div>
+        </div>
+      </header>
+
+      <div className="body14" style={{marginBottom:18}}>27 March 2026</div>
+      <div className="body14" style={{marginBottom:24,lineHeight:1.5}}>
+        Mrs. Yusra Hamid<br/>
+        14 Joo Chiat Lane<br/>
+        Singapore 427770
+      </div>
+
+      <h1 style={{fontFamily:'var(--font-serif)',fontWeight:400,fontSize:22,lineHeight:1.15,letterSpacing:'-0.01em',color:'var(--tw-jet)',marginBottom:18}}>
+        A note from Inara's morning circle.
+      </h1>
+
+      <div className="body14" style={{maxWidth:380,color:'var(--tw-jet)'}}>
+        <p style={{margin:'0 0 12px'}}>Dear Yusra,</p>
+        <p style={{margin:'0 0 12px'}}>We are writing to share some moments from Inara's first month with us. She has settled into the rhythm of the morning circle with quiet confidence, and last Tuesday she led the group in choosing the day's project — a small boat for the rain garden.</p>
+        <p style={{margin:'0 0 12px'}}>We thought you'd like to know.</p>
+        <p style={{margin:'0 0 12px'}}>Warmly,</p>
+        <p style={{margin:'0',fontFamily:'var(--font-serif)',fontStyle:'italic',fontSize:14}}>Sarah and the morning team</p>
+      </div>
+
+      <div style={{flex:1}}/>
+      <div style={{borderTop:'1px solid var(--line)',paddingTop:14,display:'flex',justifyContent:'space-between',fontFamily:'var(--font-syne)',fontSize:8,letterSpacing:'0.10em',textTransform:'uppercase',color:'var(--fg-muted)'}}>
+        <span>14 Joo Chiat Ln · Singapore 427770</span>
+        <span>+65 6440 1188</span>
+        <span>thewhiteorchid.sg</span>
+      </div>
+    </div>
+  </div>
+);
+
+// ===== 2. Report cover (deep, brand-led) =====
+const ReportCover = () => (
+  <div className="a4 deep">
+    <div className="pattern-overlay"/>
+    <div className="margins" style={{display:'flex',flexDirection:'column',height:'calc(100% - 122px)'}}>
+      <header style={{display:'flex',alignItems:'center',gap:12}}>
+        <Logo color="#F5F6E7" size={32}/>
+        <Wordmark color="#F5F6E7"/>
+      </header>
+      <div style={{flex:1}}/>
+      <div className="h-syne ucaps" style={{fontSize:11,color:'var(--tw-celadon)',marginBottom:18,letterSpacing:'0.20em'}}>2025 — 26</div>
+      <h1 style={{fontFamily:'var(--font-serif)',fontWeight:400,fontSize:54,lineHeight:0.98,letterSpacing:'-0.02em',color:'var(--tw-smoke)',marginBottom:18,textWrap:'balance'}}>
+        New academic<br/>initiatives <em style={{color:'var(--tw-wisteria)'}}>and</em><br/>programmes.
+      </h1>
+      <div className="h-syne" style={{fontSize:13,color:'var(--tw-celadon)',marginTop:6}}>Where a first-class education is the norm.</div>
+    </div>
+    <div className="corner-mark" style={{color:'var(--tw-smoke)'}}>
+      <span className="dot"/><span>Annual Report · Vol. 09</span>
+    </div>
+    {/* large translucent motif, bottom-right */}
+    <div style={{position:'absolute',right:-60,bottom:-60,opacity:0.18}}>
+      <Logo color="#F5F6E7" size={260}/>
+    </div>
+  </div>
+);
+
+// ===== 3. Brochure inner spread (image 2/3, text 1/3 — per p.50) =====
+const Brochure = () => (
+  <div className="a4">
+    <div className="photo" style={{position:'absolute',left:0,top:0,width:'100%',height:'66%'}} data-label="placeholder · cover photo, child & garden"></div>
+    <div style={{position:'absolute',left:0,top:0,width:'100%',height:'66%',background:'linear-gradient(180deg, transparent 60%, rgba(37,78,72,0.55) 100%)'}}/>
+    <div style={{position:'absolute',top:24,left:24,display:'flex',alignItems:'center',gap:10,color:'#F5F6E7'}}>
+      <Logo color="#F5F6E7" size={28}/>
+      <Wordmark color="#F5F6E7"/>
+    </div>
+    <div style={{position:'absolute',top:'66%',left:0,right:0,bottom:0,padding:'30px 61px 30px',background:'var(--tw-smoke)',display:'flex',flexDirection:'column'}}>
+      <div className="h-syne ucaps" style={{fontSize:10,color:'var(--tw-tangerine)',marginBottom:10}}>Back to school · 2026</div>
+      <h2 style={{fontFamily:'var(--font-serif)',fontWeight:400,fontSize:32,lineHeight:1.05,letterSpacing:'-0.01em',color:'var(--tw-burnham)',marginBottom:14,textWrap:'balance'}}>
+        A school led by children.
+      </h2>
+      <div className="body14" style={{maxWidth:340,color:'var(--tw-jet)'}}>
+        Forty children. Two gardens. Eight adults who would rather notice than narrate. We open the doors twice a week — Tuesdays and Thursdays at 0900.
+      </div>
+      <div style={{flex:1}}/>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',borderTop:'1px solid var(--line)',paddingTop:12,marginTop:18}}>
+        <div className="h-syne ucaps" style={{fontSize:9,color:'var(--fg-muted)'}}>Open House · Tuesdays &amp; Thursdays</div>
+        <div className="h-syne" style={{fontSize:11,fontWeight:700,color:'var(--tw-tangerine)',letterSpacing:'0.06em',textTransform:'uppercase'}}>Book a morning →</div>
+      </div>
+    </div>
+  </div>
+);
+
+// ===== 4. Programme one-pager (text-led, info-rich) =====
+const Onepager = () => (
+  <div className="a4">
+    <div className="margins" style={{display:'flex',flexDirection:'column'}}>
+      <header style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:30}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <Logo color="#254E48" size={28}/>
+          <Wordmark color="#254E48"/>
+        </div>
+        <div className="h-syne ucaps" style={{fontSize:8,color:'var(--fg-muted)'}}>Programme · One-pager</div>
+      </header>
+
+      <div className="h-syne ucaps" style={{fontSize:10,color:'var(--tw-tangerine)',marginBottom:8,letterSpacing:'0.16em'}}>Ages 6 – 9 · Afterschool</div>
+      <h1 style={{fontFamily:'var(--font-serif)',fontWeight:400,fontSize:42,lineHeight:1.0,letterSpacing:'-0.01em',color:'var(--tw-burnham)',marginBottom:6}}>
+        Children's <em>Clubs.</em>
+      </h1>
+      <div className="h-syne" style={{fontSize:14,color:'var(--tw-jet-soft)',marginBottom:22,fontWeight:400}}>Where curiosity becomes mastery.</div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:24,marginBottom:24}}>
+        <div className="body14" style={{color:'var(--tw-jet)'}}>
+          <p style={{margin:'0 0 10px'}}>A workshop for the older children — woodwork, ceramics, writing, and long, quiet projects with no due date. Children carry their work across weeks. Quiet is allowed. Quiet is encouraged.</p>
+          <p style={{margin:'0 0 10px'}}>Mixed ages by design. Adults present, never centre stage. The garden does most of the talking.</p>
+        </div>
+        <div style={{borderLeft:'1px solid var(--line-strong)',paddingLeft:14}}>
+          <div style={{fontFamily:'var(--font-syne)',fontSize:8,letterSpacing:'0.16em',textTransform:'uppercase',color:'var(--fg-muted)',marginBottom:4}}>Days</div>
+          <div className="body14" style={{marginBottom:12}}>Tuesday · Thursday<br/>1530 — 1830</div>
+          <div style={{fontFamily:'var(--font-syne)',fontSize:8,letterSpacing:'0.16em',textTransform:'uppercase',color:'var(--fg-muted)',marginBottom:4}}>Ratio</div>
+          <div className="body14" style={{marginBottom:12}}>1 : 8</div>
+          <div style={{fontFamily:'var(--font-syne)',fontSize:8,letterSpacing:'0.16em',textTransform:'uppercase',color:'var(--fg-muted)',marginBottom:4}}>Fee</div>
+          <div className="body14">$640 / month</div>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:24}}>
+        <div className="photo" style={{aspectRatio:'1',borderRadius:'50% 50% 50% 8px'}} data-label="woodwork"></div>
+        <div className="photo" style={{aspectRatio:'1',borderRadius:'50% 8px 50% 50%',background:'#9DB89A'}} data-label="ceramics"></div>
+        <div className="photo" style={{aspectRatio:'1',borderRadius:'8px 50% 50% 50%',background:'#C4A78F'}} data-label="writing"></div>
+      </div>
+
+      <blockquote style={{fontFamily:'var(--font-serif)',fontStyle:'italic',fontSize:18,lineHeight:1.35,color:'var(--tw-burnham)',margin:0,paddingLeft:14,borderLeft:'2px solid var(--tw-tangerine)',maxWidth:380}}>
+        "On Tuesday she led the group in choosing the day's project — a small boat for the rain garden."
+      </blockquote>
+      <div className="h-syne ucaps" style={{fontSize:8,color:'var(--fg-muted)',marginTop:6,paddingLeft:14}}>From a parent letter</div>
+
+      <div style={{flex:1}}/>
+      <div style={{borderTop:'1px solid var(--line)',paddingTop:12,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div className="h-syne ucaps" style={{fontSize:8,color:'var(--fg-muted)'}}>Limited places · September 2026 intake</div>
+        <div style={{display:'inline-flex',alignItems:'center',gap:8,fontFamily:'var(--font-syne)',fontWeight:700,fontSize:10,letterSpacing:'0.10em',textTransform:'uppercase',color:'#fff',background:'var(--tw-tangerine)',padding:'8px 18px',borderRadius:40}}>Book a visit →</div>
+      </div>
+    </div>
+  </div>
+);
+
+const App = () => (
+  <DesignCanvas title="The White Orchid · Print Collateral" subtitle="A4 · letterhead · report cover · brochure · programme one-pager" minScale={0.3} maxScale={2}>
+    <DCSection id="stationery" title="Stationery">
+      <DCArtboard id="letterhead" label="Letterhead · A4" width={504} height={713}><Letterhead/></DCArtboard>
+    </DCSection>
+    <DCSection id="reports" title="Reports &amp; covers">
+      <DCArtboard id="report-cover" label="Report cover · annual" width={504} height={713}><ReportCover/></DCArtboard>
+    </DCSection>
+    <DCSection id="marketing-print" title="Marketing print">
+      <DCArtboard id="brochure" label="Brochure · 2/3 image · 1/3 text (p.50)" width={504} height={713}><Brochure/></DCArtboard>
+      <DCArtboard id="onepager" label="Programme one-pager" width={504} height={713}><Onepager/></DCArtboard>
+    </DCSection>
+  </DesignCanvas>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+
+</body>
+</html>

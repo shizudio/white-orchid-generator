@@ -1,0 +1,6 @@
+/* ==========================================================================
+   The White Orchid — Design System · Global entry
+   --------------------------------------------------------------------------
+   Consumers should link THIS file. It pulls in the full token + type system.
+   ========================================================================== */
+@import url("colors_and_type.css");

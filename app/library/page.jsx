@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import Nav from '@/components/Nav';
 import { supabase } from '@/lib/supabase';
 
 const CONSENT_BADGE = {
@@ -50,25 +51,17 @@ export default function LibraryPage() {
   });
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--ivory)' }}>
-      {/* Nav */}
-      <nav style={{ background: 'var(--burnham)', padding: '16px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 3, color: 'var(--ivory)', textTransform: 'uppercase' }}>The White Orchid — Library</span>
-        <div style={{ display: 'flex', gap: 24 }}>
-          <Link href="/upload" style={navLink}>Upload</Link>
-          <Link href="/generate" style={navLink}>Create Post</Link>
-          <Link href="/" style={navLink}>Home</Link>
-        </div>
-      </nav>
+    <div style={{ minHeight: '100vh', background: 'var(--tw-smoke)' }}>
+      <Nav section="library" />
 
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px' }}>
         {/* Header + filters */}
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 28, flexWrap: 'wrap', gap: 16 }}>
           <div>
-            <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 36, fontWeight: 400, color: 'var(--burnham)', marginBottom: 4 }}>Asset Library</h1>
+            <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 400, color: 'var(--fg-strong)', letterSpacing: '-0.01em', marginBottom: 4 }}>Asset Library</h1>
             <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#6B6560' }}>{images.length} image{images.length !== 1 ? 's' : ''} stored</p>
           </div>
-          <Link href="/upload" style={{ padding: '11px 24px', background: 'var(--tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
+          <Link href="/upload" style={{ padding: '11px 24px', background: 'var(--tw-tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
             + Upload
           </Link>
         </div>
@@ -97,7 +90,7 @@ export default function LibraryPage() {
 
         {/* Grid */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '80px 0', fontFamily: 'var(--font-ui)', color: 'var(--burnham)', fontSize: 13, letterSpacing: 2 }}>Loading…</div>
+          <div style={{ textAlign: 'center', padding: '80px 0', fontFamily: 'var(--font-ui)', color: 'var(--tw-burnham)', fontSize: 13, letterSpacing: 2 }}>Loading…</div>
         ) : filtered.length === 0 ? (
           <EmptyState hasImages={images.length > 0} />
         ) : (
@@ -134,7 +127,7 @@ function ImageCard({ img, url }) {
 
       {/* Meta */}
       <div style={{ padding: '10px 12px' }}>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--jet)', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.filename}</div>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--tw-jet)', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.filename}</div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 600, letterSpacing: 1, color: '#6B6560', textTransform: 'uppercase' }}>{SOURCE_LABEL[img.source_type]}</span>
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 700, color: badge.color, background: badge.bg, padding: '2px 7px', borderRadius: 4 }}>{badge.label}</span>
@@ -152,7 +145,7 @@ function FilterChips({ value, options, onChange }) {
     <div style={{ display: 'flex', gap: 6 }}>
       {options.map(opt => (
         <button key={opt.value} onClick={() => onChange(opt.value)}
-          style={{ padding: '7px 13px', borderRadius: 40, border: `1.5px solid ${value === opt.value ? 'var(--burnham)' : 'rgba(184,176,168,0.5)'}`, background: value === opt.value ? 'var(--burnham)' : 'transparent', color: value === opt.value ? '#fff' : 'var(--jet)', fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: 0.3 }}>
+          style={{ padding: '7px 13px', borderRadius: 40, border: `1.5px solid ${value === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`, background: value === opt.value ? 'var(--tw-burnham)' : 'transparent', color: value === opt.value ? '#fff' : 'var(--tw-jet)', fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: 0.3 }}>
           {opt.label}
         </button>
       ))}
@@ -164,14 +157,14 @@ function EmptyState({ hasImages }) {
   return (
     <div style={{ textAlign: 'center', padding: '80px 24px', background: '#fff', borderRadius: 16, border: '1.5px dashed rgba(184,176,168,0.5)' }}>
       <div style={{ fontSize: 40, marginBottom: 16 }}>📷</div>
-      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--burnham)', marginBottom: 8 }}>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--tw-burnham)', marginBottom: 8 }}>
         {hasImages ? 'No images match your filters' : 'No images yet'}
       </div>
       <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#6B6560', maxWidth: 360, margin: '0 auto 24px' }}>
         {hasImages ? 'Try clearing your filters.' : 'Upload your first Midjourney render or school photo to get started.'}
       </p>
       {!hasImages && (
-        <Link href="/upload" style={{ padding: '11px 28px', background: 'var(--tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
+        <Link href="/upload" style={{ padding: '11px 28px', background: 'var(--tw-tangerine)', color: '#fff', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
           Upload Images →
         </Link>
       )}
@@ -179,4 +172,4 @@ function EmptyState({ hasImages }) {
   );
 }
 
-const navLink = { fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 2, color: 'var(--celadon)', textTransform: 'uppercase' };
+const navLink = { fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 2, color: 'var(--tw-celadon)', textTransform: 'uppercase' };

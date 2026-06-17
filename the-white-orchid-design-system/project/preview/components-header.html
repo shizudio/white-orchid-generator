@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="Site header" subtitle="Fixed ivory band, hairline beneath" viewport="700x140" --><html><head><meta charset="utf-8"/><link rel="stylesheet" href="_card.css"/>
+<style>
+  .twh { display:flex; align-items:center; justify-content:space-between; gap:18px;
+         padding:18px 24px; background:var(--tw-smoke); border-bottom:1px solid var(--line); }
+  .twh__mark { display:flex; align-items:center; gap:9px; flex-shrink:0; }
+  .twh__mark img { width:28px; height:28px; display:block; }
+  .twh__mark .word { font-family:var(--font-display); font-size:11px; letter-spacing:.18em;
+                     color:var(--tw-burnham); white-space:nowrap; line-height:1;
+                     text-transform:uppercase; }
+  .twh__nav { display:flex; gap:18px; flex:0 1 auto; min-width:0; }
+  .twh__nav a { font-family:var(--font-syne); font-weight:600; font-size:10px;
+                letter-spacing:.14em; text-transform:uppercase; color:var(--tw-burnham);
+                text-decoration:none; border:0 !important; padding:0 !important;
+                white-space:nowrap; }
+  .twh__cta { flex-shrink:0; font-family:var(--font-body); font-weight:500; font-size:12.5px;
+              background:var(--tw-burnham); color:var(--tw-smoke); border:0;
+              border-radius:999px; padding:9px 16px; white-space:nowrap; cursor:pointer; }
+  .twh__legend { padding:14px 28px; font-family:var(--font-syne); font-weight:600;
+                 font-size:10px; color:var(--fg-muted); letter-spacing:.16em;
+                 text-transform:uppercase; }
+</style>
+</head>
+<body><div class="card" style="padding:0;overflow:hidden">
+  <header class="twh">
+    <div class="twh__mark">
+      <img src="../assets/logo-circle.png" alt=""/>
+      <span class="word">White Orchid</span>
+    </div>
+    <nav class="twh__nav">
+      <a>About</a>
+      <a>Programmes</a>
+      <a>A&nbsp;day&nbsp;here</a>
+      <a>Stories</a>
+    </nav>
+    <button class="twh__cta">Book a visit →</button>
+  </header>
+
+  <div class="twh__legend">
+    Wordmark · Aboreto &nbsp;·&nbsp; Nav · Syne SemiBold caps &nbsp;·&nbsp; CTA · Fira Sans
+  </div>
+</div></body></html>
