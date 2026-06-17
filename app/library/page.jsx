@@ -124,8 +124,16 @@ function ImageCard({ img, url }) {
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 600, letterSpacing: 1, color: '#6B6560', textTransform: 'uppercase' }}>{SOURCE_LABEL[img.source_type]}</span>
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 700, color: badge.color, background: badge.bg, padding: '2px 7px', borderRadius: 4 }}>{badge.label}</span>
         </div>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#aaa', marginTop: 4 }}>
-          {new Date(img.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#aaa' }}>
+            {new Date(img.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </div>
+          {url && !isBlocked && (
+            <a href={url} download={img.filename} target="_blank" rel="noreferrer"
+              style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--tw-burnham)', background: 'var(--tw-celadon-soft)', padding: '4px 10px', borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer', textDecoration: 'none' }}>
+              ↓ Save
+            </a>
+          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Nav from "./Nav";
+import LibraryPicker from "./LibraryPicker";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -202,6 +203,7 @@ export default function App() {
   const [library, setLibrary] = useState([]); // [{id, thumb, full}]
   const [history, setHistory] = useState([]); // [{id, thumb, label, date}]
   const [libOpen, setLibOpen] = useState(false);
+  const [showLibPicker, setShowLibPicker] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
 
   const curType = POST_TYPES.find(t => t.id === postType);
@@ -271,16 +273,32 @@ export default function App() {
     });
   }, []);
 
-  const loadFile = useCallback((file) => {
+  const loadFile = useCallback(async (file) => {
     if (!file) return;
+    // Load onto canvas immediately
     const r = new FileReader();
     r.onload = (e) => loadImage(e.target.result);
     r.readAsDataURL(file);
+    // Auto-save to Supabase library in background (default: midjourney_render)
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('source_type', 'midjourney_render');
+      await fetch('/api/images', { method: 'POST', body: fd });
+    } catch(e) { /* non-blocking — canvas still works if upload fails */ }
   }, [loadImage]);
 
   const selectLibraryImage = async (item) => {
     setImage(item.full);
     setImageObj(await imgFrom(item.full));
+  };
+
+  // Load image from Supabase library picker
+  const selectFromLibrary = async (img) => {
+    setShowLibPicker(false);
+    if (!img.url) return;
+    setImage(img.url);
+    setImageObj(await imgFrom(img.url));
   };
 
   const removeLibraryItem = (id) => {
@@ -435,28 +453,12 @@ export default function App() {
                 </div>
               </div>
 
-              {/* My Library */}
-              {library.length>0&&(
-                <div style={{marginBottom:8}}>
-                  <button onClick={()=>setLibOpen(!libOpen)} style={{fontSize:11,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:F.subtitle,fontWeight:600,padding:0,marginBottom:5,display:"flex",alignItems:"center",gap:4}}>
-                    My Library ({library.length}) <span style={{fontSize:9,transform:libOpen?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▼</span>
-                  </button>
-                  {libOpen&&(
-                    <div style={{display:"flex",gap:5,flexWrap:"wrap",paddingBottom:4}}>
-                      {library.map(item=>(
-                        <div key={item.id} style={{position:"relative",flexShrink:0}}>
-                          <button onClick={()=>selectLibraryImage(item)}
-                            style={{width:48,height:48,borderRadius:6,border:image===item.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}>
-                            <img src={item.thumb} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
-                          </button>
-                          <button onClick={()=>removeLibraryItem(item.id)}
-                            style={{position:"absolute",top:-4,right:-4,width:16,height:16,borderRadius:"50%",background:B.jet,color:"#fff",border:"none",cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* Library picker button */}
+              <div style={{marginBottom:8}}>
+                <button onClick={()=>setShowLibPicker(true)} style={{width:"100%",padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:1,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                  <span>📂</span> From library
+                </button>
+              </div>
 
               {/* Upload / current */}
               {!image?(
@@ -554,6 +556,7 @@ export default function App() {
 
         </div>
       </div>
+      {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
     </div>
   );
 }
