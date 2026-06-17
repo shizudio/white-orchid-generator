@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Nav from '@/components/Nav';
-import { supabase } from '@/lib/supabase';
 
 const CONSENT_BADGE = {
   na:      { label: 'Midjourney', color: '#2B5040', bg: 'rgba(43,80,64,0.1)' },
@@ -25,20 +24,13 @@ export default function LibraryPage() {
   useEffect(() => {
     fetch('/api/images')
       .then(r => r.json())
-      .then(async (data) => {
+      .then(data => {
         setImages(data);
         setLoading(false);
-        // Batch sign URLs
-        const paths = data.map(img => img.storage_path);
-        if (paths.length === 0) return;
-        const { data: signed } = await supabase.storage
-          .from('images')
-          .createSignedUrls(paths, 3600);
-        if (signed) {
-          const map = {};
-          signed.forEach(s => { map[s.path] = s.signedUrl; });
-          setSignedUrls(map);
-        }
+        // URLs are pre-signed server-side and included in the response
+        const map = {};
+        data.forEach(img => { if (img.url) map[img.storage_path] = img.url; });
+        setSignedUrls(map);
       })
       .catch(() => setLoading(false));
   }, []);

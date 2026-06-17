@@ -10,6 +10,20 @@ export async function GET() {
     .select('*')
     .order('created_at', { ascending: false });
   if (error) return Response.json({ error: error.message }, { status: 500 });
+
+  // Generate signed URLs server-side (admin client has storage access)
+  if (data?.length) {
+    const paths = data.map(img => img.storage_path);
+    const { data: signed } = await supabase.storage
+      .from('images')
+      .createSignedUrls(paths, 60 * 60); // 1 hour
+    if (signed) {
+      const urlMap = {};
+      signed.forEach(s => { urlMap[s.path] = s.signedUrl; });
+      return Response.json(data.map(img => ({ ...img, url: urlMap[img.storage_path] || null })));
+    }
+  }
+
   return Response.json(data);
 }
 
