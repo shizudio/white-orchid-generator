@@ -310,7 +310,7 @@ export default function App() {
       if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
       putLogo();
     }else if(postType==="quote"){
-      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);pattern(0.10);
+      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);
       const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D";
       ctx.fillStyle=tc;ctx.font=`italic 500 64px ${F.quote}`;ctx.textAlign="left";
       const nl=wrapText(ctx,q,m,h*0.26,w-m*2,86);
@@ -323,7 +323,7 @@ export default function App() {
       if(subtext){ctx.fillStyle=tc;ctx.font=`400 20px ${F.body}`;ctx.textAlign="left";wrapText(ctx,subtext,m,h*0.82,w-m*2,30);drawArrow(ctx,m,h*0.92,w*0.22,tc);}
       putLogo();
     }else if(postType==="text_post"){
-      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);pattern(0.08);
+      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);
       let y=h*0.30;
       if(subtext){ctx.fillStyle=tc;ctx.font=`italic 400 42px ${F.quote}`;ctx.textAlign="left";y+=wrapText(ctx,subtext,m,y,w-m*2,56)*56+12;}
       if(headline){ctx.fillStyle=tc;ctx.font=`700 62px ${F.subtitle}`;ctx.textAlign="left";y+=wrapText(ctx,headline.toUpperCase(),m,y,w-m*2,76)*76+24;}
