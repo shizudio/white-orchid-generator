@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import Nav from "./Nav";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -363,10 +364,7 @@ export default function App() {
   /* ───────── UI ───────── */
   return (
     <div style={{fontFamily:F.body,color:B.jet,minHeight:"100vh",background:B.whiteSmoke}}>
-      <div style={{padding:"20px 28px 16px",background:B.burnham,display:"flex",alignItems:"baseline",gap:12}}>
-        <span style={{fontFamily:F.logo,fontSize:13,letterSpacing:3,color:B.whiteSmoke,textTransform:"uppercase"}}>The White Orchid</span>
-        <span style={{fontFamily:F.subtitle,fontSize:15,fontWeight:500,color:B.celadon}}>Social Media Generator</span>
-      </div>
+      <Nav section="create" />
 
       <div style={{display:"flex",flexWrap:"wrap"}}>
         {/* ── CONTROLS ── */}
