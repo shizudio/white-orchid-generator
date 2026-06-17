@@ -122,17 +122,39 @@ function suggestLogoColor(bgLuminance) {
 }
 
 // Fixed placement presets
+// Logo positions use semantic anchors.
+// Actual canvas coordinates are computed at draw time based on logo size,
+// so the outer edge of the logo always sits at a consistent 5% inset (clear space).
+const LOGO_PAD = 0.05; // 5% of canvas edge = 54px on 1080px canvas
 const LOGO_POSITIONS = {
-  "top-left":      { label:"Top Left",     x:0.12, y:0.12 },
-  "top-center":    { label:"Top Center",   x:0.50, y:0.10 },
-  "top-right":     { label:"Top Right",    x:0.88, y:0.12 },
-  "mid-left":      { label:"Mid Left",     x:0.12, y:0.50 },
-  "mid-right":     { label:"Mid Right",    x:0.88, y:0.50 },
-  "center":        { label:"Center",       x:0.50, y:0.50 },
-  "bottom-left":   { label:"Bottom Left",  x:0.12, y:0.88 },
-  "bottom-center": { label:"Bottom Center",x:0.50, y:0.90 },
-  "bottom-right":  { label:"Bottom Right", x:0.88, y:0.88 },
+  "top-left":      { label:"Top Left",     anchorX:"left",   anchorY:"top"    },
+  "top-center":    { label:"Top Center",   anchorX:"center", anchorY:"top"    },
+  "top-right":     { label:"Top Right",    anchorX:"right",  anchorY:"top"    },
+  "mid-left":      { label:"Mid Left",     anchorX:"left",   anchorY:"center" },
+  "mid-right":     { label:"Mid Right",    anchorX:"right",  anchorY:"center" },
+  "center":        { label:"Center",       anchorX:"center", anchorY:"center" },
+  "bottom-left":   { label:"Bottom Left",  anchorX:"left",   anchorY:"bottom" },
+  "bottom-center": { label:"Bottom Center",anchorX:"center", anchorY:"bottom" },
+  "bottom-right":  { label:"Bottom Right", anchorX:"right",  anchorY:"bottom" },
 };
+
+// Compute logo center (cx, cy) from anchor + size so clear space is always respected
+function logoCenter(pos, canvasW, canvasH, lSz) {
+  const pad = LOGO_PAD * canvasW;
+  const half = lSz / 2;
+  let cx, cy;
+  switch (pos.anchorX) {
+    case "left":   cx = pad + half; break;
+    case "right":  cx = canvasW - pad - half; break;
+    default:       cx = canvasW / 2;
+  }
+  switch (pos.anchorY) {
+    case "top":    cy = pad + half; break;
+    case "bottom": cy = canvasH - pad - half; break;
+    default:       cy = canvasH / 2;
+  }
+  return [cx, cy];
+}
 
 const LOGO_SIZES = [
   { id:"s",  label:"S",  pct:0.12 },
@@ -221,7 +243,8 @@ export default function App() {
     if (!imageObj || !logoPos) return;
     const w = imageObj.width, h = imageObj.height;
     const logoW = w * logoSizePct, logoH = h * logoSizePct;
-    const lx = logoPos.x * w, ly = logoPos.y * h;
+    const lSzForSample = w * logoSizePct;
+    const [lx, ly] = logoPos ? logoCenter(logoPos, w, h, lSzForSample) : [w*0.84, h*0.84];
     const bgL = sampleImageBrightness(imageObj, lx, ly, w, h, logoW, logoH);
     const suggested = suggestLogoColor(bgL);
     setSuggestedColor(suggested);
@@ -276,7 +299,8 @@ export default function App() {
     const ctx=c.getContext("2d");
     const w=SIZE,h=SIZE;
     ctx.clearRect(0,0,w,h);
-    const m=w*0.12, lSz=w*logoSizePct, lx=(logoPos?.x??0.88)*w, ly=(logoPos?.y??0.88)*h;
+    const m=w*0.12, lSz=w*logoSizePct;
+    const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
     const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 24px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
