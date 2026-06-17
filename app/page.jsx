@@ -9,12 +9,7 @@ export default function Home() {
       {/* Content */}
       <div style={{ position: 'relative', textAlign: 'center', padding: '0 32px', maxWidth: 560 }}>
         {/* Logo */}
-        <img src="/assets/logos/ds/logo-central-green.png" alt="The White Orchid" style={{ width: 96, height: 96, objectFit: 'contain', marginBottom: 32, filter: 'brightness(0) invert(0.92) sepia(0.2) saturate(0.4)' }} />
-
-        {/* Eyebrow */}
-        <div style={{ fontFamily: 'var(--font-wordmark)', fontSize: 11, letterSpacing: '0.18em', color: 'var(--fg-on-deep-soft)', textTransform: 'uppercase', marginBottom: 20 }}>
-          The White Orchid
-        </div>
+        <img src="/assets/logos/ds/logo-2-ivory.png" alt="The White Orchid" style={{ width: 200, height: 'auto', objectFit: 'contain', marginBottom: 32 }} />
 
         {/* Headline */}
         <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 'clamp(2.5rem, 5vw, 4rem)', fontWeight: 400, color: 'var(--fg-on-deep)', lineHeight: 1.05, letterSpacing: '-0.01em', marginBottom: 16 }}>
