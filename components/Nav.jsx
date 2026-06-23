@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import QuickGuide from './QuickGuide';
 
 export default function Nav({ section }) {
   return (
@@ -29,6 +30,7 @@ export default function Nav({ section }) {
             {label}
           </Link>
         ))}
+        <QuickGuide />
       </div>
     </nav>
   );

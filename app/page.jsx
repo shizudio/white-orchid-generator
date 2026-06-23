@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import QuickGuide from '@/components/QuickGuide';
+import MidjourneyLauncher from '@/components/MidjourneyLauncher';
 
 export default function Home() {
   return (
@@ -22,8 +24,9 @@ export default function Home() {
         </p>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div className="home-actions" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, width: '100%', maxWidth: 440, margin: '0 auto' }}>
           <Link href="/generate" style={btn('filled')}>Create post</Link>
+          <MidjourneyLauncher variant="landing" />
           <Link href="/upload" style={btn('ghost')}>Upload images</Link>
           <Link href="/library" style={btn('ghost')}>Library</Link>
         </div>
@@ -35,6 +38,7 @@ export default function Home() {
           </Link>
         </div>
       </div>
+      <QuickGuide variant="floating" />
     </main>
   );
 }

@@ -11,6 +11,7 @@ Internal tool for generating brand-consistent social media assets for The White 
 - **Image library**: Uploaded images auto-save for reuse
 - **Asset history**: Thumbnails of every export saved for grid planning
 - **1080×1080 PNG export**
+- **AI Art Director**: Turns a short creative brief into an editable template, layout, copy, colour and logo starting point
 
 ## Setup
 
@@ -19,9 +20,11 @@ npm install
 npm run dev
 ```
 
+Copy `.env.example` to `.env.local` and add the server credentials. The AI Art Director requires `OPENAI_API_KEY`; keep it server-only and also add it to the deployment environment.
+
 ## Deploy to Vercel
 
-Connect the repo in Vercel dashboard. Framework preset: Vite. No additional config needed.
+Connect the repo in the Vercel dashboard. Framework preset: Next.js. Add the same environment variables used in `.env.local`, including `OPENAI_API_KEY` for the AI Art Director.
 
 ## Typography note
 

@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
+import MidjourneyLauncher from "./MidjourneyLauncher";
+import AIArtDirector from "./AIArtDirector";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -416,6 +418,7 @@ export default function App() {
   const [libOpen, setLibOpen] = useState(false);
   const [showLibPicker, setShowLibPicker] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
+  const [preAiState, setPreAiState] = useState(null);
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -426,6 +429,37 @@ export default function App() {
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
+
+  const applyCreativePlan = plan => {
+    setPreAiState({ postType, dimensionId, headline, subtext, attribution, dateText, bgColor, selectedLogoId, logoPosition, logoSize });
+    setPostType(plan.postType);
+    setDimensionId(plan.dimensionId);
+    setHeadline(plan.headline);
+    setSubtext(plan.subtext);
+    setAttribution(plan.attribution);
+    setDateText(plan.dateText);
+    setBgColor(plan.bgColor);
+    setSelectedLogoId(plan.logoId);
+    setLogoPosition(plan.logoPosition);
+    setLogoSize(plan.logoSize);
+    setMarkTab(plan.logoId.startsWith("s") ? "secondary" : "primary");
+    setPhotoSel(false);
+  };
+
+  const undoCreativePlan = () => {
+    if (!preAiState) return;
+    setPostType(preAiState.postType);
+    setDimensionId(preAiState.dimensionId);
+    setHeadline(preAiState.headline);
+    setSubtext(preAiState.subtext);
+    setAttribution(preAiState.attribution);
+    setDateText(preAiState.dateText);
+    setBgColor(preAiState.bgColor);
+    setSelectedLogoId(preAiState.selectedLogoId);
+    setLogoPosition(preAiState.logoPosition);
+    setLogoSize(preAiState.logoSize);
+    setPreAiState(null);
+  };
 
   /* ── Load fonts ── */
   useEffect(() => {
@@ -926,6 +960,8 @@ export default function App() {
         {/* ── CONTROLS ── */}
         <div className="generator-controls" style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 64px)"}}>
 
+          <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
+
           <Sec label="Post Type">
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>setPostType(t.id)}>{t.label}</Chip>)}
@@ -980,6 +1016,7 @@ export default function App() {
                     <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
                     <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
                   </div>
+                  <MidjourneyLauncher />
                   <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
                   {mediaObj&&(
                     <>
