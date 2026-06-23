@@ -53,6 +53,18 @@ function drawArrow(ctx,x,y,w,color){ctx.save();ctx.strokeStyle=color;ctx.lineWid
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
 function imgFrom(d){return new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=d;});}
+// Hex (#RRGGBB) → rgba string with alpha 0..1
+function withAlpha(hex,a){const h=(hex||"#000").replace("#","");const r=parseInt(h.slice(0,2),16)||0,g=parseInt(h.slice(2,4),16)||0,b=parseInt(h.slice(4,6),16)||0;return `rgba(${r},${g},${b},${a==null?1:a})`;}
+
+// Load a <video> element ready for canvas compositing.
+function videoFrom(url){return new Promise(res=>{const v=document.createElement("video");v.muted=true;v.playsInline=true;v.loop=true;v.preload="auto";v.onloadeddata=()=>res(v);v.onerror=()=>res(null);v.src=url;});}
+
+/* ── IndexedDB store for saved videos (blobs are too big for localStorage) ── */
+function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open("wo-media",1);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains("videos"))db.createObjectStore("videos",{keyPath:"id"});};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+async function idbPut(rec){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readwrite");tx.objectStore("videos").put(rec);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
+async function idbAll(){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readonly");const q=tx.objectStore("videos").getAll();q.onsuccess=()=>res(q.result||[]);q.onerror=()=>rej(q.error);});}
+async function idbGet(id){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readonly");const q=tx.objectStore("videos").get(id);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});}
+async function idbDel(id){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readwrite");tx.objectStore("videos").delete(id);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
 
 /* ───────── IMAGE COMPRESSION (browser-side) ───────── */
 function compressImage(dataUrl, maxSize, quality) {
@@ -73,6 +85,8 @@ function compressImage(dataUrl, maxSize, quality) {
 /* ───────── STORAGE ───────── */
 const SK_LIB = "wo-image-library";
 const SK_HIST = "wo-asset-history";
+const SK_OVL = "wo-overlays";       // overlay asset library
+const SK_DOC = "wo-workdoc";        // placed overlay layers (working doc)
 const MAX_LIB = 15;
 const MAX_HIST = 20;
 
@@ -168,21 +182,197 @@ const LOGO_SIZES = [
   { id:"xl", label:"XL", pct:0.55 },
 ];
 
+// Canvas dimensions per social channel. w/h are export pixels.
+const DIMENSIONS = [
+  { id:"ig_square",   label:"IG Square",   sub:"1:1",    w:1080, h:1080 },
+  { id:"ig_portrait", label:"IG Portrait", sub:"4:5",    w:1080, h:1350 },
+  { id:"story",       label:"Story / Reel",sub:"9:16",   w:1080, h:1920 },
+  { id:"twitter",     label:"Twitter / X", sub:"16:9",   w:1600, h:900  },
+  { id:"facebook",    label:"Facebook",    sub:"1.91:1", w:1200, h:630  },
+  { id:"banner",      label:"Banner",      sub:"3:1",    w:1500, h:500  },
+];
+
+// Clamp a normalized focal point (0..1) so a cover-filled image at the given
+// zoom always covers the frame — no empty edges. Returns [fx, fy].
+// Drawable intrinsic dims (works for <img>, <video>, or {width,height})
+function srcDims(img) { return { iw: img.videoWidth || img.width, ih: img.videoHeight || img.height }; }
+
+// Geometry of the photo within the frame for transform t = { zoom, cx, cy }.
+// zoom multiplies the cover-fit scale (zoom<1 shrinks below cover → bg shows).
+// cx,cy = image center in canvas-normalized coords (0..1). When the image
+// still covers an axis it's clamped so no gap shows; when smaller it floats free.
+// Photo geometry: center (cx,cy in px), size (dw,dh), rotation (deg).
+// At rotation 0 and covering, the center is clamped so no gap shows.
+function photoGeom(img, w, h, t) {
+  const { iw, ih } = srcDims(img);
+  if (!iw || !ih) return null;
+  const s = Math.max(w/iw, h/ih) * (t?.zoom ?? 1);
+  const dw = iw*s, dh = ih*s;
+  let cx = (t?.cx ?? 0.5)*w, cy = (t?.cy ?? 0.5)*h;
+  const rot = t?.rotation || 0;
+  if (rot === 0) { // clamp center to avoid gaps when the image covers an axis
+    if (dw >= w) cx = Math.max(w-dw/2, Math.min(dw/2, cx));
+    if (dh >= h) cy = Math.max(h-dh/2, Math.min(dh/2, cy));
+  }
+  return { cx, cy, dw, dh, rot };
+}
+function drawPhotoFramed(ctx, img, w, h, t) {
+  const g = photoGeom(img, w, h, t);
+  if (!g) return;
+  ctx.save();
+  ctx.translate(g.cx, g.cy);
+  if (g.rot) ctx.rotate(g.rot*Math.PI/180);
+  ctx.drawImage(img, -g.dw/2, -g.dh/2, g.dw, g.dh);
+  ctx.restore();
+}
+
+/* ───────── OVERLAY ASSETS ───────── */
+const MASTER_DIM = "ig_square"; // square is the master; other formats cascade from it
+
+// Built-in brand overlay shapes (always available in the library)
+const DEFAULT_OVERLAYS = [
+  { id:"shape-1", name:"Shape 1", src:"/assets/shapes/shape-1.svg", kind:"center", ratio:169/207, builtin:true },
+  { id:"shape-2", name:"Shape 2", src:"/assets/shapes/shape-2.svg", kind:"center", ratio:217/196, builtin:true },
+  { id:"shape-3", name:"Shape 3", src:"/assets/shapes/shape-3.svg", kind:"center", ratio:173/207, builtin:true },
+];
+
+// Classify an uploaded overlay by where its ink sits: frame / strip / corner / center.
+function classifyOverlay(img) {
+  const N = 64;
+  const ratio = img.width / img.height;
+  try {
+    const cv = document.createElement("canvas"); cv.width = N; cv.height = N;
+    const x = cv.getContext("2d");
+    const s = Math.min(N/img.width, N/img.height);
+    const dw = img.width*s, dh = img.height*s;
+    x.drawImage(img, (N-dw)/2, (N-dh)/2, dw, dh);
+    const d = x.getImageData(0,0,N,N).data;
+    let minX=N,minY=N,maxX=0,maxY=0,ink=0;
+    for (let yy=0; yy<N; yy++) for (let xx=0; xx<N; xx++) {
+      if (d[(yy*N+xx)*4+3] > 20) { ink++; if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(yy<minY)minY=yy; if(yy>maxY)maxY=yy; }
+    }
+    if (ink === 0) return { kind:"center", ratio };
+    const bw = maxX-minX, bh = maxY-minY, coverage = ink/(N*N);
+    const edges = (minX<=2?1:0)+(minY<=2?1:0)+(maxX>=N-3?1:0)+(maxY>=N-3?1:0);
+    let centerInk=0, centerN=0;
+    for (let yy=Math.floor(N*0.35); yy<N*0.65; yy++) for (let xx=Math.floor(N*0.35); xx<N*0.65; xx++) { centerN++; if(d[(yy*N+xx)*4+3]>20) centerInk++; }
+    const hollow = centerInk/centerN < 0.15;
+    if (edges>=4 && hollow) return { kind:"frame", ratio };
+    if (edges>=3) return { kind:"frame", ratio };
+    if (bw>=N*0.7 && bh<=N*0.45) return { kind:"strip", ratio };
+    if (bh>=N*0.7 && bw<=N*0.45) return { kind:"strip", ratio };
+    if (coverage < 0.2) return { kind:"corner", ratio };
+    return { kind:"center", ratio };
+  } catch(e) { return { kind:"center", ratio }; }
+}
+
+// Suggested placement for a freshly-added overlay on a given canvas. Normalized:
+// x,y = center 0..1, scale = overlay width as a fraction of canvas width.
+function suggestPlacement(kind, ratio, w, h) {
+  const padN = 0.05;                       // 5% clear space (of width)
+  const halfYn = (sc) => (sc*w/ratio)/2/h; // half overlay height, normalized to canvas height
+  if (kind === "frame")  return { x:0.5, y:0.5, scale:1.0, rotation:0, opacity:1 };
+  if (kind === "strip")  return { x:0.5, y:1-padN*(w/h)-halfYn(1.0), scale:1.0, rotation:0, opacity:1 };
+  if (kind === "corner") { const sc=0.18; return { x:1-padN-sc/2, y:1-padN*(w/h)-halfYn(sc), scale:sc, rotation:0, opacity:1 }; }
+  return { x:0.5, y:0.5, scale:0.9, rotation:0, opacity:1 }; // center / blob → fills frame
+}
+
+function detectAnchor(t) {
+  return {
+    ax: t.x < 0.33 ? "left" : t.x > 0.67 ? "right" : "center",
+    ay: t.y < 0.33 ? "top"  : t.y > 0.67 ? "bottom": "center",
+  };
+}
+
+// Derive a non-master dimension's placement from the master, carrying intent
+// (corner stays corner with clear space, centered stays centered, etc.).
+function deriveFromMaster(master, kind, ratio, w, h) {
+  const padN = 0.05, sc = master.scale ?? 0.2;
+  if (kind === "frame") return { ...master };
+  const { ax, ay } = detectAnchor(master);
+  const halfYn = (sc*w/ratio)/2/h;
+  let x = ax==="left" ? padN + sc/2 : ax==="right" ? 1 - padN - sc/2 : 0.5;
+  let y = ay==="top"  ? padN*(w/h) + halfYn : ay==="bottom" ? 1 - padN*(w/h) - halfYn : 0.5;
+  return { x, y, scale:sc, rotation:master.rotation||0, opacity:master.opacity??1 };
+}
+
+// Draw one overlay layer with its transform.
+function drawOverlayLayer(ctx, img, w, h, t) {
+  if (!img || !t) return;
+  const ratio = img.width/img.height;
+  const ow = (t.scale ?? 0.2)*w, oh = ow/ratio;
+  ctx.save();
+  ctx.globalAlpha = t.opacity ?? 1;
+  ctx.translate((t.x ?? 0.5)*w, (t.y ?? 0.5)*h);
+  if (t.rotation) ctx.rotate(t.rotation*Math.PI/180);
+  ctx.drawImage(img, -ow/2, -oh/2, ow, oh);
+  ctx.restore();
+}
+
+// Frame mode: clip the photo INTO the shape's silhouette (mask), so the photo
+// fills the shape and everything outside is the canvas background.
+// oc = reusable offscreen canvas sized w×h.
+function drawFrameLayer(ctx, oc, shapeImg, photo, w, h, t, imgT) {
+  if (!shapeImg) return;
+  const o = oc.getContext("2d");
+  o.clearRect(0, 0, w, h);
+  o.globalCompositeOperation = "source-over";
+  // Saturate the silhouette (brand shapes may be semi-transparent) → solid mask
+  for (let i = 0; i < 8; i++) drawOverlayLayer(o, shapeImg, w, h, { ...t, opacity:1 });
+  if (photo) {
+    o.globalCompositeOperation = "source-in";   // keep photo only where the shape is
+    drawPhotoFramed(o, photo, w, h, imgT);
+    o.globalCompositeOperation = "source-over";
+  }
+  ctx.save();
+  ctx.globalAlpha = t.opacity ?? 1;
+  ctx.drawImage(oc, 0, 0);
+  ctx.restore();
+}
+
 async function sGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } }
 async function sSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) { console.error("Storage error:", e); } }
 async function sDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
 
 /* ───────── MAIN ───────── */
 export default function App() {
-  const SIZE = 1080;
   const canvasRef = useRef(null);
+  const canvasShellRef = useRef(null);
   const previewRef = useRef(null);
   const imgRef = useRef(null);
+
+  // Canvas dimension (social channel format)
+  const [dimensionId, setDimensionId] = useState("ig_square");
+  const dim = DIMENSIONS.find(d => d.id === dimensionId) || DIMENSIONS[0];
+  const W = dim.w, H = dim.h;
+
+  // Photo reframe: normalized focal point + zoom (cover-fill, clamped no-gap)
+  const [imgT, setImgT] = useState({ zoom:1, cx:0.5, cy:0.5, rotation:0 });
+  const [photoSel, setPhotoSel] = useState(false);   // photo selected → show transform handles
+  const [mediaKind, setMediaKind] = useState("image"); // image | video
+  const [markTab, setMarkTab] = useState("primary");   // primary | secondary | overlays
+
+  // Overlay assets: library + placed layers
+  const [overlays, setOverlays] = useState([]);            // [{id,name,dataUrl,kind,ratio}]
+  const [overlayLayers, setOverlayLayers] = useState([]);  // [{uid,assetId,master,byDim}]
+  const [selOverlay, setSelOverlay] = useState(null);      // selected layer uid
+  const [overlayDirty, setOverlayDirty] = useState(false);
+  const [editorScale, setEditorScale] = useState(1);       // display px per export px
+  const overlayImgs = useRef({});                          // assetId -> Image
+  const overlayInputRef = useRef(null);
+
+  // Video (background motion source)
+  const [videoObj, setVideoObj] = useState(null);          // HTMLVideoElement
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [savedVideos, setSavedVideos] = useState([]);      // [{id,name,createdAt}]
+  const videoInputRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [postType, setPostType] = useState("photo_logo");
   const [bgColor, setBgColor] = useState("burnham");
+  const [bgAlpha, setBgAlpha] = useState(1);          // background opacity (transparent PNG)
+  const [exportFormat, setExportFormat] = useState("png"); // png | jpeg
   const [image, setImage] = useState(null);
   const [imageObj, setImageObj] = useState(null);
   const [headline, setHeadline] = useState("");
@@ -196,7 +386,6 @@ export default function App() {
   const [logoSize, setLogoSize] = useState("m");
   const [logoObj, setLogoObj] = useState(null);
   const [suggestedColor, setSuggestedColor] = useState("ivory");
-  const [logoGroupFilter, setLogoGroupFilter] = useState("primary");
 
 
   // Library & History
@@ -209,6 +398,8 @@ export default function App() {
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
   const tc = curBg?.light ? B.whiteSmoke : B.jet;
+  const mediaObj = videoObj || imageObj;   // active canvas background (video wins)
+  const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
   const showLogoCtrl = true;
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
@@ -220,6 +411,17 @@ export default function App() {
     document.fonts.ready.then(() => setFontsLoaded(true));
   }, []);
 
+  // Keep editor chrome screen-sized while the responsive preview changes size.
+  useEffect(() => {
+    const shell = canvasShellRef.current;
+    if (!shell) return;
+    const measure = () => setEditorScale(shell.getBoundingClientRect().width / W || 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [W, H]);
+
   /* ── Load everything from storage ── */
   useEffect(() => {
     (async () => {
@@ -227,6 +429,13 @@ export default function App() {
       if (lib) setLibrary(lib);
       const hist = await sGet(SK_HIST);
       if (hist) setHistory(hist);
+      const ovl = await sGet(SK_OVL) || [];
+      // Always include built-in shapes; keep any user uploads
+      const merged = [...DEFAULT_OVERLAYS.filter(d => !ovl.some(o => o.id === d.id)), ...ovl];
+      setOverlays(merged);
+      const doc = await sGet(SK_DOC);
+      if (doc) setOverlayLayers(doc);
+      try { const vids = await idbAll(); setSavedVideos(vids.map(v => ({ id:v.id, name:v.name, createdAt:v.createdAt })).sort((a,b)=>b.createdAt-a.createdAt)); } catch(_) {}
       setReady(true);
     })();
   }, []);
@@ -234,12 +443,26 @@ export default function App() {
   /* ── Save library/history to storage ── */
   useEffect(() => { if (ready && library.length >= 0) sSet(SK_LIB, library); }, [library, ready]);
   useEffect(() => { if (ready && history.length >= 0) sSet(SK_HIST, history); }, [history, ready]);
+  useEffect(() => { if (ready) sSet(SK_OVL, overlays); }, [overlays, ready]);
+
+  /* ── Keep overlay Image objects loaded (assetId -> Image) ── */
+  useEffect(() => {
+    let cancelled = false;
+    const need = overlays.filter(o => !overlayImgs.current[o.id]);
+    if (!need.length) return;
+    Promise.all(need.map(o => imgFrom(o.dataUrl || o.src).then(img => { if (img) overlayImgs.current[o.id] = img; })))
+      .then(() => { if (!cancelled) draw(); });
+    return () => { cancelled = true; };
+  }, [overlays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Load selected logo from static asset ── */
   useEffect(() => {
     if (!selectedLogoVariant) return;
     imgFrom(selectedLogoVariant.src).then(img => setLogoObj(img));
   }, [selectedLogoId, selectedLogoVariant]);
+
+  /* ── Reset reframe when a new photo/video loads ── */
+  useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setPhotoSel(false); }, [imageObj, videoObj]);
 
   /* ── Auto-suggest logo color when image + position changes ── */
   useEffect(() => {
@@ -316,66 +539,322 @@ export default function App() {
   const draw = useCallback(() => {
     const c=canvasRef.current; if(!c) return;
     const ctx=c.getContext("2d");
-    const w=SIZE,h=SIZE;
+    const w=W,h=H;
+    const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
     const m=w*0.12, lSz=w*logoSizePct;
     const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
     const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
-    const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 24px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
+    const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 ${24*S}px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
+
+    // Resolve a layer's transform for the current dimension (master cascade + override)
+    const resolveT=(layer)=>{
+      if(dimensionId===MASTER_DIM)return layer.master;
+      if(layer.byDim?.[dimensionId])return layer.byDim[dimensionId];
+      const a=overlays.find(o=>o.id===layer.assetId);
+      return deriveFromMaster(layer.master,a?.kind||"center",a?.ratio||1,w,h);
+    };
+    const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
+    const topLayers=overlayLayers.filter(l=>(l.mode||"frame")==="overlay"&&overlayImgs.current[l.assetId]);
+    const hasFrame=frameLayers.length>0;
+    // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
+    if(hasFrame){
+      ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
+      const fcv=document.createElement("canvas"); fcv.width=w; fcv.height=h;
+      frameLayers.forEach(l=>drawFrameLayer(ctx,fcv,overlayImgs.current[l.assetId],mediaObj,w,h,resolveT(l),imgT));
+    }
 
     if(postType==="photo_logo"){
-      if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
+      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
     }else if(postType==="quote"){
-      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);}
       const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D";
-      ctx.fillStyle=tc;ctx.font=`italic 500 64px ${F.quote}`;ctx.textAlign="left";
-      const nl=wrapText(ctx,q,m,h*0.26,w-m*2,86);
-      if(attribution||subtext){ctx.font=`600 22px ${F.subtitle}`;ctx.letterSpacing="3px";ctx.fillText((attribution||subtext).toUpperCase(),m,h*0.26+nl*86+56);ctx.letterSpacing="0px";}
+      ctx.fillStyle=tc;ctx.font=`italic 500 ${64*S}px ${F.quote}`;ctx.textAlign="left";
+      const nl=wrapText(ctx,q,m,h*0.26,w-m*2,86*S);
+      if(attribution||subtext){ctx.font=`600 ${22*S}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;ctx.fillText((attribution||subtext).toUpperCase(),m,h*0.26+nl*86*S+56*S);ctx.letterSpacing="0px";}
       putLogo();
     }else if(postType==="event"){
-      if(imageObj){coverDraw(ctx,imageObj,w,h);ctx.fillStyle=curBg.color+"CC";ctx.fillRect(0,0,w,h);}else{ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);}
-      if(headline){ctx.fillStyle=tc;ctx.font=`700 26px ${F.subtitle}`;ctx.textAlign="left";ctx.letterSpacing="2px";wrapText(ctx,headline.toUpperCase(),m,h*0.18,w-m*2,38);ctx.letterSpacing="0px";}
-      if(dateText){const parts=dateText.split(" ");ctx.fillStyle=tc;ctx.font=`300 200px ${F.title}`;ctx.textAlign="left";ctx.fillText(parts[0]||"",m,h*0.62);ctx.font=`600 28px ${F.subtitle}`;ctx.letterSpacing="4px";ctx.fillText((parts.slice(1).join(" ")||"").toUpperCase(),m,h*0.70);ctx.letterSpacing="0px";}
-      if(subtext){ctx.fillStyle=tc;ctx.font=`400 20px ${F.body}`;ctx.textAlign="left";wrapText(ctx,subtext,m,h*0.82,w-m*2,30);drawArrow(ctx,m,h*0.92,w*0.22,tc);}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(headline){ctx.fillStyle=tc;ctx.font=`700 ${26*S}px ${F.subtitle}`;ctx.textAlign="left";ctx.letterSpacing=`${2*S}px`;wrapText(ctx,headline.toUpperCase(),m,h*0.18,w-m*2,38*S);ctx.letterSpacing="0px";}
+      if(dateText){const parts=dateText.split(" ");ctx.fillStyle=tc;ctx.font=`300 ${200*S}px ${F.title}`;ctx.textAlign="left";ctx.fillText(parts[0]||"",m,h*0.62);ctx.font=`600 ${28*S}px ${F.subtitle}`;ctx.letterSpacing=`${4*S}px`;ctx.fillText((parts.slice(1).join(" ")||"").toUpperCase(),m,h*0.70);ctx.letterSpacing="0px";}
+      if(subtext){ctx.fillStyle=tc;ctx.font=`400 ${20*S}px ${F.body}`;ctx.textAlign="left";wrapText(ctx,subtext,m,h*0.82,w-m*2,30*S);drawArrow(ctx,m,h*0.92,w*0.22,tc);}
       putLogo();
     }else if(postType==="text_post"){
-      ctx.fillStyle=curBg.color;ctx.fillRect(0,0,w,h);
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);}
       let y=h*0.30;
-      if(subtext){ctx.fillStyle=tc;ctx.font=`italic 400 42px ${F.quote}`;ctx.textAlign="left";y+=wrapText(ctx,subtext,m,y,w-m*2,56)*56+12;}
-      if(headline){ctx.fillStyle=tc;ctx.font=`700 62px ${F.subtitle}`;ctx.textAlign="left";y+=wrapText(ctx,headline.toUpperCase(),m,y,w-m*2,76)*76+24;}
-      if(attribution){ctx.fillStyle=tc;ctx.font=`400 20px ${F.body}`;ctx.textAlign="left";wrapText(ctx,attribution,m,y+16,w-m*2,28);}
+      if(subtext){ctx.fillStyle=tc;ctx.font=`italic 400 ${42*S}px ${F.quote}`;ctx.textAlign="left";y+=wrapText(ctx,subtext,m,y,w-m*2,56*S)*56*S+12*S;}
+      if(headline){ctx.fillStyle=tc;ctx.font=`700 ${62*S}px ${F.subtitle}`;ctx.textAlign="left";y+=wrapText(ctx,headline.toUpperCase(),m,y,w-m*2,76*S)*76*S+24*S;}
+      if(attribution){ctx.fillStyle=tc;ctx.font=`400 ${20*S}px ${F.body}`;ctx.textAlign="left";wrapText(ctx,attribution,m,y+16*S,w-m*2,28*S);}
       putLogo();
       drawArrow(ctx,m,h*0.89,w*0.24,curBg?.light?B.whiteSmoke:B.burnham);
     }else if(postType==="texture_text"){
-      if(imageObj)coverDraw(ctx,imageObj,w,h);else blank("Drop an image to begin");
+      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
-      if(headline){ctx.save();ctx.fillStyle=B.whiteSmoke;ctx.font=`700 48px ${F.subtitle}`;ctx.textAlign="right";ctx.shadowColor="rgba(0,0,0,0.45)";ctx.shadowBlur=16;ctx.letterSpacing="3px";ctx.fillText(headline.toUpperCase(),w-m,h*0.88);ctx.restore();}
+      if(headline){ctx.save();ctx.fillStyle=B.whiteSmoke;ctx.font=`700 ${48*S}px ${F.subtitle}`;ctx.textAlign="right";ctx.shadowColor="rgba(0,0,0,0.45)";ctx.shadowBlur=16*S;ctx.letterSpacing=`${3*S}px`;ctx.fillText(headline.toUpperCase(),w-m,h*0.88);ctx.restore();}
     }
-  },[postType,bgColor,imageObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc]);
+
+    // ── Overlay-mode layers (drawn on top of everything) ──
+    topLayers.forEach(layer => {
+      const img = overlayImgs.current[layer.assetId];
+      if (img) drawOverlayLayer(ctx, img, w, h, resolveT(layer));
+    });
+
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
+
+  /* ── Video render loop: composite each frame (photo + overlays + logo) ── */
+  useEffect(() => {
+    if (!videoObj) return;
+    let raf = 0;
+    const loop = () => { draw(); raf = requestAnimationFrame(loop); };
+    if (videoPlaying) raf = requestAnimationFrame(loop);
+    else draw();   // single frame when paused
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [videoObj, videoPlaying, draw]);
 
   /* ── Download + save to history ── */
   const download = async () => {
     const c = canvasRef.current; if (!c) return;
     const slug = headline ? headline.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,30) : postType;
-    // Download
-    const a = document.createElement("a");
-    a.download = `white-orchid-${slug}.png`;
-    a.href = c.toDataURL("image/png");
-    a.click();
-    // Save thumbnail to history
+    // Editor chrome lives in a separate DOM layer, so the export canvas is clean.
+    draw();
+    const isJpg = exportFormat === "jpeg";
+    let src = c;
+    if (isJpg) {
+      // JPEG has no alpha — flatten onto white so transparent areas aren't black
+      const flat = document.createElement("canvas");
+      flat.width = c.width; flat.height = c.height;
+      const fx = flat.getContext("2d");
+      fx.fillStyle = "#ffffff"; fx.fillRect(0,0,flat.width,flat.height);
+      fx.drawImage(c, 0, 0);
+      src = flat;
+    }
+    const dataUrl = src.toDataURL(isJpg ? "image/jpeg" : "image/png", isJpg ? 0.92 : undefined);
     const thumbCanvas = document.createElement("canvas");
     thumbCanvas.width = 120; thumbCanvas.height = 120;
-    thumbCanvas.getContext("2d").drawImage(c, 0, 0, 120, 120);
+    thumbCanvas.getContext("2d").drawImage(src, 0, 0, 120, 120);
     const thumb = thumbCanvas.toDataURL("image/jpeg", 0.6);
+    // Download
+    const a = document.createElement("a");
+    a.download = `white-orchid-${slug}.${isJpg ? "jpg" : "png"}`;
+    a.href = dataUrl;
+    a.click();
     const label = headline || subtext || postType.replace(/_/g," ");
     const id = Date.now().toString(36);
     const date = new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"});
     setHistory(prev => [{id, thumb, label, date}, ...prev].slice(0, MAX_HIST));
   };
+
+  /* ── Photo reframe: drag to pan, slider to zoom ── */
+  const dragRef = useRef(null);
+  const canPan = (postType==="photo_logo"||postType==="event"||postType==="texture_text") && !!mediaObj;
+  const HANDLE_HIT = 24;   // px radius to grab a corner / rotate handle
+  // Photo handles in display (screen) px: 4 rotated corners + a rotate knob + center.
+  const photoHandles = (rect) => {
+    if (!mediaObj) return null;
+    const g = photoGeom(mediaObj, W, H, imgT);
+    if (!g) return null;
+    const k = rect.width / W;                            // display px per export px
+    const toD = (px,py) => ({ x:rect.left + px*k, y:rect.top + py*k });
+    const a = (g.rot||0)*Math.PI/180, cos=Math.cos(a), sin=Math.sin(a);
+    const rotPt = (lx,ly) => toD(g.cx + lx*cos - ly*sin, g.cy + lx*sin + ly*cos);
+    const hw=g.dw/2, hh=g.dh/2;
+    // Keep handles reachable even when a cover-cropped image extends off-canvas.
+    const keepVisible = p => ({
+      x: Math.max(rect.left + 14, Math.min(rect.right - 14, p.x)),
+      y: Math.max(rect.top + 14, Math.min(rect.bottom - 14, p.y)),
+    });
+    const corners = [rotPt(-hw,-hh), rotPt(hw,-hh), rotPt(hw,hh), rotPt(-hw,hh)].map(keepVisible);
+    const rotKnob = keepVisible(rotPt(0, -hh - 30/k));   // ~30 display px above top edge
+    const centerD = toD(g.cx, g.cy);
+    return { g, k, cos, sin, hw, hh, corners, rotKnob, centerD };
+  };
+  // Is a display point inside the (rotated) photo box?
+  const pointInPhoto = (hp, X, Y) => {
+    const lx = (X - hp.centerD.x)/hp.k, ly = (Y - hp.centerD.y)/hp.k; // → export px, centered
+    const rx =  lx*hp.cos + ly*hp.sin, ry = -lx*hp.sin + ly*hp.cos;   // un-rotate
+    return Math.abs(rx) <= hp.hw && Math.abs(ry) <= hp.hh;
+  };
+  const onPanStart = (e) => {
+    const c = canvasRef.current; if (!c) return;
+    const rect = c.getBoundingClientRect();
+    // Selected overlay drag takes priority.
+    if (selOverlay) {
+      const layer = overlayLayers.find(l => l.uid === selOverlay);
+      const t = layer ? effectiveT(layer) : null;
+      if (t) { dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
+    }
+    if (!canPan) return;
+    const hp = photoHandles(rect);
+    if (!hp) return;
+    const near = (p) => Math.hypot(e.clientX-p.x, e.clientY-p.y) <= HANDLE_HIT;
+    // Rotate + resize handles only active once the photo is selected.
+    if (photoSel && near(hp.rotKnob)) {
+      const a0 = Math.atan2(e.clientY-hp.centerD.y, e.clientX-hp.centerD.x);
+      dragRef.current = { mode:"rotate", a0, startRot:imgT.rotation||0, cD:hp.centerD };
+      try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
+    }
+    if (photoSel && hp.corners.some(near)) {
+      const startDist = Math.hypot(e.clientX-hp.centerD.x, e.clientY-hp.centerD.y) || 1;
+      dragRef.current = { mode:"resize", startDist, startZoom:imgT.zoom, cD:hp.centerD };
+      try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
+    }
+    if (pointInPhoto(hp, e.clientX, e.clientY)) {
+      setPhotoSel(true); setSelOverlay(null);
+      dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:imgT.cx, cy:imgT.cy, rect };
+      try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
+    }
+    // clicked empty space → deselect
+    setPhotoSel(false);
+  };
+  const onPanMove = (e) => {
+    const d = dragRef.current; if (!d) return;
+    if (d.mode === "overlay") {
+      const nx = d.ox + (e.clientX - d.x) / d.rect.width;
+      const ny = d.oy + (e.clientY - d.y) / d.rect.height;
+      updateLayerT(selOverlay, { x:Math.max(0,Math.min(1,nx)), y:Math.max(0,Math.min(1,ny)) });
+      return;
+    }
+    if (d.mode === "rotate") {
+      const a = Math.atan2(e.clientY-d.cD.y, e.clientX-d.cD.x);
+      let deg = d.startRot + (a - d.a0)*180/Math.PI;
+      // soft-lock near straight angles (every 45°, within 6°)
+      const snap = Math.round(deg/45)*45;
+      if (Math.abs(deg - snap) < 6) deg = snap;
+      deg = ((deg % 360) + 360) % 360; if (deg > 180) deg -= 360;
+      setImgT(t => ({ ...t, rotation:Math.round(deg*10)/10 }));
+      return;
+    }
+    if (d.mode === "resize") {
+      const dist = Math.hypot(e.clientX-d.cD.x, e.clientY-d.cD.y);
+      let z = Math.max(0.1, Math.min(6, d.startZoom * (dist / d.startDist)));
+      // soft-lock to common sizes
+      for (const s of [0.25,0.5,0.75,1,1.5,2]) { if (Math.abs(z-s) < 0.025) { z = s; break; } }
+      setImgT(t => ({ ...t, zoom:z }));
+      return;
+    }
+    if (d.mode === "photomove") {
+      let cx = d.cx + (e.clientX - d.x) / d.rect.width;
+      let cy = d.cy + (e.clientY - d.y) / d.rect.height;
+      // soft-lock to centered
+      if (Math.abs(cx-0.5) < 0.02) cx = 0.5;
+      if (Math.abs(cy-0.5) < 0.02) cy = 0.5;
+      setImgT(t => ({ ...t, cx, cy }));
+    }
+  };
+  const onPanEnd = () => { dragRef.current = null; };
+  const setZoom = (z) => setImgT(t => ({ ...t, zoom:z }));
+
+  /* ── Overlay assets: upload, place, transform, save ── */
+  const assetFor = (uid) => {
+    const l = overlayLayers.find(x => x.uid === uid);
+    return l ? overlays.find(o => o.id === l.assetId) : null;
+  };
+  // Effective transform for a layer in the current dimension (master cascade + override)
+  const effectiveT = (layer) => {
+    if (!layer) return null;
+    if (dimensionId === MASTER_DIM) return layer.master;
+    if (layer.byDim?.[dimensionId]) return layer.byDim[dimensionId];
+    const a = overlays.find(o => o.id === layer.assetId);
+    return deriveFromMaster(layer.master, a?.kind || "center", a?.ratio || 1, W, H);
+  };
+  const uploadOverlay = async (file) => {
+    if (!file) return;
+    const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+    const img = await imgFrom(dataUrl);
+    if (!img) { alert("Could not read that file."); return; }
+    const { kind, ratio } = classifyOverlay(img);
+    const id = "ov_" + Date.now().toString(36);
+    overlayImgs.current[id] = img;
+    setOverlays(prev => [{ id, name:file.name.replace(/\.[^.]+$/, ""), dataUrl, kind, ratio }, ...prev]);
+  };
+  // Tap a shape: add it once, or if already placed, toggle it off.
+  const toggleOverlay = (asset) => {
+    const existing = overlayLayers.find(l => l.assetId === asset.id);
+    if (existing) { deleteLayer(existing.uid); return; }
+    const t = suggestPlacement(asset.kind, asset.ratio, W, H);
+    const uid = "ol_" + Date.now().toString(36);
+    const mode = asset.kind === "corner" ? "overlay" : "frame";
+    setOverlayLayers(prev => [...prev, { uid, assetId:asset.id, mode, master:t, byDim:{} }]);
+    setSelOverlay(uid);
+    setPhotoSel(false);
+    setOverlayDirty(true);
+  };
+  const setLayerMode = (uid, mode) => {
+    setOverlayLayers(prev => prev.map(l => l.uid === uid ? { ...l, mode } : l));
+    setOverlayDirty(true);
+  };
+  const updateLayerT = (uid, patch) => {
+    setOverlayLayers(prev => prev.map(l => {
+      if (l.uid !== uid) return l;
+      if (dimensionId === MASTER_DIM) return { ...l, master:{ ...l.master, ...patch } };
+      const a = overlays.find(o => o.id === l.assetId);
+      const base = l.byDim?.[dimensionId] || deriveFromMaster(l.master, a?.kind||"center", a?.ratio||1, W, H);
+      return { ...l, byDim:{ ...l.byDim, [dimensionId]:{ ...base, ...patch } } };
+    }));
+    setOverlayDirty(true);
+  };
+  const resetLayer = (uid) => {
+    setOverlayLayers(prev => prev.map(l => {
+      if (l.uid !== uid) return l;
+      const a = overlays.find(o => o.id === l.assetId);
+      if (dimensionId === MASTER_DIM) return { ...l, master:suggestPlacement(a?.kind||"center", a?.ratio||1, W, H) };
+      const nb = { ...l.byDim }; delete nb[dimensionId];
+      return { ...l, byDim:nb };
+    }));
+    setOverlayDirty(true);
+  };
+  const deleteLayer = (uid) => {
+    setOverlayLayers(prev => prev.filter(l => l.uid !== uid));
+    if (selOverlay === uid) setSelOverlay(null);
+    setOverlayDirty(true);
+  };
+  const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
+  const isOverride = (() => {
+    const l = overlayLayers.find(x => x.uid === selOverlay);
+    return dimensionId !== MASTER_DIM && !!l?.byDim?.[dimensionId];
+  })();
+
+  /* ── Video: upload, play, save (IndexedDB) ── */
+  const uploadVideo = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("video/")) { alert("Please choose a video file."); return; }
+    const url = URL.createObjectURL(file);
+    const v = await videoFrom(url);
+    if (!v) { alert("Could not read that video."); return; }
+    v._blob = file; v._name = file.name;
+    setImage(null); setImageObj(null);   // video replaces the still
+    setVideoObj(v); setVideoPlaying(false);
+  };
+  const toggleVideo = () => {
+    if (!videoObj) return;
+    if (videoObj.paused) { videoObj.play(); setVideoPlaying(true); }
+    else { videoObj.pause(); setVideoPlaying(false); }
+  };
+  const restartVideo = () => { if (videoObj) { videoObj.currentTime = 0; videoObj.play(); setVideoPlaying(true); } };
+  const removeVideo = () => { if (videoObj) videoObj.pause(); setVideoObj(null); setVideoPlaying(false); };
+  const saveVideo = async () => {
+    if (!videoObj?._blob) return;
+    const id = "vid_" + Date.now().toString(36);
+    const rec = { id, name:videoObj._name||"video", blob:videoObj._blob, createdAt:Date.now() };
+    try { await idbPut(rec); setSavedVideos(prev => [{ id, name:rec.name, createdAt:rec.createdAt }, ...prev]); }
+    catch(e) { alert("Could not save video: " + e.message); }
+  };
+  const loadSavedVideo = async (id) => {
+    const rec = await idbGet(id); if (!rec) return;
+    const v = await videoFrom(URL.createObjectURL(rec.blob)); if (!v) return;
+    v._blob = rec.blob; v._name = rec.name;
+    setImage(null); setImageObj(null);
+    setVideoObj(v); setVideoPlaying(false);
+  };
+  const deleteSavedVideo = async (id) => { await idbDel(id); setSavedVideos(prev => prev.filter(v => v.id !== id)); };
+
+  const selectedEditorLayer = overlayLayers.find(l => l.uid === selOverlay);
+  const selectedEditorAsset = selectedEditorLayer && overlays.find(o => o.id === selectedEditorLayer.assetId);
+  const selectedEditorT = selectedEditorLayer ? effectiveT(selectedEditorLayer) : null;
 
   if(!ready) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:B.whiteSmoke,fontFamily:F.body,color:B.burnham}}>Loading...</div>;
 
@@ -394,93 +873,207 @@ export default function App() {
             </div>
           </Sec>
 
-          <Sec label="TWO Logo">
-            {/* Group filter */}
-            <div style={{display:"flex",gap:6,marginBottom:10}}>
-              {["primary","secondary"].map(g=>(
-                <Chip key={g} on={logoGroupFilter===g} click={()=>setLogoGroupFilter(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
-              ))}
-            </div>
-            {/* Logo grid */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
-              {LOGO_VARIANTS.filter(v=>v.group===logoGroupFilter).map(v=>{
-                const isSel = selectedLogoId===v.id;
-                const isAuto = suggestedColor===v.color && !isSel && imageObj;
+          {/* Content fields appear right under the type when the type needs text */}
+          {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text")&&(
+            <Sec label="Content">
+              {postType==="quote"&&<><Area placeholder="Quote text" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="event"&&<><In placeholder="Event title" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+              {postType==="text_post"&&<><In placeholder="Intro line" value={subtext} onChange={e=>setSubtext(e.target.value)} /><In placeholder="Headline" value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="texture_text"&&<In placeholder="Overlay text (e.g. NOW OPEN)" value={headline} onChange={e=>setHeadline(e.target.value)} />}
+            </Sec>
+          )}
+
+          <Sec label="Format">
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
+              {DIMENSIONS.map(d=>{
+                const on=dimensionId===d.id;
                 return (
-                  <button key={v.id} onClick={()=>setSelectedLogoId(v.id)}
-                    title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
-                    style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
-                    <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
-                    <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
-                    {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
-                    {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                  <button key={d.id} onClick={()=>setDimensionId(d.id)} title={`${d.w} × ${d.h}px`}
+                    style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
+                    <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
+                    <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
                   </button>
                 );
               })}
             </div>
           </Sec>
 
-          {(postType==="quote"||postType==="text_post"||postType==="event")&&(
-            <Sec label="Background">
-              <div style={{display:"flex",gap:10}}>
-                {BG_OPTIONS.map(b=>(
-                  <button key={b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
-                    width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
-                    background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
-                    border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
-                    boxShadow:bgColor===b.id?"0 0 0 2px #fff inset":"none",
-                  }} />
-                ))}
-              </div>
-              <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
-            </Sec>
-          )}
-
-          {/* IMAGE SECTION */}
           {curType?.needsImage&&(
-            <Sec label="Image">
-              {/* Samples row */}
-              <div style={{marginBottom:8}}>
-                <div style={{fontSize:11,color:B.ash,marginBottom:5,fontFamily:F.subtitle,fontWeight:600}}>Samples</div>
-                <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4}}>
-                  {SAMPLE_IMAGES.map((s,i)=>(
-                    <button key={i} onClick={()=>{setImage(s.full);imgFrom(s.full).then(setImageObj);}}
-                      style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
-                      title={s.label}>
-                      <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
-                    </button>
-                  ))}
-                </div>
+            <Sec label="Media">
+              {/* Image / Video toggle */}
+              <div style={{display:"flex",gap:6,marginBottom:10}}>
+                <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
+                <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
               </div>
 
-              {/* Library picker button */}
-              <div style={{marginBottom:8}}>
-                <button onClick={()=>setShowLibPicker(true)} style={{width:"100%",padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:1,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                  <span>📂</span> From library
-                </button>
-              </div>
-
-              {/* Upload / current */}
-              {!image?(
-                <div onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f?.type.startsWith("image/"))loadFile(f);}}
-                  onDragOver={e=>e.preventDefault()} onClick={()=>imgRef.current?.click()}
-                  style={{border:`2px dashed ${B.ash}66`,borderRadius:12,padding:"24px 14px",textAlign:"center",cursor:"pointer",background:`${B.whiteSmoke}88`}}>
-                  <div style={{fontSize:14,color:B.burnham,fontFamily:F.subtitle,fontWeight:500}}>Drop a Midjourney image</div>
-                  <div style={{fontSize:12,color:B.ash,marginTop:4}}>or click to browse</div>
-                </div>
+              {mediaKind==="image"?(
+                <>
+                  <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
+                    {SAMPLE_IMAGES.map((s,i)=>(
+                      <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
+                        style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
+                        title={s.label}>
+                        <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
+                    <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
+                  </div>
+                  <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
+                  {mediaObj&&(
+                    <>
+                      <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
+                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
+                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
+                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
+                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
+                        <button onClick={()=>{setImgT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
+                      </div>
+                      <div style={{fontSize:10,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Click the image in the preview to resize, rotate, or move it. Drag snaps at 50/75/100% and center.</div>
+                    </>
+                  )}
+                </>
               ):(
-                <div style={{position:"relative"}}>
-                  <img src={image} alt="" style={{width:"100%",borderRadius:10,display:"block"}} />
-                  <button onClick={()=>{setImage(null);setImageObj(null);}} style={xBtnAbs}>×</button>
-                </div>
+                <>
+                  <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
+                  <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
+                  {videoObj&&(
+                    <>
+                      <div style={{display:"flex",gap:6,marginBottom:8}}>
+                        <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
+                        <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
+                        <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
+                        <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
+                      </div>
+                      <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
+                    </>
+                  )}
+                  {savedVideos.length>0&&(
+                    <div style={{marginTop:10}}>
+                      <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                        {savedVideos.map(v=>(
+                          <div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
+                            <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
+                            <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
+                            <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
-              <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)loadFile(f);}} style={{display:"none"}} />
             </Sec>
           )}
 
-          {showLogoCtrl&&(
+          <Sec label="Brand marks">
+            {/* Primary / Secondary / Overlays tabs */}
+            <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
+              {["primary","secondary","overlays"].map(g=>(
+                <Chip key={g} on={markTab===g} click={()=>setMarkTab(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
+              ))}
+              {markTab==="overlays"&&(
+                <button onClick={()=>overlayInputRef.current?.click()} title="Upload an SVG/PNG"
+                  style={{marginLeft:"auto",padding:"6px 12px",background:B.burnham,border:"none",borderRadius:40,cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,color:"#fff",letterSpacing:0.3,whiteSpace:"nowrap"}}>＋ SVG</button>
+              )}
+            </div>
+
+            {markTab!=="overlays"?(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                {LOGO_VARIANTS.filter(v=>v.group===markTab).map(v=>{
+                  const isSel = selectedLogoId===v.id;
+                  const isAuto = suggestedColor===v.color && !isSel && imageObj;
+                  return (
+                    <button key={v.id} onClick={()=>setSelectedLogoId(v.id)}
+                      title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
+                      style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
+                      <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
+                      <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
+                      {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
+                      {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ):(
+              <>
+                <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Tap to add · tap again to remove</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:overlayLayers.length?10:0}}>
+                  {overlays.map(o=>{
+                    const placed=overlayLayers.some(l=>l.assetId===o.id);
+                    return (
+                      <div key={o.id} style={{position:"relative"}}>
+                        <button onClick={()=>toggleOverlay(o)} title={`${o.name} — tap to ${placed?"remove":"add"}`}
+                          style={{width:"100%",aspectRatio:"1/1",borderRadius:8,border:`2px solid ${placed?B.tangerine:B.ash+"33"}`,background:placed?B.tangerine+"11":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,transition:"all 0.12s"}}>
+                          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain"}} />
+                          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
+                          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.tangerine,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                        </button>
+                        {!o.builtin&&(
+                          <button onClick={()=>{setOverlays(prev=>prev.filter(x=>x.id!==o.id));}} title="Remove from library"
+                            style={{position:"absolute",top:-6,left:-6,width:16,height:16,borderRadius:8,border:"none",background:B.jet,color:"#fff",fontSize:10,lineHeight:"16px",cursor:"pointer",padding:0}}>×</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {overlayLayers.length>0&&(
+                  <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:8}}>
+                    {overlayLayers.map(l=>{
+                      const a=overlays.find(o=>o.id===l.assetId); const on=l.uid===selOverlay;
+                      return (
+                        <div key={l.uid} onClick={()=>setSelOverlay(on?null:l.uid)}
+                          style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,cursor:"pointer",border:`1.5px solid ${on?B.tangerine:B.ash+"33"}`,background:on?B.tangerine+"11":"#fff"}}>
+                          <img src={a?.dataUrl||a?.src} alt="" style={{width:24,height:24,objectFit:"contain"}} />
+                          <span style={{flex:1,fontSize:12,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a?.name||"overlay"}</span>
+                          <button onClick={e=>{e.stopPropagation();deleteLayer(l.uid);}} style={{border:"none",background:"none",color:B.ash,fontSize:16,cursor:"pointer",padding:"0 2px"}}>×</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {(()=>{ const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; if(!selT) return null; return (
+                  <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
+                        {dimensionId===MASTER_DIM?"Master (Square)":isOverride?"Custom · "+dim.label:"Auto from Square"}
+                      </span>
+                      <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
+                        {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
+                      </button>
+                    </div>
+                    <div style={{display:"flex",gap:6,marginBottom:8}}>
+                      {[{m:"frame",l:"Frame photo"},{m:"overlay",l:"On top"}].map(({m,l})=>{
+                        const on=(selLayer.mode||"frame")===m;
+                        return <button key={m} onClick={()=>setLayerMode(selOverlay,m)}
+                          style={{flex:1,padding:"6px 8px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>;
+                      })}
+                    </div>
+                    <Slider label="Size" min={0.05} max={1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
+                    <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
+                    <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
+                    <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body}}>Drag the overlay on the preview to move it.</div>
+                  </div>
+                ); })()}
+
+                {overlayLayers.length>0&&(
+                  <button onClick={saveOverlays} disabled={!overlayDirty}
+                    style={{width:"100%",marginTop:8,padding:"10px",borderRadius:8,border:"none",cursor:overlayDirty?"pointer":"default",background:overlayDirty?B.burnham:`${B.ash}55`,color:"#fff",fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>
+                    {overlayDirty?(dimensionId===MASTER_DIM?"Save master placement":"Save "+dim.label+" override"):"Saved ✓"}
+                  </button>
+                )}
+              </>
+            )}
+          </Sec>
+
+          {showLogoCtrl&&markTab!=="overlays"&&(
             <Sec label="Logo Placement">
-              {/* 3x3 position grid */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
                 {[
                   "top-left","top-center","top-right",
@@ -496,7 +1089,6 @@ export default function App() {
                   );
                 })}
               </div>
-              {/* Size buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
                 {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
@@ -506,20 +1098,45 @@ export default function App() {
             </Sec>
           )}
 
-          <Sec label="Content">
-            {postType==="quote"&&<><Area placeholder="Quote text" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-            {postType==="event"&&<><In placeholder="Event title" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-            {postType==="text_post"&&<><In placeholder="Intro line" value={subtext} onChange={e=>setSubtext(e.target.value)} /><In placeholder="Headline" value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-            {postType==="texture_text"&&<In placeholder="Overlay text (e.g. NOW OPEN)" value={headline} onChange={e=>setHeadline(e.target.value)} />}
-            {postType==="photo_logo"&&<p style={{fontSize:13,color:B.ash,margin:0}}>No text. The orchid overlays your photo.</p>}
-          </Sec>
+          {(postType==="quote"||postType==="text_post"||postType==="event"||hasFrameLayer||(mediaObj&&imgT.zoom<0.999))&&(
+            <Sec label="Background">
+              <div style={{display:"flex",gap:10}}>
+                {BG_OPTIONS.map(b=>(
+                  <button key={b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
+                    width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
+                    background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
+                    border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
+                    boxShadow:bgColor===b.id?"0 0 0 2px #fff inset":"none",
+                  }} />
+                ))}
+              </div>
+              <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
+                <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
+                <input type="range" min="0" max="1" step="0.01" value={bgAlpha}
+                  onChange={e=>setBgAlpha(parseFloat(e.target.value))}
+                  style={{flex:1,accentColor:B.burnham}} />
+                <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
+              </div>
+              {bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+            </Sec>
+          )}
 
+
+
+          {/* Export format */}
+          <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8}}>
+            {[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
+              <button key={f} onClick={()=>setExportFormat(f)}
+                style={{flex:1,padding:"7px",borderRadius:8,border:`1.5px solid ${exportFormat===f?B.burnham:B.ash+"44"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
           <button onClick={download} style={{
             width:"100%",padding:"14px 40px",background:B.tangerine,color:"#fff",
             border:"none",borderRadius:40,fontSize:14,fontWeight:700,cursor:"pointer",
-            letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,marginTop:6,
-          }}>Download PNG</button>
-          <div style={{fontSize:11,color:B.ash,textAlign:"center",marginTop:6}}>1080 × 1080 px</div>
+            letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
+          }}>Download {exportFormat.toUpperCase()}</button>
+          <div style={{fontSize:11,color:B.ash,textAlign:"center",marginTop:6}}>{W} × {H} px · {dim.label}</div>
 
           {/* ASSET HISTORY */}
           {history.length>0&&(
@@ -550,14 +1167,96 @@ export default function App() {
         <div style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
           <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
           <div ref={previewRef}
-            style={{width:"100%",maxWidth:540,aspectRatio:"1/1",borderRadius:8,overflow:"hidden",boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke}}>
-            <canvas ref={canvasRef} width={SIZE} height={SIZE} style={{width:"100%",height:"100%",display:"block",pointerEvents:"none"}} />
+            style={{width:"100%",maxWidth:540,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
+            <div ref={canvasShellRef} style={{
+              position:"relative", width:"100%", maxWidth:`calc(68vh * ${W / H})`,
+              aspectRatio:`${W} / ${H}`, flex:"0 1 auto", overflow:"visible",
+            }}>
+              <canvas ref={canvasRef} width={W} height={H}
+                onPointerDown={onPanStart} onPointerMove={onPanMove} onPointerUp={onPanEnd} onPointerCancel={onPanEnd}
+                style={{position:"absolute",inset:0,width:"100%",height:"100%",display:"block",borderRadius:8,boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:canPan?(dragRef.current?"grabbing":"grab"):"default",touchAction:"none"}} />
+              <EditorChrome
+                width={W} height={H} scale={editorScale}
+                photo={photoSel && !selOverlay && canPan && mediaObj ? photoGeom(mediaObj,W,H,imgT) : null}
+                overlay={selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
+              />
+            </div>
           </div>
 
         </div>
       </div>
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
     </div>
+  );
+}
+
+// Interaction chrome is deliberately separate from the artwork canvas. It is
+// always above masks/frames, stays crisp on screen, and can never enter exports.
+function EditorChrome({ width, height, scale, photo, overlay }) {
+  if (!photo && !overlay) return null;
+  const k = Math.max(scale || 1, 0.01);
+  const line = 2.5 / k, halo = 6 / k, handleR = 8 / k, inset = 14 / k;
+  const clampPoint = ({ x, y }) => ({
+    x: Math.max(inset, Math.min(width - inset, x)),
+    y: Math.max(inset, Math.min(height - inset, y)),
+  });
+
+  let photoChrome = null;
+  if (photo) {
+    const angle = (photo.rot || 0) * Math.PI / 180;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const hw = photo.dw / 2, hh = photo.dh / 2;
+    const rotatePoint = (x, y) => ({
+      x: photo.cx + x * cos - y * sin,
+      y: photo.cy + x * sin + y * cos,
+    });
+    const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]
+      .map(([x,y]) => clampPoint(rotatePoint(x,y)));
+    const topMid = clampPoint(rotatePoint(0,-hh));
+    const knob = clampPoint(rotatePoint(0,-hh - 30/k));
+
+    photoChrome = (
+      <>
+        <g transform={`translate(${photo.cx} ${photo.cy}) rotate(${photo.rot || 0})`}>
+          <rect x={-hw} y={-hh} width={photo.dw} height={photo.dh} fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={halo} />
+          <rect x={-hw} y={-hh} width={photo.dw} height={photo.dh} fill="none" stroke={B.tangerine} strokeWidth={line} />
+        </g>
+        <line x1={topMid.x} y1={topMid.y} x2={knob.x} y2={knob.y} stroke="white" strokeWidth={halo} strokeLinecap="round" />
+        <line x1={topMid.x} y1={topMid.y} x2={knob.x} y2={knob.y} stroke={B.tangerine} strokeWidth={line} strokeLinecap="round" />
+        {corners.map((point, i) => (
+          <g key={i}>
+            <circle cx={point.x} cy={point.y} r={handleR + 2/k} fill="white" />
+            <circle cx={point.x} cy={point.y} r={handleR} fill="white" stroke={B.tangerine} strokeWidth={3/k} />
+          </g>
+        ))}
+        <circle cx={knob.x} cy={knob.y} r={handleR + 2/k} fill="white" />
+        <circle cx={knob.x} cy={knob.y} r={handleR} fill={B.tangerine} stroke="white" strokeWidth={2/k} />
+        <g transform={`translate(${inset} ${inset})`}>
+          <rect width={54/k} height={22/k} rx={11/k} fill={B.tangerine} />
+          <text x={27/k} y={14.5/k} textAnchor="middle" fill="white" fontFamily="Syne, sans-serif" fontSize={9/k} fontWeight="700" letterSpacing={1/k}>IMAGE</text>
+        </g>
+      </>
+    );
+  }
+
+  let overlayChrome = null;
+  if (overlay) {
+    const t = overlay.transform;
+    const ow = (t.scale ?? 0.2) * width, oh = ow / overlay.ratio;
+    overlayChrome = (
+      <g transform={`translate(${(t.x ?? 0.5)*width} ${(t.y ?? 0.5)*height}) rotate(${t.rotation || 0})`}>
+        <rect x={-ow/2} y={-oh/2} width={ow} height={oh} fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth={halo} strokeDasharray={`${10/k} ${7/k}`} />
+        <rect x={-ow/2} y={-oh/2} width={ow} height={oh} fill="none" stroke={B.tangerine} strokeWidth={line} strokeDasharray={`${10/k} ${7/k}`} />
+      </g>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"
+      style={{position:"absolute",inset:0,width:"100%",height:"100%",overflow:"hidden",pointerEvents:"none",zIndex:10,filter:"drop-shadow(0 1px 1px rgba(40,43,40,0.16))"}}>
+      {overlayChrome}
+      {photoChrome}
+    </svg>
   );
 }
 
@@ -571,4 +1270,6 @@ function Sec({label,children}){return<div style={{marginBottom:22}}><div style={
 function Chip({on,click,children,sm}){return<button onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
 function In({mt,...p}){return<input {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
 function Area(p){return<textarea {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
-function Slider({label,min,max,val,set}){return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input type="range" min={min} max={max} value={val} onChange={e=>set(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:34}}>{val}%</span></div>;}
+function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
+function vidBtn(B,FU,primary){return{flex:primary?"1 1 auto":"0 0 auto",padding:"7px 10px",borderRadius:7,border:primary?"none":`1.5px solid ${B.ash}44`,background:primary?B.burnham:"#fff",color:primary?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}
+function quickBtn(B,FU){return{padding:"6px 11px",borderRadius:7,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}
