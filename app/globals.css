@@ -299,6 +299,11 @@ canvas[role="application"]:focus-visible {
 .art-director-result dl div { display: grid; grid-template-columns: 120px 1fr; gap: 14px; }
 .art-director-result dt { color: var(--tw-burnham); font-family: var(--font-syne); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .art-director-result dd { color: var(--fg-muted); font-size: 13px; }
+.art-director-prompt { margin-top: 20px; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--tw-wisteria-soft); }
+.art-director-prompt-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.art-director-prompt-header span { color: var(--tw-burnham); font-family: var(--font-syne); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.art-director-prompt-header button { min-height: 34px; padding: 6px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: #fff; color: var(--tw-burnham); font-size: 11px; font-weight: 700; }
+.art-director-prompt p { color: var(--fg-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .art-director-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
 .art-director-secondary { min-height: 40px; padding: 8px 14px; border: 1.5px solid var(--line-strong); border-radius: var(--radius-pill); background: #fff; color: var(--tw-burnham); font-size: 12px; font-weight: 700; }
 

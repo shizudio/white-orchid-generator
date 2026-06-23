@@ -20,7 +20,7 @@ const OPTIONS = {
 const planSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['postType', 'dimensionId', 'headline', 'subtext', 'attribution', 'dateText', 'bgColor', 'logoId', 'logoPosition', 'logoSize', 'imageDirection', 'rationale'],
+  required: ['postType', 'dimensionId', 'headline', 'subtext', 'attribution', 'dateText', 'bgColor', 'logoId', 'logoPosition', 'logoSize', 'imageDirection', 'midjourneyPrompt', 'rationale'],
   properties: {
     postType: { type: 'string', enum: OPTIONS.postType },
     dimensionId: { type: 'string', enum: OPTIONS.dimensionId },
@@ -33,6 +33,7 @@ const planSchema = {
     logoPosition: { type: 'string', enum: OPTIONS.logoPosition },
     logoSize: { type: 'string', enum: OPTIONS.logoSize },
     imageDirection: { type: 'string', maxLength: 240 },
+    midjourneyPrompt: { type: 'string', maxLength: 800 },
     rationale: { type: 'string', maxLength: 240 },
   },
 };
@@ -49,7 +50,7 @@ function validatePlan(plan) {
     && allowed(plan.logoId, 'logoId')
     && allowed(plan.logoPosition, 'logoPosition')
     && allowed(plan.logoSize, 'logoSize')
-    && ['headline', 'subtext', 'attribution', 'dateText', 'imageDirection', 'rationale']
+    && ['headline', 'subtext', 'attribution', 'dateText', 'imageDirection', 'midjourneyPrompt', 'rationale']
       .every(key => typeof plan[key] === 'string');
 }
 
@@ -112,7 +113,7 @@ export async function POST(request) {
     guardrails: brandKit?.guardrails || [],
   };
 
-  const systemPrompt = `You are the AI Art Director for The White Orchid, an early-childhood education brand. Create one practical starting composition for the existing editor.
+  const systemPrompt = `You are the AI Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. Create one practical starting composition for the existing editor.
 
 Choose only from the exact IDs allowed by the supplied JSON schema. The user will edit the result, so prioritize a clear, useful starting point over novelty.
 
@@ -125,8 +126,9 @@ Template rules:
 - Use an ivory logo on dark or photo-heavy compositions and a green logo on light backgrounds.
 - Keep copy concise enough for the selected template. Do not invent dates, statistics, testimonials, offers, or factual claims.
 - If the request lacks a date, return an empty dateText.
-- imageDirection is a short suggestion, not an image URL. Respect privacy and consent; do not request identifiable children unless the user explicitly calls for that and has suitable consent.
-- rationale should explain the main template/layout choice in one or two sentences.
+- imageDirection is a short suggestion, not an image URL. Visuals should feel credible for Singapore and feature students aged 10 or above when people are relevant. Respect privacy and consent; do not request identifiable children unless the user explicitly calls for that and has suitable consent.
+- midjourneyPrompt is a polished, copy-ready visual prompt that matches imageDirection and the selected composition. Always reflect a contemporary Singaporean education context and students aged 10 or above where people are shown, with authentic multicultural representation and no stereotypes. Describe subject, setting, mood, light, framing, palette, and photographic or illustrative style. Do not include text, logos, named living artists, or identifiable real people. It must end exactly with: --p m7465332324297605130
+- rationale should explain the main template/layout choice in one concise sentence under 180 characters.
 
 Brand context: ${JSON.stringify(brandContext)}`;
 

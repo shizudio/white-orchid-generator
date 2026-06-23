@@ -35,6 +35,29 @@ const BG_OPTIONS = [
   {id:"celadon",label:"Celadon",color:B.celadon,light:false},
   {id:"jet",label:"Jet",color:B.jet,light:true},
 ];
+const TEXT_COLOR_OPTIONS = [
+  {id:"auto",label:"Auto"},
+  {id:"whiteSmoke",label:"White Smoke"},
+  {id:"burnham",label:"Burnham"},
+  {id:"jet",label:"Jet"},
+  {id:"tangerine",label:"Tangerine"},
+  {id:"wisteria",label:"Wisteria"},
+];
+const ACCESSORY_COLOR_OPTIONS = [
+  {id:"auto",label:"Auto"},
+  {id:"whiteSmoke",label:"White Smoke"},
+  {id:"burnham",label:"Burnham"},
+  {id:"jet",label:"Jet"},
+  {id:"tangerine",label:"Tangerine"},
+  {id:"yellowGreen",label:"Yellow Green"},
+  {id:"wisteria",label:"Wisteria"},
+];
+const ACCESSORY_SIZE_PRESETS = [
+  {id:"s",label:"S",scale:0.12},
+  {id:"m",label:"M",scale:0.20},
+  {id:"l",label:"L",scale:0.32},
+  {id:"xl",label:"XL",scale:0.48},
+];
 
 function applyBrandKit(kit) {
   if (!kit) return;
@@ -72,7 +95,9 @@ const SAMPLE_IMAGES = [
 
 /* ───────── HELPERS ───────── */
 function wrapText(ctx,text,x,y,maxW,lh){const words=text.split(" ");let line="";const lines=[];for(let i=0;i<words.length;i++){const t=line+words[i]+" ";if(ctx.measureText(t).width>maxW&&i>0){lines.push(line.trim());line=words[i]+" ";}else line=t;}lines.push(line.trim());lines.forEach((l,i)=>ctx.fillText(l,x,y+i*lh));return lines.length;}
-function drawArrow(ctx,x,y,w,color){ctx.save();ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.lineCap="round";ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+w,y);ctx.moveTo(x+w-10,y-6);ctx.lineTo(x+w,y);ctx.lineTo(x+w-10,y+6);ctx.stroke();ctx.restore();}
+function textLines(ctx,text,maxW){const words=String(text||"").trim().split(/\s+/).filter(Boolean),lines=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
+function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fitted=Math.max(size,minSize),lines=[];while(fitted>=minSize){ctx.font=font(fitted);lines=textLines(ctx,text,maxW);if(lines.length*fitted*lineRatio<=maxH)break;fitted-=2;}return{size:fitted,lines,lineHeight:fitted*lineRatio};}
+function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{if(ctx.__woTextOutline)ctx.strokeText(line,tx,y+i*lineHeight);ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
 function imgFrom(d){return new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=d;});}
@@ -113,6 +138,14 @@ const SK_DOC = "wo-workdoc";        // placed overlay layers (working doc)
 const MAX_LIB = 15;
 const MAX_HIST = 20;
 
+const TYPE_LAYOUT_DEFAULTS = {
+  quote:{x:0.10,y:0.18,width:0.78,scale:1,lineHeight:1.18,align:"left"},
+  event:{x:0.10,y:0.12,width:0.68,scale:1,lineHeight:1.16,align:"left"},
+  text_post:{x:0.10,y:0.18,width:0.76,scale:1,lineHeight:1.16,align:"left"},
+  texture_text:{x:0.10,y:0.68,width:0.80,scale:1,lineHeight:1.12,align:"right"},
+};
+const freshTypeLayouts=()=>Object.fromEntries(Object.entries(TYPE_LAYOUT_DEFAULTS).map(([key,value])=>[key,{...value}]));
+
 /* ───────── TWO LOGO SYSTEM ───────── */
 const LOGO_VARIANTS = [
   // Primary
@@ -139,6 +172,38 @@ function getLuminance(r,g,b){
   return 0.2126*s[0]+0.7152*s[1]+0.0722*s[2];
 }
 function contrastRatio(l1,l2){const hi=Math.max(l1,l2),lo=Math.min(l1,l2);return(hi+0.05)/(lo+0.05);}
+function hexLuminance(hex){const h=String(hex||"#000000").replace("#","");return getLuminance(parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0);}
+function sampleOverallLuminance(source){
+  const size=64,c=document.createElement("canvas");c.width=size;c.height=size;
+  const ctx=c.getContext("2d");ctx.drawImage(source,0,0,size,size);
+  const data=ctx.getImageData(0,0,size,size).data;let r=0,g=0,b=0,n=0;
+  for(let i=0;i<data.length;i+=16){if(data[i+3]<16)continue;r+=data[i];g+=data[i+1];b+=data[i+2];n++;}
+  return n?getLuminance(r/n,g/n,b/n):0.5;
+}
+function analyzeImageRegions(source){
+  const size=90,c=document.createElement("canvas");c.width=size;c.height=size;
+  const ctx=c.getContext("2d"),dims=srcDims(source),s=Math.max(size/dims.iw,size/dims.ih),dw=dims.iw*s,dh=dims.ih*s;
+  ctx.drawImage(source,(size-dw)/2,(size-dh)/2,dw,dh);
+  const data=ctx.getImageData(0,0,size,size).data,regions=[];
+  for(let row=0;row<3;row++)for(let col=0;col<3;col++){
+    let sum=0,sumSq=0,count=0;
+    for(let y=row*30;y<(row+1)*30;y+=2)for(let x=col*30;x<(col+1)*30;x+=2){const i=(y*size+x)*4;if(data[i+3]<16)continue;const lum=getLuminance(data[i],data[i+1],data[i+2]);sum+=lum;sumSq+=lum*lum;count++;}
+    const mean=count?sum/count:0.5,variance=count?Math.max(0,sumSq/count-mean*mean):0.2;
+    regions.push({row,col,mean,variance});
+  }
+  return regions;
+}
+function suggestTextColor(surfaceLuminance){
+  return contrastRatio(surfaceLuminance,hexLuminance(B.whiteSmoke))>=contrastRatio(surfaceLuminance,hexLuminance(B.jet))?"whiteSmoke":"jet";
+}
+function suggestTextColorForSurfaces(surfaces){
+  const values=surfaces?.length?surfaces:[hexLuminance(B.burnham)];
+  return ["whiteSmoke","jet"].map(id=>{
+    const colorLum=hexLuminance(B[id]),contrasts=values.map(surface=>contrastRatio(surface,colorLum));
+    const minContrast=Math.min(...contrasts),worstIndex=contrasts.indexOf(minContrast);
+    return{id,minContrast,worstSurface:values[worstIndex]};
+  }).sort((a,b)=>b.minContrast-a.minContrast)[0];
+}
 
 // Sample dominant brightness from a canvas image region
 function sampleImageBrightness(imgObj, x, y, w, h, logoW, logoH) {
@@ -254,9 +319,15 @@ const MASTER_DIM = "ig_square"; // square is the master; other formats cascade f
 
 // Built-in brand overlay shapes (always available in the library)
 const DEFAULT_OVERLAYS = [
-  { id:"shape-1", name:"Shape 1", src:"/assets/shapes/shape-1.svg", kind:"center", ratio:169/207, builtin:true },
-  { id:"shape-2", name:"Shape 2", src:"/assets/shapes/shape-2.svg", kind:"center", ratio:217/196, builtin:true },
-  { id:"shape-3", name:"Shape 3", src:"/assets/shapes/shape-3.svg", kind:"center", ratio:173/207, builtin:true },
+  { id:"shape-1", name:"Shape 1", src:"/assets/shapes/shape-1.svg", kind:"center", ratio:169/207, category:"overlays", builtin:true },
+  { id:"shape-2", name:"Shape 2", src:"/assets/shapes/shape-2.svg", kind:"center", ratio:217/196, category:"overlays", builtin:true },
+  { id:"shape-3", name:"Shape 3", src:"/assets/shapes/shape-3.svg", kind:"center", ratio:173/207, category:"overlays", builtin:true },
+  { id:"acc-arrow", name:"Arrow", src:"/assets/accessories/arrow.svg", kind:"accessory", ratio:3, category:"accessories", builtin:true },
+  { id:"acc-curve", name:"Curved Arrow", src:"/assets/accessories/curved-arrow.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
+  { id:"acc-spark", name:"Spark", src:"/assets/accessories/spark.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
+  { id:"acc-plus", name:"Plus", src:"/assets/accessories/plus.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
+  { id:"acc-ring", name:"Ring", src:"/assets/accessories/ring.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
+  { id:"acc-wave", name:"Wave", src:"/assets/accessories/wave.svg", kind:"accessory", ratio:3, category:"accessories", builtin:true },
 ];
 
 // Classify an uploaded overlay by where its ink sits: frame / strip / corner / center.
@@ -297,6 +368,7 @@ function suggestPlacement(kind, ratio, w, h) {
   if (kind === "frame")  return { x:0.5, y:0.5, scale:1.0, rotation:0, opacity:1 };
   if (kind === "strip")  return { x:0.5, y:1-padN*(w/h)-halfYn(1.0), scale:1.0, rotation:0, opacity:1 };
   if (kind === "corner") { const sc=0.18; return { x:1-padN-sc/2, y:1-padN*(w/h)-halfYn(sc), scale:sc, rotation:0, opacity:1 }; }
+  if (kind === "accessory") { const sc=ratio>1.5?0.24:0.12; return { x:padN+sc/2, y:1-padN*(w/h)-halfYn(sc), scale:sc, rotation:0, opacity:1 }; }
   return { x:0.5, y:0.5, scale:0.9, rotation:0, opacity:1 }; // center / blob → fills frame
 }
 
@@ -332,6 +404,41 @@ function drawOverlayLayer(ctx, img, w, h, t) {
   ctx.restore();
 }
 
+// Tint monochrome accessory artwork without modifying the source SVG. The
+// offscreen result is cached by image + colour so video previews stay smooth.
+const tintedAccessoryCache = new WeakMap();
+function tintedAccessory(img, color) {
+  if (!img || !color) return img;
+  let variants = tintedAccessoryCache.get(img);
+  if (!variants) { variants = new Map(); tintedAccessoryCache.set(img, variants); }
+  if (variants.has(color)) return variants.get(color);
+  const { iw, ih } = srcDims(img);
+  const c = document.createElement("canvas"); c.width = Math.max(1,iw); c.height = Math.max(1,ih);
+  const x = c.getContext("2d"); x.drawImage(img,0,0,c.width,c.height);
+  x.globalCompositeOperation = "source-in"; x.fillStyle = color; x.fillRect(0,0,c.width,c.height);
+  x.globalCompositeOperation = "source-over"; variants.set(color,c);
+  return c;
+}
+
+function sampleCanvasLuminance(ctx, w, h, t, ratio) {
+  const ow=Math.max(8,(t.scale??0.2)*w),oh=Math.max(8,ow/(ratio||1));
+  const x=Math.max(0,Math.floor((t.x??0.5)*w-ow/2)),y=Math.max(0,Math.floor((t.y??0.5)*h-oh/2));
+  const sw=Math.max(1,Math.min(w-x,Math.ceil(ow))),sh=Math.max(1,Math.min(h-y,Math.ceil(oh)));
+  try {
+    const sample=document.createElement("canvas");sample.width=24;sample.height=24;
+    const sx=sample.getContext("2d");sx.drawImage(ctx.canvas,x,y,sw,sh,0,0,24,24);
+    const d=sx.getImageData(0,0,24,24).data;let sum=0,count=0;
+    for(let i=0;i<d.length;i+=4){if(d[i+3]<16)continue;sum+=getLuminance(d[i],d[i+1],d[i+2]);count++;}
+    return count?sum/count:hexLuminance(B.whiteSmoke);
+  } catch(_) { return hexLuminance(B.whiteSmoke); }
+}
+
+function accessibleAccessoryColor(surfaceLuminance) {
+  const candidates=["whiteSmoke","burnham","jet","tangerine","yellowGreen","wisteria"];
+  return candidates.map(id=>({id,contrast:contrastRatio(surfaceLuminance,hexLuminance(B[id]))}))
+    .sort((a,b)=>b.contrast-a.contrast)[0];
+}
+
 // Frame mode: clip the photo INTO the shape's silhouette (mask), so the photo
 // fills the shape and everything outside is the canvas background.
 // oc = reusable offscreen canvas sized w×h.
@@ -363,6 +470,7 @@ export default function App() {
   const canvasShellRef = useRef(null);
   const previewRef = useRef(null);
   const imgRef = useRef(null);
+  const textBoundsRef = useRef(null);
 
   // Canvas dimension (social channel format)
   const [dimensionId, setDimensionId] = useState("ig_square");
@@ -379,6 +487,7 @@ export default function App() {
   const [overlays, setOverlays] = useState([]);            // [{id,name,dataUrl,kind,ratio}]
   const [overlayLayers, setOverlayLayers] = useState([]);  // [{uid,assetId,master,byDim}]
   const [selOverlay, setSelOverlay] = useState(null);      // selected layer uid
+  const [overlayChromeVisible, setOverlayChromeVisible] = useState(false);
   const [overlayDirty, setOverlayDirty] = useState(false);
   const [editorScale, setEditorScale] = useState(1);       // display px per export px
   const overlayImgs = useRef({});                          // assetId -> Image
@@ -395,6 +504,11 @@ export default function App() {
   const [brandKit, setBrandKit] = useState(null);
   const [postType, setPostType] = useState("photo_logo");
   const [bgColor, setBgColor] = useState("burnham");
+  const [textColorId, setTextColorId] = useState("auto");
+  const [suggestedTextColor, setSuggestedTextColor] = useState("whiteSmoke");
+  const [textSurfaceLuminance, setTextSurfaceLuminance] = useState(hexLuminance(B.burnham));
+  const [textMinContrast, setTextMinContrast] = useState(4.5);
+  const [accessibilityNote, setAccessibilityNote] = useState("Using the template's accessible defaults.");
   const [bgAlpha, setBgAlpha] = useState(1);          // background opacity (transparent PNG)
   const [exportFormat, setExportFormat] = useState("png"); // png | jpeg
   const [image, setImage] = useState(null);
@@ -403,6 +517,8 @@ export default function App() {
   const [subtext, setSubtext] = useState("");
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
+  const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
+  const [textSelected, setTextSelected] = useState(false);
 
   // TWO Logo system
   const [selectedLogoId, setSelectedLogoId] = useState("p1-green");
@@ -422,16 +538,20 @@ export default function App() {
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
-  const tc = curBg?.light ? B.whiteSmoke : B.jet;
   const mediaObj = videoObj || imageObj;   // active canvas background (video wins)
   const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
+  const tc = textColorId === "auto" ? B[suggestedTextColor] : (B[textColorId] || B.jet);
+  const textContrast = contrastRatio(textSurfaceLuminance,hexLuminance(tc));
   const showLogoCtrl = true;
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
+  const textLayout = typeLayouts[postType] || TYPE_LAYOUT_DEFAULTS.text_post;
+  const updateTextLayout = patch => setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
+  const resetTextLayout = () => setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
 
   const applyCreativePlan = plan => {
-    setPreAiState({ postType, dimensionId, headline, subtext, attribution, dateText, bgColor, selectedLogoId, logoPosition, logoSize });
+    setPreAiState({ postType, dimensionId, headline, subtext, attribution, dateText, bgColor, textColorId, selectedLogoId, logoPosition, logoSize });
     setPostType(plan.postType);
     setDimensionId(plan.dimensionId);
     setHeadline(plan.headline);
@@ -439,6 +559,7 @@ export default function App() {
     setAttribution(plan.attribution);
     setDateText(plan.dateText);
     setBgColor(plan.bgColor);
+    setTextColorId("auto");
     setSelectedLogoId(plan.logoId);
     setLogoPosition(plan.logoPosition);
     setLogoSize(plan.logoSize);
@@ -455,6 +576,7 @@ export default function App() {
     setAttribution(preAiState.attribution);
     setDateText(preAiState.dateText);
     setBgColor(preAiState.bgColor);
+    setTextColorId(preAiState.textColorId);
     setSelectedLogoId(preAiState.selectedLogoId);
     setLogoPosition(preAiState.logoPosition);
     setLogoSize(preAiState.logoSize);
@@ -500,8 +622,8 @@ export default function App() {
       const hist = await sGet(SK_HIST);
       if (hist) setHistory(hist);
       const ovl = await sGet(SK_OVL) || [];
-      // Always include built-in shapes; keep any user uploads
-      const merged = [...DEFAULT_OVERLAYS.filter(d => !ovl.some(o => o.id === d.id)), ...ovl];
+      // Refresh built-ins from code so new categories/assets appear; preserve user uploads.
+      const merged = [...DEFAULT_OVERLAYS, ...ovl.filter(o => !o.builtin)];
       setOverlays(merged);
       const doc = await sGet(SK_DOC);
       if (doc) setOverlayLayers(doc);
@@ -534,23 +656,51 @@ export default function App() {
   /* ── Reset reframe when a new photo/video loads ── */
   useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setPhotoSel(false); }, [imageObj, videoObj]);
 
-  /* ── Auto-suggest logo color when image + position changes ── */
+  // Accessibility director: whenever the image, background, format or template
+  // changes, find quiet regions, avoid text/logo collisions, and apply the
+  // strongest approved brand colours. Manual edits remain available afterwards.
   useEffect(() => {
-    if (!imageObj || !logoPos) return;
-    const w = imageObj.width, h = imageObj.height;
-    const logoW = w * logoSizePct, logoH = h * logoSizePct;
-    const lSzForSample = w * logoSizePct;
-    const [lx, ly] = logoPos ? logoCenter(logoPos, w, h, lSzForSample) : [w*0.84, h*0.84];
-    const bgL = sampleImageBrightness(imageObj, lx, ly, w, h, logoW, logoH);
-    const suggested = suggestLogoColor(bgL);
-    setSuggestedColor(suggested);
-    // Auto-switch to suggested color variant of current logo group
-    const cur = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
-    if (cur && cur.color !== suggested) {
-      const match = LOGO_VARIANTS.find(v => v.group === cur.group && v.label === cur.label && v.color === suggested);
-      if (match) setSelectedLogoId(match.id);
+    const base=TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
+    let chosenLayout={...base},textLum=hexLuminance(curBg?.color||B.burnham),logoRegionLum=textLum,logoPosId="bottom-right",suggestedTextId=suggestTextColor(textLum),minimumTextContrast=4.5;
+    if(mediaObj){
+      try{
+        const regions=analyzeImageRegions(mediaObj);
+        const allowedRows=postType==="texture_text"?[1,2]:postType==="event"?[0,1]:[0,1,2];
+        const textCandidates=regions.filter(r=>allowedRows.includes(r.row)&&r.col!==1).map(r=>({...r,score:r.variance+(r.row===1?0.008:0)+(r.col===1?0.02:0)})).sort((a,b)=>a.score-b.score);
+        const tr=textCandidates[0]||regions[0],width=base.width;
+        chosenLayout={...base,x:tr.col===0?0.08:0.92-width,y:tr.row===0?0.10:tr.row===1?0.38:0.66,align:tr.col===0?"left":"right"};
+        const tinted=!hasFrameLayer&&["quote","event","text_post"].includes(postType),tintStrength=(postType==="text_post"?0.84:0.82)*bgAlpha,bgLum=hexLuminance(curBg?.color||B.burnham);
+        const textCols=tr.col===0?[0,1]:[1,2],textRows=tr.row===2?[1,2]:[tr.row,Math.min(2,tr.row+1)];
+        const textSurfaces=regions.filter(r=>textCols.includes(r.col)&&textRows.includes(r.row)).map(r=>tinted?r.mean*(1-tintStrength)+bgLum*tintStrength:r.mean);
+        const textSuggestion=suggestTextColorForSurfaces(textSurfaces);
+        textLum=textSuggestion.worstSurface;suggestedTextId=textSuggestion.id;minimumTextContrast=textSuggestion.minContrast;
+        const greenL=hexLuminance(B.burnham),ivoryL=hexLuminance(B.whiteSmoke);
+        const logoCandidates=regions.map(r=>{const overlap=textCols.includes(r.col)&&textRows.includes(r.row);const bestContrast=Math.max(contrastRatio(r.mean,greenL),contrastRatio(r.mean,ivoryL));return{...r,score:bestContrast-r.variance*8-(overlap?8:0)-(r.row===1&&r.col===1?0.8:0)};}).sort((a,b)=>b.score-a.score);
+        const lr=logoCandidates[0]||regions[8];logoRegionLum=lr.mean;
+        logoPosId=lr.row===1&&lr.col===1?"center":`${lr.row===0?"top":lr.row===1?"mid":"bottom"}-${lr.col===0?"left":lr.col===1?"center":"right"}`;
+        setAccessibilityNote(minimumTextContrast>=4.5?"Auto-positioned text and logo in the clearest high-contrast regions.":"Mixed image tones detected. Auto colour and a subtle contrast edge keep the copy readable.");
+      }catch(_){setAccessibilityNote("Using accessible template defaults for this visual.");}
+    }else{
+      const textOccupiesBottom=(base.y||0)<0.55?false:true;
+      logoPosId=textOccupiesBottom?"top-right":"bottom-right";
+      setAccessibilityNote("Using accessible template defaults for this background.");
     }
-  }, [imageObj, logoPosition, logoSizePct]);
+    if(postType!=="photo_logo")setTypeLayouts(prev=>({...prev,[postType]:chosenLayout}));
+    setTextColorId("auto");setTextSurfaceLuminance(textLum);setSuggestedTextColor(suggestedTextId);setTextMinContrast(minimumTextContrast);
+    setLogoPosition(logoPosId);
+    const logoColor=suggestLogoColor(logoRegionLum);setSuggestedColor(logoColor);
+    const current=LOGO_VARIANTS.find(v=>v.id===selectedLogoId);
+    const match=current&&LOGO_VARIANTS.find(v=>v.group===current.group&&v.label===current.label&&v.color===logoColor);
+    if(match)setSelectedLogoId(match.id);
+  }, [mediaObj, imageObj, videoObj, postType, bgColor, bgAlpha, dimensionId, hasFrameLayer, curBg]);
+
+  // Clicking anywhere outside the preview clears editing chrome without
+  // changing the actual composition.
+  useEffect(()=>{
+    const clearSelection=event=>{if(canvasShellRef.current&&!canvasShellRef.current.contains(event.target)){setTextSelected(false);setPhotoSel(false);setOverlayChromeVisible(false);canvasRef.current?.blur();}};
+    document.addEventListener("pointerdown",clearSelection,true);
+    return()=>document.removeEventListener("pointerdown",clearSelection,true);
+  },[]);
 
   /* ── Load image + auto-save to library ── */
   const loadImage = useCallback(async (dataUrl) => {
@@ -615,6 +765,8 @@ export default function App() {
     const m=w*0.12, lSz=w*logoSizePct;
     const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
     const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
+    const beginText=()=>{ctx.save();if(mediaObj){const light=hexLuminance(tc)>0.5,needsEdge=textColorId==="auto"&&textMinContrast<4.5;ctx.shadowColor=light?"rgba(0,0,0,0.58)":"rgba(255,255,255,0.48)";ctx.shadowBlur=(needsEdge?14:10)*S;ctx.shadowOffsetY=2*S;if(needsEdge){ctx.__woTextOutline=true;ctx.strokeStyle=light?"rgba(25,30,28,0.72)":"rgba(245,246,231,0.76)";ctx.lineWidth=4*S;ctx.lineJoin="round";ctx.miterLimit=2;}}};
+    const endText=()=>{ctx.__woTextOutline=false;ctx.restore();};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 ${24*S}px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
 
@@ -628,6 +780,14 @@ export default function App() {
     const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
     const topLayers=overlayLayers.filter(l=>(l.mode||"frame")==="overlay"&&overlayImgs.current[l.assetId]);
     const hasFrame=frameLayers.length>0;
+    const layout=typeLayouts[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
+    const safe=0.08,bw=Math.min(layout.width||0.76,1-safe*2)*w;
+    const bx=Math.max(safe,Math.min(1-safe-bw/w,layout.x??safe))*w;
+    const by=Math.max(safe,Math.min(0.82,layout.y??0.18))*h;
+    const maxTextH=Math.max(h*0.16,h*(1-safe)-by);
+    const align=layout.align||"left",scale=layout.scale||1,lineRatio=layout.lineHeight||1.16;
+    const setTextBounds=used=>{textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
+    if(postType==="photo_logo")textBoundsRef.current=null;
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
@@ -639,41 +799,75 @@ export default function App() {
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
     }else if(postType==="quote"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);}
-      const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D";
-      ctx.fillStyle=tc;ctx.font=`italic 500 ${64*S}px ${F.quote}`;ctx.textAlign="left";
-      const nl=wrapText(ctx,q,m,h*0.26,w-m*2,86*S);
-      if(attribution||subtext){ctx.font=`600 ${22*S}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;ctx.fillText((attribution||subtext).toUpperCase(),m,h*0.26+nl*86*S+56*S);ctx.letterSpacing="0px";}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
+      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale,bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
+      ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
+      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale,bw,Math.max(58*S,maxTextH-used-gap),1.2,28*S);ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+      setTextBounds(used);
+      endText();
       putLogo();
     }else if(postType==="event"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}}
-      if(headline){ctx.fillStyle=tc;ctx.font=`700 ${26*S}px ${F.subtitle}`;ctx.textAlign="left";ctx.letterSpacing=`${2*S}px`;wrapText(ctx,headline.toUpperCase(),m,h*0.18,w-m*2,38*S);ctx.letterSpacing="0px";}
-      if(dateText){const parts=dateText.split(" ");ctx.fillStyle=tc;ctx.font=`300 ${200*S}px ${F.title}`;ctx.textAlign="left";ctx.fillText(parts[0]||"",m,h*0.62);ctx.font=`600 ${28*S}px ${F.subtitle}`;ctx.letterSpacing=`${4*S}px`;ctx.fillText((parts.slice(1).join(" ")||"").toUpperCase(),m,h*0.70);ctx.letterSpacing="0px";}
-      if(subtext){ctx.fillStyle=tc;ctx.font=`400 ${20*S}px ${F.body}`;ctx.textAlign="left";wrapText(ctx,subtext,m,h*0.82,w-m*2,30*S);drawArrow(ctx,m,h*0.92,w*0.22,tc);}
+      beginText();ctx.fillStyle=tc;let used=0;
+      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale,bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale,bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;used+=drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);if(rest){ctx.font=`600 ${36*S*scale}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale,align);ctx.letterSpacing="0px";}}
+      if(subtext){const gap=Math.max(36*S,used?44*S:0),sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale,bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
+      setTextBounds(used);
+      endText();
       putLogo();
     }else if(postType==="text_post"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);}
-      let y=h*0.30;
-      if(subtext){ctx.fillStyle=tc;ctx.font=`italic 400 ${42*S}px ${F.quote}`;ctx.textAlign="left";y+=wrapText(ctx,subtext,m,y,w-m*2,56*S)*56*S+12*S;}
-      if(headline){ctx.fillStyle=tc;ctx.font=`700 ${62*S}px ${F.subtitle}`;ctx.textAlign="left";y+=wrapText(ctx,headline.toUpperCase(),m,y,w-m*2,76*S)*76*S+24*S;}
-      if(attribution){ctx.fillStyle=tc;ctx.font=`400 ${20*S}px ${F.body}`;ctx.textAlign="left";wrapText(ctx,attribution,m,y+16*S,w-m*2,28*S);}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      beginText();ctx.fillStyle=tc;let used=0;
+      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale,bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
+      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale,bw,Math.max(remaining,150*S),1.08,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}
+      if(attribution){const gap=Math.max(36*S,48*S),af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale,bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}
+      setTextBounds(used);
+      endText();
       putLogo();
-      drawArrow(ctx,m,h*0.89,w*0.24,curBg?.light?B.whiteSmoke:B.burnham);
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
-      if(headline){ctx.save();ctx.fillStyle=B.whiteSmoke;ctx.font=`700 ${48*S}px ${F.subtitle}`;ctx.textAlign="right";ctx.shadowColor="rgba(0,0,0,0.45)";ctx.shadowBlur=16*S;ctx.letterSpacing=`${3*S}px`;ctx.fillText(headline.toUpperCase(),w-m,h*0.88);ctx.restore();}
+      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale,bw,maxTextH,lineRatio,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else setTextBounds(h*0.12);
     }
 
     // ── Overlay-mode layers (drawn on top of everything) ──
     topLayers.forEach(layer => {
       const img = overlayImgs.current[layer.assetId];
-      if (img) drawOverlayLayer(ctx, img, w, h, resolveT(layer));
+      if (!img) return;
+      const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
+      if(asset?.category==="accessories"){
+        const colorId=t.colorId||"auto";
+        const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;
+        drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);
+      }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit,typeLayouts]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
+
+  // Hard collision guard: rendered copy owns a padded exclusion zone. If a
+  // manual or automatic logo placement enters it, move the logo to the best
+  // remaining contrast-safe region; reduce to S only when space is unusually tight.
+  useEffect(()=>{
+    if(!fontsLoaded||postType==="photo_logo")return;
+    const raf=requestAnimationFrame(()=>{
+      const textBox=textBoundsRef.current;if(!textBox)return;
+      const pad=W*0.045,expanded={x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2};
+      let regions=null;try{if(mediaObj)regions=analyzeImageRegions(mediaObj);}catch(_){}
+      const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBg?.color||B.burnham),variance:0};};
+      const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+      const ranked=sizeId=>{
+        const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=W*pct;
+        return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{const[cx,cy]=logoCenter(pos,W,H,lSz),box={x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz},region=regionFor(pos),contrast=Math.max(contrastRatio(region.mean,hexLuminance(B.burnham)),contrastRatio(region.mean,hexLuminance(B.whiteSmoke)));return{id,overlap:intersects(expanded,box),score:contrast-region.variance*8-(id==="center"?0.7:0)};}).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
+      };
+      let choices=ranked(logoSize),nextSize=logoSize;
+      if(!choices.length&&logoSize!=="s"){nextSize="s";choices=ranked("s");}
+      if(choices.length){if(nextSize!==logoSize)setLogoSize(nextSize);if(choices[0].id!==logoPosition)setLogoPosition(choices[0].id);}
+    });
+    return()=>cancelAnimationFrame(raf);
+  },[fontsLoaded,draw,headline,subtext,attribution,dateText,typeLayouts,postType,logoSize,logoPosition,W,H,mediaObj,curBg]);
 
   /* ── Video render loop: composite each frame (photo + overlays + logo) ── */
   useEffect(() => {
@@ -720,7 +914,7 @@ export default function App() {
 
   /* ── Photo reframe: drag to pan, slider to zoom ── */
   const dragRef = useRef(null);
-  const canPan = (postType==="photo_logo"||postType==="event"||postType==="texture_text") && !!mediaObj;
+  const canPan = !!mediaObj;
   const HANDLE_HIT = 24;   // px radius to grab a corner / rotate handle
   // Photo handles in display (screen) px: 4 rotated corners + a rotate knob + center.
   const photoHandles = (rect) => {
@@ -755,8 +949,16 @@ export default function App() {
     if (selOverlay) {
       const layer = overlayLayers.find(l => l.uid === selOverlay);
       const t = layer ? effectiveT(layer) : null;
-      if (t) { dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
+      if (t) { setOverlayChromeVisible(true); dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
     }
+    const bounds=textBoundsRef.current;
+    const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
+    if(postType!=="photo_logo"&&bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
+      setTextSelected(true);setPhotoSel(false);setSelOverlay(null);
+      dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect};
+      try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
+    }
+    setTextSelected(false);
     if (!canPan) return;
     const hp = photoHandles(rect);
     if (!hp) return;
@@ -782,6 +984,11 @@ export default function App() {
   };
   const onPanMove = (e) => {
     const d = dragRef.current; if (!d) return;
+    if(d.mode==="text"){
+      const nx=d.ox+(e.clientX-d.x)/d.rect.width,ny=d.oy+(e.clientY-d.y)/d.rect.height;
+      updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
+      return;
+    }
     if (d.mode === "overlay") {
       const nx = d.ox + (e.clientX - d.x) / d.rect.width;
       const ny = d.oy + (e.clientY - d.y) / d.rect.height;
@@ -839,7 +1046,7 @@ export default function App() {
     const { kind, ratio } = classifyOverlay(img);
     const id = "ov_" + Date.now().toString(36);
     overlayImgs.current[id] = img;
-    setOverlays(prev => [{ id, name:file.name.replace(/\.[^.]+$/, ""), dataUrl, kind, ratio }, ...prev]);
+    setOverlays(prev => [{ id, name:file.name.replace(/\.[^.]+$/, ""), dataUrl, kind, ratio, category:"overlays" }, ...prev]);
   };
   // Tap a shape: add it once, or if already placed, toggle it off.
   const toggleOverlay = (asset) => {
@@ -847,9 +1054,10 @@ export default function App() {
     if (existing) { deleteLayer(existing.uid); return; }
     const t = suggestPlacement(asset.kind, asset.ratio, W, H);
     const uid = "ol_" + Date.now().toString(36);
-    const mode = asset.kind === "corner" ? "overlay" : "frame";
+    const mode = asset.kind === "corner" || asset.kind === "accessory" ? "overlay" : "frame";
     setOverlayLayers(prev => [...prev, { uid, assetId:asset.id, mode, master:t, byDim:{} }]);
     setSelOverlay(uid);
+    setOverlayChromeVisible(true);
     setPhotoSel(false);
     setOverlayDirty(true);
   };
@@ -877,13 +1085,15 @@ export default function App() {
         const layer = overlayLayers.find(l => l.uid === selOverlay);
         const t = effectiveT(layer);
         if (t) updateLayerT(selOverlay, { x:Math.max(0,Math.min(1,(t.x??0.5)+dx*step)), y:Math.max(0,Math.min(1,(t.y??0.5)+dy*step)) });
+      } else if(textSelected&&postType!=="photo_logo"){
+        updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,textLayout.x+dx*step)),y:Math.max(0.08,Math.min(0.82,textLayout.y+dy*step))});
       } else if (canPan) {
         setPhotoSel(true);
         setImgT(t => ({ ...t, cx:t.cx+dx*step, cy:t.cy+dy*step }));
       }
       return;
     }
-    if (!canPan || selOverlay) return;
+    if (!canPan || selOverlay || textSelected) return;
     if (["+","=","-","_","[","]"].includes(e.key)) e.preventDefault();
     if (e.key === "+" || e.key === "=") setImgT(t => ({ ...t, zoom:Math.min(6,t.zoom+0.05) }));
     if (e.key === "-" || e.key === "_") setImgT(t => ({ ...t, zoom:Math.max(0.1,t.zoom-0.05) }));
@@ -902,7 +1112,7 @@ export default function App() {
   };
   const deleteLayer = (uid) => {
     setOverlayLayers(prev => prev.filter(l => l.uid !== uid));
-    if (selOverlay === uid) setSelOverlay(null);
+    if (selOverlay === uid) { setSelOverlay(null); setOverlayChromeVisible(false); }
     setOverlayDirty(true);
   };
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
@@ -962,23 +1172,109 @@ export default function App() {
 
           <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
 
-          <Sec label="Post Type">
+          <Sec label="Post Type" summary={`${curType?.label||"Post"} · ${videoObj?"Video":imageObj?"Image":"No media"}`} defaultOpen>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>setPostType(t.id)}>{t.label}</Chip>)}
             </div>
+            <EditorSubhead label="Media" summary={videoObj?"Video added":imageObj?"Image added":"Optional for every post"} />
+            <div style={{display:"flex",gap:6,marginBottom:10}}>
+              <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
+              <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
+            </div>
+            {mediaKind==="image"?(
+              <>
+                <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
+                  {SAMPLE_IMAGES.map((s,i)=>(
+                    <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
+                      style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
+                      title={s.label}>
+                      <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
+                    </button>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
+                  <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
+                </div>
+                <MidjourneyLauncher />
+                <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
+                {mediaObj&&<>
+                  <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
+                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
+                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
+                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
+                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
+                    <button onClick={()=>{setImgT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
+                  </div>
+                  <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
+                </>}
+              </>
+            ):(
+              <>
+                <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
+                <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
+                {videoObj&&<>
+                  <div style={{display:"flex",gap:6,marginBottom:8}}>
+                    <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
+                    <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
+                    <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
+                    <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
+                  </div>
+                  <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
+                </>}
+                {savedVideos.length>0&&<div style={{marginTop:10}}>
+                  <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>{savedVideos.map(v=><div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
+                    <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
+                    <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
+                    <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
+                  </div>)}</div>
+                </div>}
+              </>
+            )}
           </Sec>
 
           {/* Content fields appear right under the type when the type needs text */}
           {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text")&&(
-            <Sec label="Content">
-              {postType==="quote"&&<><Area placeholder="Quote text" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="event"&&<><In placeholder="Event title" value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-              {postType==="text_post"&&<><In placeholder="Intro line" value={subtext} onChange={e=>setSubtext(e.target.value)} /><In placeholder="Headline" value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="texture_text"&&<In placeholder="Overlay text (e.g. NOW OPEN)" value={headline} onChange={e=>setHeadline(e.target.value)} />}
+            <Sec label="Content" summary={headline||subtext||"Add copy"}>
+              {postType==="quote"&&<><Area placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="event"&&<><In placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+              {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="texture_text"&&<In placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+              <EditorSubhead label="Typography" summary="Editorial auto-fit" />
+              <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+                  <span style={{fontSize:11,fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>Editorial auto-fit</span>
+                  <button onClick={resetTextLayout} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",fontFamily:F.body}}>Reset</button>
+                </div>
+                <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
+              </div>
+              <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
+              <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
+              <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
+              <div style={{display:"flex",gap:6,marginTop:9,marginBottom:10}}>
+                {[{id:"left",label:"Left"},{id:"center",label:"Centre"},{id:"right",label:"Right"}].map(item=><button key={item.id} aria-pressed={textLayout.align===item.id} onClick={()=>updateTextLayout({align:item.id})}
+                  style={{flex:1,padding:"7px 8px",borderRadius:8,border:`1.5px solid ${textLayout.align===item.id?B.burnham:B.ash+"44"}`,background:textLayout.align===item.id?B.burnham:"#fff",color:textLayout.align===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700}}>{item.label}</button>)}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,maxWidth:150}}>
+                {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
+                  style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
+              </div>
+              <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
+              <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
+                {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}
+                  style={{position:"relative",width:38,height:38,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:hexLuminance(color)>0.55?B.jet:B.whiteSmoke,fontFamily:F.subtitle,fontSize:option.id==="auto"?9:0,fontWeight:800}}>{option.id==="auto"&&"AUTO"}</button>;})}
+              </div>
+              <div style={{fontSize:11,color:B.ash,marginTop:7,fontFamily:F.body,lineHeight:1.45}}>
+                {textColorId==="auto"?`Auto selected ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label}.`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label}
+                {mediaObj&&` Estimated minimum contrast ${(textColorId==="auto"?textMinContrast:textContrast).toFixed(1)}:1.`}
+              </div>
+              <div style={{fontSize:10,color:B.burnham,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>{accessibilityNote}</div>
+              {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
             </Sec>
           )}
 
-          <Sec label="Format">
+          <Sec label="Format" summary={dim.label}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
               {DIMENSIONS.map(d=>{
                 const on=dimensionId===d.id;
@@ -993,82 +1289,10 @@ export default function App() {
             </div>
           </Sec>
 
-          {curType?.needsImage&&(
-            <Sec label="Media">
-              {/* Image / Video toggle */}
-              <div style={{display:"flex",gap:6,marginBottom:10}}>
-                <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
-                <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
-              </div>
-
-              {mediaKind==="image"?(
-                <>
-                  <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
-                    {SAMPLE_IMAGES.map((s,i)=>(
-                      <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
-                        style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
-                        title={s.label}>
-                        <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:6}}>
-                    <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
-                    <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
-                  </div>
-                  <MidjourneyLauncher />
-                  <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
-                  {mediaObj&&(
-                    <>
-                      <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
-                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
-                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
-                        <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
-                        <button onClick={()=>{setImgT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
-                      </div>
-                      <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
-                    </>
-                  )}
-                </>
-              ):(
-                <>
-                  <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
-                  <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
-                  {videoObj&&(
-                    <>
-                      <div style={{display:"flex",gap:6,marginBottom:8}}>
-                        <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
-                        <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
-                        <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
-                        <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
-                      </div>
-                      <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
-                    </>
-                  )}
-                  {savedVideos.length>0&&(
-                    <div style={{marginTop:10}}>
-                      <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
-                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                        {savedVideos.map(v=>(
-                          <div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
-                            <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
-                            <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
-                            <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </Sec>
-          )}
-
-          <Sec label="Brand marks">
-            {/* Primary / Secondary / Overlays tabs */}
+          <Sec label="Brand marks" summary={markTab.charAt(0).toUpperCase()+markTab.slice(1)}>
+            {/* Logos, photo overlays and editable accessories */}
             <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
-              {["primary","secondary","overlays"].map(g=>(
+              {["primary","secondary","overlays","accessories"].map(g=>(
                 <Chip key={g} on={markTab===g} click={()=>setMarkTab(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
               ))}
               {markTab==="overlays"&&(
@@ -1077,7 +1301,7 @@ export default function App() {
               )}
             </div>
 
-            {markTab!=="overlays"?(
+            {!(["overlays","accessories"].includes(markTab))?(
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
                 {LOGO_VARIANTS.filter(v=>v.group===markTab).map(v=>{
                   const isSel = selectedLogoId===v.id;
@@ -1099,7 +1323,7 @@ export default function App() {
                 <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
                 <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Tap to add · tap again to remove</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:overlayLayers.length?10:0}}>
-                  {overlays.map(o=>{
+                  {overlays.filter(o=>(o.category||"overlays")===markTab).map(o=>{
                     const placed=overlayLayers.some(l=>l.assetId===o.id);
                     return (
                       <div key={o.id} style={{position:"relative"}}>
@@ -1123,7 +1347,7 @@ export default function App() {
                     {overlayLayers.map(l=>{
                       const a=overlays.find(o=>o.id===l.assetId); const on=l.uid===selOverlay;
                       return (
-                        <div key={l.uid} onClick={()=>setSelOverlay(on?null:l.uid)}
+                        <div key={l.uid} onClick={()=>{setSelOverlay(on?null:l.uid);setOverlayChromeVisible(!on);}}
                           style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,cursor:"pointer",border:`1.5px solid ${on?B.tangerine:B.ash+"33"}`,background:on?B.tangerine+"11":"#fff"}}>
                           <img src={a?.dataUrl||a?.src} alt="" style={{width:24,height:24,objectFit:"contain"}} />
                           <span style={{flex:1,fontSize:12,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a?.name||"overlay"}</span>
@@ -1134,7 +1358,7 @@ export default function App() {
                   </div>
                 )}
 
-                {(()=>{ const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; if(!selT) return null; return (
+                {(()=>{ const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null; return (
                   <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                       <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
@@ -1144,17 +1368,29 @@ export default function App() {
                         {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
                       </button>
                     </div>
-                    <div style={{display:"flex",gap:6,marginBottom:8}}>
+                    {selAsset?.category!=="accessories"&&<div style={{display:"flex",gap:6,marginBottom:8}}>
                       {[{m:"frame",l:"Frame photo"},{m:"overlay",l:"On top"}].map(({m,l})=>{
                         const on=(selLayer.mode||"frame")===m;
                         return <button key={m} onClick={()=>setLayerMode(selOverlay,m)}
                           style={{flex:1,padding:"6px 8px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>;
                       })}
-                    </div>
-                    <Slider label="Size" min={0.05} max={1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
+                    </div>}
+                    {selAsset?.category==="accessories"&&<>
+                      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Accessory colour</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
+                        {ACCESSORY_COLOR_OPTIONS.map(option=>{const on=(selT.colorId||"auto")===option.id,color=option.id==="auto"?B.whiteSmoke:B[option.id];return <button key={option.id} aria-label={`Accessory colour ${option.label}`} aria-pressed={on} title={option.label} onClick={()=>updateLayerT(selOverlay,{colorId:option.id})}
+                          style={{position:"relative",width:34,height:34,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:B.jet,fontFamily:FU.subtitle,fontSize:option.id==="auto"?8:0,fontWeight:800,cursor:"pointer"}}>{option.id==="auto"?"AUTO":""}</button>;})}
+                      </div>
+                      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Quick size</div>
+                      <div style={{display:"flex",gap:6,marginBottom:9}}>
+                        {ACCESSORY_SIZE_PRESETS.map(p=>{const on=Math.abs((selT.scale||0)-p.scale)<0.015;return <button key={p.id} aria-label={`Accessory size ${p.label}`} aria-pressed={on} onClick={()=>updateLayerT(selOverlay,{scale:p.scale})}
+                          style={{flex:1,padding:"6px 5px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{p.label}</button>;})}
+                      </div>
+                    </>}
+                    <Slider label="Size" min={selAsset?.category==="accessories"?0.04:0.05} max={selAsset?.category==="accessories"?0.8:1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
                     <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
                     <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
-                    <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body}}>Drag the overlay on the preview to move it.</div>
+                    <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.45}}>{selAsset?.category==="accessories"&&((selT.colorId||"auto")==="auto")?"Auto continually selects the strongest accessible brand colour for the area beneath the accessory. ":""}Drag on the preview to move. Use the handles or sliders to resize and rotate.</div>
                   </div>
                 ); })()}
 
@@ -1168,8 +1404,8 @@ export default function App() {
             )}
           </Sec>
 
-          {showLogoCtrl&&markTab!=="overlays"&&(
-            <Sec label="Logo Placement">
+          {showLogoCtrl&&!(["overlays","accessories"].includes(markTab))&&(
+            <Sec label="Logo Placement" summary={`${LOGO_POSITIONS[logoPosition]?.label||"Position"} · ${logoSize.toUpperCase()}`}>
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
                 {[
                   "top-left","top-center","top-right",
@@ -1195,7 +1431,7 @@ export default function App() {
           )}
 
           {(postType==="quote"||postType==="text_post"||postType==="event"||hasFrameLayer||(mediaObj&&imgT.zoom<0.999))&&(
-            <Sec label="Background">
+            <Sec label="Background" summary={curBg?.label}>
               <div style={{display:"flex",gap:10}}>
                 {BG_OPTIONS.map(b=>(
                   <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
@@ -1209,7 +1445,8 @@ export default function App() {
               <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
               <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
                 <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
-                <input type="range" min="0" max="1" step="0.01" value={bgAlpha}
+                <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha}
+                  onInput={e=>setBgAlpha(parseFloat(e.currentTarget.value))}
                   onChange={e=>setBgAlpha(parseFloat(e.target.value))}
                   style={{flex:1,accentColor:B.burnham}} />
                 <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
@@ -1218,21 +1455,12 @@ export default function App() {
             </Sec>
           )}
 
-          {brandKit?.guardrails && (
-            <Sec label="Before export">
-              <div role="note" className="generator-guardrails" style={{padding:"12px 14px",borderRadius:10,background:`${B.celadon}44`,border:`1px solid ${B.burnham}22`,fontSize:12,lineHeight:1.55,color:B.jet}}>
-                <strong style={{display:"block",fontFamily:F.subtitle,fontSize:11,letterSpacing:0.4,marginBottom:4,color:B.burnham}}>Brand and consent check</strong>
-                {brandKit.guardrails}
-              </div>
-            </Sec>
-          )}
-
           {/* Export format */}
-          <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8}}>
-            {[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
-              <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)}
-                style={{flex:1,padding:"7px",borderRadius:8,border:`1.5px solid ${exportFormat===f?B.burnham:B.ash+"44"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>{l}</button>
-            ))}
+          <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8,alignItems:"center"}}>
+            <div style={{display:"flex",gap:6,flex:1}}>{[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
+              <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)} style={{flex:1,padding:"7px",borderRadius:8,border:`1.5px solid ${exportFormat===f?B.burnham:B.ash+"44"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>{l}</button>
+            ))}</div>
+            {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
           </div>
           <button onClick={download} style={{
             width:"100%",padding:"14px 40px",background:B.tangerine,color:"#fff",
@@ -1283,7 +1511,8 @@ export default function App() {
               <EditorChrome
                 width={W} height={H} scale={editorScale}
                 photo={photoSel && !selOverlay && canPan && mediaObj ? photoGeom(mediaObj,W,H,imgT) : null}
-                overlay={selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
+                overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
+                text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
             </div>
           </div>
@@ -1297,8 +1526,8 @@ export default function App() {
 
 // Interaction chrome is deliberately separate from the artwork canvas. It is
 // always above masks/frames, stays crisp on screen, and can never enter exports.
-function EditorChrome({ width, height, scale, photo, overlay }) {
-  if (!photo && !overlay) return null;
+function EditorChrome({ width, height, scale, photo, overlay, text }) {
+  if (!photo && !overlay && !text) return null;
   const k = Math.max(scale || 1, 0.01);
   const line = 2.5 / k, halo = 6 / k, handleR = 8 / k, inset = 14 / k;
   const clampPoint = ({ x, y }) => ({
@@ -1307,6 +1536,14 @@ function EditorChrome({ width, height, scale, photo, overlay }) {
   });
 
   let photoChrome = null;
+  let textChrome = null;
+  if(text){
+    textChrome=(<g>
+      <rect x={text.x} y={text.y} width={text.w} height={text.h} rx={8/k} fill="none" stroke="white" strokeWidth={halo} strokeDasharray={`${10/k} ${7/k}`} />
+      <rect x={text.x} y={text.y} width={text.w} height={text.h} rx={8/k} fill="none" stroke={B.tangerine} strokeWidth={line} strokeDasharray={`${10/k} ${7/k}`} />
+      <g transform={`translate(${text.x+8/k} ${Math.max(inset,text.y-28/k)})`}><rect width={48/k} height={22/k} rx={11/k} fill={B.tangerine}/><text x={24/k} y={14.5/k} textAnchor="middle" fill="white" fontFamily="Syne, sans-serif" fontSize={9/k} fontWeight="700" letterSpacing={1/k}>TEXT</text></g>
+    </g>);
+  }
   if (photo) {
     const angle = (photo.rot || 0) * Math.PI / 180;
     const cos = Math.cos(angle), sin = Math.sin(angle);
@@ -1361,6 +1598,7 @@ function EditorChrome({ width, height, scale, photo, overlay }) {
       style={{position:"absolute",inset:0,width:"100%",height:"100%",overflow:"hidden",pointerEvents:"none",zIndex:10,filter:"drop-shadow(0 1px 1px rgba(40,43,40,0.16))"}}>
       {overlayChrome}
       {photoChrome}
+      {textChrome}
     </svg>
   );
 }
@@ -1369,9 +1607,30 @@ function EditorChrome({ width, height, scale, photo, overlay }) {
 const FU={subtitle:"'Syne','Helvetica Neue',sans-serif",body:"'Fira Sans','Helvetica Neue',sans-serif"};
 const xBtnAbs={position:"absolute",top:6,right:6,width:24,height:24,borderRadius:"50%",background:"rgba(0,0,0,0.45)",color:"#fff",border:"none",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"};
 
+function EditorSubhead({label,summary}){return <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 0 9px",paddingTop:13,borderTop:`1px solid ${B.ash}33`}}><span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:B.burnham}}>{label}</span>{summary&&<span style={{fontSize:10,fontFamily:FU.body,color:B.ash,marginLeft:"auto",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{summary}</span>}</div>;}
 
+function GuardrailTooltip({text}){
+  const [open,setOpen]=useState(false);
+  return <div onMouseEnter={()=>setOpen(true)} onMouseLeave={()=>setOpen(false)} style={{position:"relative",flex:"0 0 auto"}}>
+    <button type="button" aria-label="Before export: brand and consent guidance" aria-describedby={open?"export-guardrail-tooltip":undefined} onFocus={()=>setOpen(true)} onBlur={()=>setOpen(false)}
+      style={{width:36,height:34,borderRadius:8,border:`1.5px solid ${B.ash}44`,background:open?`${B.celadon}55`:"#fff",color:B.burnham,fontFamily:FU.subtitle,fontSize:15,fontWeight:800,cursor:"help"}}>ⓘ</button>
+    {open&&<div id="export-guardrail-tooltip" role="tooltip" style={{position:"absolute",right:0,bottom:"calc(100% + 8px)",width:250,padding:"12px 14px",borderRadius:10,background:B.jet,color:B.whiteSmoke,boxShadow:"0 10px 30px rgba(40,43,40,0.22)",fontSize:11,lineHeight:1.5,fontFamily:FU.body,zIndex:50}}><strong style={{display:"block",fontFamily:FU.subtitle,fontSize:10,letterSpacing:0.5,textTransform:"uppercase",marginBottom:5,color:B.celadon}}>Before export</strong>{text}</div>}
+  </div>;
+}
 
-function Sec({label,children}){return<section aria-label={label} style={{marginBottom:22}}><div className="generator-section-label" style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:2.2,textTransform:"uppercase",color:B.ash,marginBottom:8}}>{label}</div>{children}</section>;}
+function Sec({label,children,summary,defaultOpen=false}){
+  const [open,setOpen]=useState(defaultOpen);
+  const bodyId=`editor-section-${label.toLowerCase().replace(/[^a-z0-9]+/g,"-")}`;
+  return <section aria-label={label} style={{marginBottom:8,border:`1px solid ${B.ash}44`,borderRadius:11,background:"#fff",overflow:"hidden"}}>
+    <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={()=>setOpen(value=>!value)}
+      style={{width:"100%",minHeight:48,padding:"11px 13px",border:"none",background:open?`${B.whiteSmoke}77`:"#fff",display:"flex",alignItems:"center",gap:10,cursor:"pointer",textAlign:"left"}}>
+      <span className="generator-section-label" style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.8,textTransform:"uppercase",color:open?B.burnham:B.ash,flex:"0 0 auto"}}>{label}</span>
+      {summary&&<span style={{fontSize:11,fontFamily:FU.body,color:B.ash,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"right",marginLeft:"auto"}}>{summary}</span>}
+      <span aria-hidden="true" style={{fontSize:12,color:B.burnham,transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.18s ease",flex:"0 0 auto"}}>⌄</span>
+    </button>
+    {open&&<div id={bodyId} style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>{children}</div>}
+  </section>;
+}
 function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
 function In({mt,...p}){return<input aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
 function Area(p){return<textarea aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}

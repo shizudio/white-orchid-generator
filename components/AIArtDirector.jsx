@@ -20,6 +20,7 @@ export default function AIArtDirector({ onApply, canUndo, onUndo }) {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
   const dialogRef = useRef(null);
 
   useEffect(() => {
@@ -46,6 +47,7 @@ export default function AIArtDirector({ onApply, canUndo, onUndo }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not create a suggestion.');
       setPlan(data.plan);
+      setCopied(false);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -56,6 +58,16 @@ export default function AIArtDirector({ onApply, canUndo, onUndo }) {
   function applyPlan() {
     onApply(plan);
     setOpen(false);
+  }
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(plan.midjourneyPrompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('Could not copy automatically. Select the prompt and copy it manually.');
+    }
   }
 
   return (
@@ -86,7 +98,7 @@ export default function AIArtDirector({ onApply, canUndo, onUndo }) {
                 <div className="art-director-grid">
                   <div>
                     <label htmlFor="art-audience">Audience <span>Optional</span></label>
-                    <input id="art-audience" value={audience} onChange={event => setAudience(event.target.value)} maxLength={160} placeholder="Parents of children aged 2–5" />
+                    <input id="art-audience" value={audience} onChange={event => setAudience(event.target.value)} maxLength={160} placeholder="Parents of students aged 10+" />
                   </div>
                   <div>
                     <label htmlFor="art-channel">Channel</label>
@@ -118,6 +130,14 @@ export default function AIArtDirector({ onApply, canUndo, onUndo }) {
                   <div><dt>Visual direction</dt><dd>{plan.imageDirection || 'Use a simple brand-led background.'}</dd></div>
                   <div><dt>Why this works</dt><dd>{plan.rationale}</dd></div>
                 </dl>
+                <div className="art-director-prompt">
+                  <div className="art-director-prompt-header">
+                    <span>Midjourney prompt</span>
+                    <button type="button" onClick={copyPrompt}>{copied ? 'Copied ✓' : 'Copy prompt'}</button>
+                  </div>
+                  <p>{plan.midjourneyPrompt}</p>
+                </div>
+                {error && <p className="art-director-error" role="alert">{error}</p>}
                 <div className="art-director-actions">
                   <button type="button" className="art-director-secondary" onClick={() => { setPlan(null); setError(''); }}>Edit brief</button>
                   <button type="button" className="art-director-secondary" onClick={createPlan} disabled={loading}>{loading ? 'Directing…' : 'Regenerate'}</button>
