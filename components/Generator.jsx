@@ -471,6 +471,7 @@ export default function App() {
   const previewRef = useRef(null);
   const imgRef = useRef(null);
   const textBoundsRef = useRef(null);
+  const initialPreviewRef = useRef(true);
 
   // Canvas dimension (social channel format)
   const [dimensionId, setDimensionId] = useState("ig_square");
@@ -511,7 +512,7 @@ export default function App() {
   const [accessibilityNote, setAccessibilityNote] = useState("Using the template's accessible defaults.");
   const [bgAlpha, setBgAlpha] = useState(1);          // background opacity (transparent PNG)
   const [exportFormat, setExportFormat] = useState("png"); // png | jpeg
-  const [image, setImage] = useState(null);
+  const [image, setImage] = useState(SAMPLE_IMAGES[0].full);
   const [imageObj, setImageObj] = useState(null);
   const [headline, setHeadline] = useState("");
   const [subtext, setSubtext] = useState("");
@@ -521,8 +522,8 @@ export default function App() {
   const [textSelected, setTextSelected] = useState(false);
 
   // TWO Logo system
-  const [selectedLogoId, setSelectedLogoId] = useState("p1-green");
-  const [logoPosition, setLogoPosition] = useState("bottom-right");
+  const [selectedLogoId, setSelectedLogoId] = useState("p3-ivory");
+  const [logoPosition, setLogoPosition] = useState("bottom-center");
   const [logoSize, setLogoSize] = useState("m");
   const [logoObj, setLogoObj] = useState(null);
   const [suggestedColor, setSuggestedColor] = useState("ivory");
@@ -587,6 +588,14 @@ export default function App() {
   useEffect(() => {
     // Fonts are self-hosted via globals.css — just wait for them to load
     document.fonts.ready.then(() => setFontsLoaded(true));
+  }, []);
+
+  // A finished branded composition greets first-time users instead of an
+  // empty canvas. Subsequent image/template changes still use auto direction.
+  useEffect(() => {
+    let active=true;
+    imgFrom(SAMPLE_IMAGES[0].full).then(img=>{if(active)setImageObj(img);});
+    return()=>{active=false;};
   }, []);
 
   // Brand Kit is the source of truth for canvas colours, typography and checks.
@@ -660,6 +669,10 @@ export default function App() {
   // changes, find quiet regions, avoid text/logo collisions, and apply the
   // strongest approved brand colours. Manual edits remain available afterwards.
   useEffect(() => {
+    if(initialPreviewRef.current&&postType==="photo_logo"&&image===SAMPLE_IMAGES[0].full){
+      if(mediaObj)initialPreviewRef.current=false;
+      return;
+    }
     const base=TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
     let chosenLayout={...base},textLum=hexLuminance(curBg?.color||B.burnham),logoRegionLum=textLum,logoPosId="bottom-right",suggestedTextId=suggestTextColor(textLum),minimumTextContrast=4.5;
     if(mediaObj){
@@ -692,7 +705,7 @@ export default function App() {
     const current=LOGO_VARIANTS.find(v=>v.id===selectedLogoId);
     const match=current&&LOGO_VARIANTS.find(v=>v.group===current.group&&v.label===current.label&&v.color===logoColor);
     if(match)setSelectedLogoId(match.id);
-  }, [mediaObj, imageObj, videoObj, postType, bgColor, bgAlpha, dimensionId, hasFrameLayer, curBg]);
+  }, [mediaObj, imageObj, videoObj, image, postType, bgColor, bgAlpha, dimensionId, hasFrameLayer, curBg]);
 
   // Clicking anywhere outside the preview clears editing chrome without
   // changing the actual composition.
