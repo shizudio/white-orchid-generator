@@ -36,7 +36,7 @@ export default function BrandKitPage() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
       <Nav section="brand kit" />
-      <div style={{ maxWidth: 760, margin: '0 auto', padding: '56px 32px' }}>
+      <div className="brand-kit-content" style={{ maxWidth: 760, margin: '0 auto', padding: '56px 32px' }}>
 
         {/* Header */}
         <div style={{ marginBottom: 48 }}>
@@ -54,13 +54,16 @@ export default function BrandKitPage() {
           <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 20 }}>Colour palette</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {kit.colors.map((c, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-raised)', borderRadius: 'var(--radius-md)', padding: '10px 16px', border: '1px solid var(--line)', boxShadow: 'var(--shadow-xs)' }}>
-                <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: c.hex, flexShrink: 0, border: '1px solid var(--line)' }} />
-                <input value={c.hex} onChange={e => updateColor(i, 'hex', e.target.value)}
+              <div className="brand-color-row" key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-raised)', borderRadius: 'var(--radius-md)', padding: '10px 16px', border: '1px solid var(--line)', boxShadow: 'var(--shadow-xs)' }}>
+                <div className="brand-color-swatch" style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: c.hex, flexShrink: 0, border: '1px solid var(--line)' }} />
+                <input aria-label={`${c.label} hex colour`} value={c.hex} onChange={e => updateColor(i, 'hex', e.target.value)}
+                  className="brand-color-hex"
                   style={{ width: 100, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 13, fontFamily: 'monospace', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none' }} />
-                <input value={c.label} onChange={e => updateColor(i, 'label', e.target.value)}
+                <input aria-label={`Colour ${i + 1} name`} value={c.label} onChange={e => updateColor(i, 'label', e.target.value)}
+                  className="brand-color-label"
                   style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 14, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none' }} />
-                <select value={c.role} onChange={e => updateColor(i, 'role', e.target.value)}
+                <select aria-label={`${c.label} role`} value={c.role} onChange={e => updateColor(i, 'role', e.target.value)}
+                  className="brand-color-role"
                   style={{ padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 13, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none', width: 120 }}>
                   <option value="primary">Primary</option>
                   <option value="secondary">Secondary</option>
@@ -77,11 +80,11 @@ export default function BrandKitPage() {
         {/* Typography */}
         <section style={{ marginBottom: 48 }}>
           <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 20 }}>Typography</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          <div className="brand-type-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
             {[['Heading / serif', 'font_heading', 'Romie'], ['Body', 'font_body', 'Fira Sans'], ['UI / labels', 'font_ui', 'Syne']].map(([label, key, placeholder]) => (
               <div key={key}>
                 <div style={{ fontFamily: 'var(--font-syne)', fontSize: 9, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>{label}</div>
-                <input value={kit[key]} onChange={e => setKit({ ...kit, [key]: e.target.value })} placeholder={placeholder}
+                <input aria-label={label} value={kit[key]} onChange={e => setKit({ ...kit, [key]: e.target.value })} placeholder={placeholder}
                   style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 14, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none' }} />
               </div>
             ))}
@@ -96,12 +99,12 @@ export default function BrandKitPage() {
           <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 16 }}>
             Shown to staff before export. Consent rules, tone-of-voice standards, anything to check before posting.
           </p>
-          <textarea value={kit.guardrails} onChange={e => setKit({ ...kit, guardrails: e.target.value })}
+          <textarea aria-label="Content guardrails" value={kit.guardrails} onChange={e => setKit({ ...kit, guardrails: e.target.value })}
             style={{ width: '100%', padding: '12px 16px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', fontSize: 14, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none', resize: 'vertical', minHeight: 120, lineHeight: 1.6 }} />
         </section>
 
         {/* Save */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div className="brand-save-row" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <button onClick={save} disabled={saving}
             style={{ padding: '14px 40px', background: saving ? 'var(--tw-ash)' : 'var(--tw-burnham)', color: saving ? 'var(--fg-muted)' : '#fff', border: 'none', borderRadius: 'var(--radius-2xl)', fontFamily: 'var(--font-syne)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: saving ? 'not-allowed' : 'pointer', transition: 'background 140ms' }}>
             {saving ? 'Saving…' : 'Save brand kit'}

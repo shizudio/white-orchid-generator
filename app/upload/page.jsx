@@ -20,7 +20,7 @@ export default function UploadPage() {
       file,
       preview: URL.createObjectURL(file),
       sourceType: null,
-      consentStatus: 'cleared',
+      consentStatus: null,
       status: 'pending', // pending | uploading | done | error
       error: null,
       result: null,
@@ -43,6 +43,10 @@ export default function UploadPage() {
   const uploadOne = async (entry) => {
     if (!entry.sourceType) {
       update(entry.id, { error: 'Select image type before uploading', status: 'error' });
+      return;
+    }
+    if (entry.sourceType === 'real_photo' && !entry.consentStatus) {
+      update(entry.id, { error: 'Choose a consent status before uploading this real photo', status: 'error' });
       return;
     }
     update(entry.id, { status: 'uploading', error: null });
@@ -68,7 +72,9 @@ export default function UploadPage() {
     files.filter(f => f.status === 'pending').forEach(uploadOne);
   };
 
-  const allReady = files.length > 0 && files.every(f => f.sourceType);
+  const allReady = files.length > 0 && files.every(f =>
+    f.sourceType && (f.sourceType !== 'real_photo' || f.consentStatus)
+  );
   const anyPending = files.some(f => f.status === 'pending');
 
   return (
@@ -83,10 +89,20 @@ export default function UploadPage() {
 
         {/* Drop zone */}
         <div
+          className="upload-dropzone"
+          role="button"
+          tabIndex={0}
+          aria-label="Choose images to upload"
           onDrop={onDrop}
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onClick={() => inputRef.current?.click()}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
           style={{
             border: `2px dashed ${dragging ? 'var(--tw-burnham)' : 'rgba(43,80,64,0.25)'}`,
             borderRadius: 16,
@@ -141,7 +157,7 @@ export default function UploadPage() {
                 </button>
                 {!allReady && (
                   <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#CC3333' }}>
-                    Tag all images as Midjourney or Real Photo first
+                    Choose an image type and consent status for every real photo
                   </span>
                 )}
               </div>
@@ -210,7 +226,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
                 ].map(opt => (
                   <button
                     key={opt.value}
-                    onClick={() => onUpdate(entry.id, { sourceType: opt.value, consentStatus: opt.value === 'real_photo' ? 'cleared' : 'na' })}
+                    onClick={() => onUpdate(entry.id, { sourceType: opt.value, consentStatus: opt.value === 'real_photo' ? null : 'na', error: null, status: entry.status === 'error' ? 'pending' : entry.status })}
                     style={{
                       padding: '7px 14px',
                       borderRadius: 40,

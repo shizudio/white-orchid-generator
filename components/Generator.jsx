@@ -33,6 +33,27 @@ const BG_OPTIONS = [
   {id:"celadon",label:"Celadon",color:B.celadon,light:false},
   {id:"jet",label:"Jet",color:B.jet,light:true},
 ];
+
+function applyBrandKit(kit) {
+  if (!kit) return;
+  const colorKeys = {
+    burnham:"burnham", ivory:"whiteSmoke", "white smoke":"whiteSmoke",
+    wisteria:"wisteria", tangerine:"tangerine", "yellow green":"yellowGreen",
+    yellowgreen:"yellowGreen", celadon:"celadon", ash:"ash", jet:"jet",
+  };
+  (kit.colors || []).forEach(color => {
+    const key = colorKeys[String(color.label || "").trim().toLowerCase()];
+    if (key && /^#[0-9a-f]{6}$/i.test(color.hex || "")) B[key] = color.hex;
+  });
+  BG_OPTIONS.forEach(option => { if (B[option.id]) option.color = B[option.id]; });
+  const cleanFamily = name => String(name || "").replace(/["']/g, "").trim();
+  const heading = cleanFamily(kit.font_heading);
+  const body = cleanFamily(kit.font_body);
+  const ui = cleanFamily(kit.font_ui);
+  if (heading) { F.title = `'${heading}',Georgia,serif`; F.quote = F.title; }
+  if (body) F.body = `'${body}','Helvetica Neue',sans-serif`;
+  if (ui) F.subtitle = `'${ui}','Helvetica Neue',sans-serif`;
+}
 const PRESETS = {
   "top-left":[0.12,0.12],"top-center":[0.50,0.12],"top-right":[0.88,0.12],
   "center":[0.50,0.50],
@@ -369,6 +390,7 @@ export default function App() {
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
+  const [brandKit, setBrandKit] = useState(null);
   const [postType, setPostType] = useState("photo_logo");
   const [bgColor, setBgColor] = useState("burnham");
   const [bgAlpha, setBgAlpha] = useState(1);          // background opacity (transparent PNG)
@@ -409,6 +431,20 @@ export default function App() {
   useEffect(() => {
     // Fonts are self-hosted via globals.css — just wait for them to load
     document.fonts.ready.then(() => setFontsLoaded(true));
+  }, []);
+
+  // Brand Kit is the source of truth for canvas colours, typography and checks.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/brand')
+      .then(response => response.ok ? response.json() : null)
+      .then(kit => {
+        if (!kit || cancelled) return;
+        applyBrandKit(kit);
+        setBrandKit(kit);
+      })
+      .catch(() => {}); // Built-in brand defaults keep the editor usable offline.
+    return () => { cancelled = true; };
   }, []);
 
   // Keep editor chrome screen-sized while the responsive preview changes size.
@@ -601,7 +637,7 @@ export default function App() {
       if (img) drawOverlayLayer(ctx, img, w, h, resolveT(layer));
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
 
@@ -797,6 +833,29 @@ export default function App() {
     }));
     setOverlayDirty(true);
   };
+  const onCanvasKeyDown = (e) => {
+    const arrows = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1] };
+    if (arrows[e.key]) {
+      e.preventDefault();
+      const [dx,dy] = arrows[e.key];
+      const step = e.shiftKey ? 0.03 : 0.01;
+      if (selOverlay) {
+        const layer = overlayLayers.find(l => l.uid === selOverlay);
+        const t = effectiveT(layer);
+        if (t) updateLayerT(selOverlay, { x:Math.max(0,Math.min(1,(t.x??0.5)+dx*step)), y:Math.max(0,Math.min(1,(t.y??0.5)+dy*step)) });
+      } else if (canPan) {
+        setPhotoSel(true);
+        setImgT(t => ({ ...t, cx:t.cx+dx*step, cy:t.cy+dy*step }));
+      }
+      return;
+    }
+    if (!canPan || selOverlay) return;
+    if (["+","=","-","_","[","]"].includes(e.key)) e.preventDefault();
+    if (e.key === "+" || e.key === "=") setImgT(t => ({ ...t, zoom:Math.min(6,t.zoom+0.05) }));
+    if (e.key === "-" || e.key === "_") setImgT(t => ({ ...t, zoom:Math.max(0.1,t.zoom-0.05) }));
+    if (e.key === "[") setImgT(t => ({ ...t, rotation:(t.rotation||0)-1 }));
+    if (e.key === "]") setImgT(t => ({ ...t, rotation:(t.rotation||0)+1 }));
+  };
   const resetLayer = (uid) => {
     setOverlayLayers(prev => prev.map(l => {
       if (l.uid !== uid) return l;
@@ -863,9 +922,9 @@ export default function App() {
     <div style={{fontFamily:F.body,color:B.jet,minHeight:"100vh",background:B.whiteSmoke}}>
       <Nav section="create" />
 
-      <div style={{display:"flex",flexWrap:"wrap"}}>
+      <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
         {/* ── CONTROLS ── */}
-        <div style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 60px)"}}>
+        <div className="generator-controls" style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 64px)"}}>
 
           <Sec label="Post Type">
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -888,7 +947,7 @@ export default function App() {
               {DIMENSIONS.map(d=>{
                 const on=dimensionId===d.id;
                 return (
-                  <button key={d.id} onClick={()=>setDimensionId(d.id)} title={`${d.w} × ${d.h}px`}
+                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.w} × ${d.h}px`}
                     style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
                     <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
                     <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
@@ -931,7 +990,7 @@ export default function App() {
                         <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
                         <button onClick={()=>{setImgT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
                       </div>
-                      <div style={{fontSize:10,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Click the image in the preview to resize, rotate, or move it. Drag snaps at 50/75/100% and center.</div>
+                      <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
                     </>
                   )}
                 </>
@@ -987,7 +1046,7 @@ export default function App() {
                   const isSel = selectedLogoId===v.id;
                   const isAuto = suggestedColor===v.color && !isSel && imageObj;
                   return (
-                    <button key={v.id} onClick={()=>setSelectedLogoId(v.id)}
+                    <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
                       title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
                       style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
                       <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
@@ -1007,7 +1066,7 @@ export default function App() {
                     const placed=overlayLayers.some(l=>l.assetId===o.id);
                     return (
                       <div key={o.id} style={{position:"relative"}}>
-                        <button onClick={()=>toggleOverlay(o)} title={`${o.name} — tap to ${placed?"remove":"add"}`}
+                        <button aria-pressed={placed} onClick={()=>toggleOverlay(o)} title={`${o.name} — tap to ${placed?"remove":"add"}`}
                           style={{width:"100%",aspectRatio:"1/1",borderRadius:8,border:`2px solid ${placed?B.tangerine:B.ash+"33"}`,background:placed?B.tangerine+"11":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,transition:"all 0.12s"}}>
                           <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain"}} />
                           <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
@@ -1082,7 +1141,7 @@ export default function App() {
                 ].map(pos=>{
                   const on=logoPosition===pos;
                   return(
-                    <button key={pos} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
+                    <button key={pos} aria-pressed={on} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
                       style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
                       <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
                     </button>
@@ -1102,7 +1161,7 @@ export default function App() {
             <Sec label="Background">
               <div style={{display:"flex",gap:10}}>
                 {BG_OPTIONS.map(b=>(
-                  <button key={b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
+                  <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
                     width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
                     background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
                     border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
@@ -1122,12 +1181,19 @@ export default function App() {
             </Sec>
           )}
 
-
+          {brandKit?.guardrails && (
+            <Sec label="Before export">
+              <div role="note" className="generator-guardrails" style={{padding:"12px 14px",borderRadius:10,background:`${B.celadon}44`,border:`1px solid ${B.burnham}22`,fontSize:12,lineHeight:1.55,color:B.jet}}>
+                <strong style={{display:"block",fontFamily:F.subtitle,fontSize:11,letterSpacing:0.4,marginBottom:4,color:B.burnham}}>Brand and consent check</strong>
+                {brandKit.guardrails}
+              </div>
+            </Sec>
+          )}
 
           {/* Export format */}
           <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8}}>
             {[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
-              <button key={f} onClick={()=>setExportFormat(f)}
+              <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)}
                 style={{flex:1,padding:"7px",borderRadius:8,border:`1.5px solid ${exportFormat===f?B.burnham:B.ash+"44"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>{l}</button>
             ))}
           </div>
@@ -1164,16 +1230,18 @@ export default function App() {
         </div>
 
         {/* ── PREVIEW ── */}
-        <div style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
+        <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
           <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
           <div ref={previewRef}
             style={{width:"100%",maxWidth:540,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
-            <div ref={canvasShellRef} style={{
-              position:"relative", width:"100%", maxWidth:`calc(68vh * ${W / H})`,
+            <div className="generator-canvas-shell" ref={canvasShellRef} style={{
+              position:"relative", width:"100%", maxWidth:`calc(var(--generator-preview-height, 68vh) * ${W / H})`,
               aspectRatio:`${W} / ${H}`, flex:"0 1 auto", overflow:"visible",
             }}>
               <canvas ref={canvasRef} width={W} height={H}
                 onPointerDown={onPanStart} onPointerMove={onPanMove} onPointerUp={onPanEnd} onPointerCancel={onPanEnd}
+                onKeyDown={onCanvasKeyDown} tabIndex={0} role="application"
+                aria-label="Interactive post preview" aria-describedby={mediaObj ? "canvas-help" : undefined}
                 style={{position:"absolute",inset:0,width:"100%",height:"100%",display:"block",borderRadius:8,boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:canPan?(dragRef.current?"grabbing":"grab"):"default",touchAction:"none"}} />
               <EditorChrome
                 width={W} height={H} scale={editorScale}
@@ -1266,10 +1334,10 @@ const xBtnAbs={position:"absolute",top:6,right:6,width:24,height:24,borderRadius
 
 
 
-function Sec({label,children}){return<div style={{marginBottom:22}}><div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:2.5,textTransform:"uppercase",color:B.ash,marginBottom:8}}>{label}</div>{children}</div>;}
-function Chip({on,click,children,sm}){return<button onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
-function In({mt,...p}){return<input {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
-function Area(p){return<textarea {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
-function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
+function Sec({label,children}){return<section aria-label={label} style={{marginBottom:22}}><div className="generator-section-label" style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:2.2,textTransform:"uppercase",color:B.ash,marginBottom:8}}>{label}</div>{children}</section>;}
+function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
+function In({mt,...p}){return<input aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
+function Area(p){return<textarea aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,outline:"none",boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
+function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input aria-label={label} type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
 function vidBtn(B,FU,primary){return{flex:primary?"1 1 auto":"0 0 auto",padding:"7px 10px",borderRadius:7,border:primary?"none":`1.5px solid ${B.ash}44`,background:primary?B.burnham:"#fff",color:primary?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}
 function quickBtn(B,FU){return{padding:"6px 11px",borderRadius:7,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}

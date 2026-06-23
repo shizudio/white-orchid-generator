@@ -61,6 +61,7 @@ export default function LibraryPage() {
         {/* Filter bar */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 28, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
+            aria-label="Search image library by filename"
             placeholder="Search by filename…"
             value={filter.search}
             onChange={e => setFilter(f => ({ ...f, search: e.target.value }))}
@@ -129,7 +130,7 @@ function ImageCard({ img, url }) {
             {new Date(img.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
           </div>
           {url && !isBlocked && (
-            <a href={url} download={img.filename} target="_blank" rel="noreferrer"
+            <a className="library-save-action" aria-label={`Save ${img.filename}`} href={url} download={img.filename} target="_blank" rel="noreferrer"
               style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--tw-burnham)', background: 'var(--tw-celadon-soft)', padding: '4px 10px', borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer', textDecoration: 'none' }}>
               ↓ Save
             </a>
@@ -140,16 +141,19 @@ function ImageCard({ img, url }) {
   );
 }
 
-function FilterChips({ value, options, onChange }) {
+function FilterChips({ label, value, options, onChange }) {
   return (
-    <div style={{ display: 'flex', gap: 6 }}>
-      {options.map(opt => (
-        <button key={opt.value} onClick={() => onChange(opt.value)}
-          style={{ padding: '7px 13px', borderRadius: 40, border: `1.5px solid ${value === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`, background: value === opt.value ? 'var(--tw-burnham)' : 'transparent', color: value === opt.value ? '#fff' : 'var(--tw-jet)', fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: 0.3 }}>
-          {opt.label}
-        </button>
-      ))}
-    </div>
+    <fieldset className="library-filter-group" style={{ border: 0, padding: 0, margin: 0 }}>
+      <legend style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 6 }}>{label}</legend>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {options.map(opt => (
+          <button key={opt.value} aria-pressed={value === opt.value} onClick={() => onChange(opt.value)}
+            style={{ padding: '7px 13px', borderRadius: 40, border: `1.5px solid ${value === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`, background: value === opt.value ? 'var(--tw-burnham)' : 'transparent', color: value === opt.value ? '#fff' : 'var(--tw-jet)', fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: 0.3 }}>
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
