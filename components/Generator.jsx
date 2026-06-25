@@ -135,6 +135,7 @@ const SK_LIB = "wo-image-library";
 const SK_HIST = "wo-asset-history";
 const SK_OVL = "wo-overlays";       // overlay asset library
 const SK_DOC = "wo-workdoc";        // placed overlay layers (working doc)
+const SK_TPL = "wo-design-templates"; // reusable complete design templates
 const MAX_LIB = 15;
 const MAX_HIST = 20;
 
@@ -197,6 +198,11 @@ function getLuminance(r,g,b){
 }
 function contrastRatio(l1,l2){const hi=Math.max(l1,l2),lo=Math.min(l1,l2);return(hi+0.05)/(lo+0.05);}
 function hexLuminance(hex){const h=String(hex||"#000000").replace("#","");return getLuminance(parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0);}
+function hexToRgb(hex){
+  const h=String(hex||"#000000").replace("#","").trim();
+  const full=h.length===3?h.split("").map(x=>x+x).join(""):h.padEnd(6,"0").slice(0,6);
+  return {r:parseInt(full.slice(0,2),16)||0,g:parseInt(full.slice(2,4),16)||0,b:parseInt(full.slice(4,6),16)||0};
+}
 function sampleOverallLuminance(source){
   const size=64,c=document.createElement("canvas");c.width=size;c.height=size;
   const ctx=c.getContext("2d");ctx.drawImage(source,0,0,size,size);
@@ -507,6 +513,44 @@ function drawOutlineLayer(ctx, oc, shapeImg, w, h, t, color, width) {
   ctx.restore();
 }
 
+// Line Art mode: preserve the full stroke/pattern artwork from an uploaded
+// image, not just the outside silhouette. It keeps darker/saturated "ink"
+// pixels and removes pale fills, then recolours the remaining linework.
+function drawLineArtLayer(ctx, oc, shapeImg, w, h, t, color, threshold = 0.72) {
+  if (!shapeImg) return;
+  const o = oc.getContext("2d", { willReadFrequently:true });
+  o.clearRect(0, 0, w, h);
+  o.globalCompositeOperation = "source-over";
+  drawOverlayLayer(o, shapeImg, w, h, { ...t, opacity:1 });
+  let imgData;
+  try { imgData = o.getImageData(0, 0, w, h); } catch(_) {
+    ctx.save(); ctx.globalAlpha = t.opacity ?? 1; ctx.drawImage(oc, 0, 0); ctx.restore();
+    return;
+  }
+  const d = imgData.data;
+  const keepColor = hexToRgb(color || "#24564D");
+  const soft = 0.16;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i+3];
+    if (a < 10) { d[i+3] = 0; continue; }
+    const r=d[i], g=d[i+1], b=d[i+2];
+    const max=Math.max(r,g,b), min=Math.min(r,g,b);
+    const lum=getLuminance(r,g,b);
+    const sat=max ? (max-min)/max : 0;
+    // Dark pixels are obvious linework. Saturated mid-tone pixels catch
+    // anti-aliased coloured stroke edges without keeping ivory/cream fills.
+    const inkScore=Math.max((threshold-lum)/soft, sat>0.09 ? (0.86-lum)/0.22 : -1);
+    const alpha=Math.max(0, Math.min(1, inkScore));
+    if (alpha <= 0) { d[i+3] = 0; continue; }
+    d[i]=keepColor.r; d[i+1]=keepColor.g; d[i+2]=keepColor.b; d[i+3]=Math.round(a*alpha);
+  }
+  o.putImageData(imgData, 0, 0);
+  ctx.save();
+  ctx.globalAlpha = t.opacity ?? 1;
+  ctx.drawImage(oc, 0, 0);
+  ctx.restore();
+}
+
 async function sGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } }
 async function sSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) { console.error("Storage error:", e); } }
 async function sDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
@@ -537,6 +581,7 @@ export default function App() {
   const [selOverlay, setSelOverlay] = useState(null);      // selected layer uid
   const [overlayChromeVisible, setOverlayChromeVisible] = useState(false);
   const [overlayDirty, setOverlayDirty] = useState(false);
+  const [designTemplates, setDesignTemplates] = useState([]); // [{id,name,thumb,state,createdAt}]
   const [editorScale, setEditorScale] = useState(1);       // display px per export px
   const overlayImgs = useRef({});                          // assetId -> Image
   const overlayInputRef = useRef(null);
@@ -592,7 +637,6 @@ export default function App() {
   const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
   const tc = textColorId === "auto" ? B[suggestedTextColor] : (B[textColorId] || B.jet);
   const textContrast = contrastRatio(textSurfaceLuminance,hexLuminance(tc));
-  const showLogoCtrl = true;
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
@@ -685,6 +729,8 @@ export default function App() {
       setOverlays(merged);
       const doc = await sGet(SK_DOC);
       if (doc) setOverlayLayers(doc);
+      const tpl = await sGet(SK_TPL);
+      if (tpl) setDesignTemplates(tpl);
       try { const vids = await idbAll(); setSavedVideos(vids.map(v => ({ id:v.id, name:v.name, createdAt:v.createdAt })).sort((a,b)=>b.createdAt-a.createdAt)); } catch(_) {}
       setReady(true);
     })();
@@ -694,6 +740,7 @@ export default function App() {
   useEffect(() => { if (ready && library.length >= 0) sSet(SK_LIB, library); }, [library, ready]);
   useEffect(() => { if (ready && history.length >= 0) sSet(SK_HIST, history); }, [history, ready]);
   useEffect(() => { if (ready) sSet(SK_OVL, overlays); }, [overlays, ready]);
+  useEffect(() => { if (ready) sSet(SK_TPL, designTemplates); }, [designTemplates, ready]);
 
   /* ── Keep overlay Image objects loaded (assetId -> Image) ── */
   useEffect(() => {
@@ -840,7 +887,7 @@ export default function App() {
       return deriveFromMaster(layer.master,a?.kind||"center",a?.ratio||1,w,h);
     };
     const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
-    const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline")&&overlayImgs.current[l.assetId];});
+    const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
     const layout=typeLayouts[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
     const safe=0.08,bw=Math.min(layout.width||0.76,1-safe*2)*w;
@@ -895,13 +942,17 @@ export default function App() {
     }
 
     // ── Overlay-mode layers (drawn on top of everything) ──
-    const ocv = topLayers.some(l=>(l.mode==="outline")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
+    const ocv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
     topLayers.forEach(layer => {
       const img = overlayImgs.current[layer.assetId];
       if (!img) return;
       const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
       if(layer.mode==="outline"){
         drawOutlineLayer(ctx,ocv,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);
+        return;
+      }
+      if(layer.mode==="lineart"){
+        drawLineArtLayer(ctx,ocv,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);
         return;
       }
       if(asset?.category==="accessories"){
@@ -1131,7 +1182,12 @@ export default function App() {
   };
   const setLayerMode = (uid, mode) => {
     setOverlayLayers(prev => prev.map(l => l.uid === uid
-      ? { ...l, mode, ...(mode==="outline" ? { outlineColor:l.outlineColor||"tangerine", outlineWidth:l.outlineWidth??0.08 } : {}) }
+      ? {
+          ...l,
+          mode,
+          ...(mode==="outline" ? { outlineColor:l.outlineColor||"tangerine", outlineWidth:l.outlineWidth??0.08 } : {}),
+          ...(mode==="lineart" ? { lineArtColor:l.lineArtColor||l.outlineColor||"burnham", lineArtThreshold:l.lineArtThreshold??0.72 } : {})
+        }
       : l));
     setOverlayDirty(true);
   };
@@ -1190,6 +1246,67 @@ export default function App() {
     setOverlayDirty(true);
   };
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
+  const clonePlain = value => JSON.parse(JSON.stringify(value));
+  const currentTemplateState = () => ({
+    postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat,
+    headline, subtext, attribution, dateText,
+    selectedLogoId, logoPosition, logoSize,
+    imgT:clonePlain(imgT), typeLayouts:clonePlain(typeLayouts), fontSizes:clonePlain(fontSizes),
+    overlayLayers:clonePlain(overlayLayers),
+    imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
+  });
+  const templateThumb = () => {
+    const c = canvasRef.current; if (!c) return null;
+    draw();
+    const t = document.createElement("canvas");
+    t.width = 160; t.height = 160;
+    const x = t.getContext("2d");
+    x.fillStyle = B.whiteSmoke; x.fillRect(0,0,160,160);
+    const s = Math.min(160/c.width,160/c.height), dw=c.width*s, dh=c.height*s;
+    x.drawImage(c,(160-dw)/2,(160-dh)/2,dw,dh);
+    return t.toDataURL("image/jpeg",0.68);
+  };
+  const saveDesignTemplate = () => {
+    const name = (window.prompt("Template name", `Design template ${designTemplates.length + 1}`) || "").trim();
+    if (!name) return;
+    const thumb = templateThumb();
+    setDesignTemplates(prev => [{ id:"dt_" + Date.now().toString(36), name, thumb, state:currentTemplateState(), createdAt:Date.now() }, ...prev]);
+    saveOverlays();
+  };
+  const applyDesignTemplate = (template) => {
+    const s = template?.state; if (!s) return;
+    setPostType(s.postType || "photo_logo");
+    setDimensionId(s.dimensionId || "ig_square");
+    setBgColor(s.bgColor || "burnham");
+    setBgAlpha(s.bgAlpha ?? 1);
+    setTextColorId(s.textColorId || "auto");
+    setExportFormat(s.exportFormat || "png");
+    setHeadline(s.headline || "");
+    setSubtext(s.subtext || "");
+    setAttribution(s.attribution || "");
+    setDateText(s.dateText || "");
+    setSelectedLogoId(s.selectedLogoId || "p3-ivory");
+    setLogoPosition(s.logoPosition || "bottom-center");
+    setLogoSize(s.logoSize || "m");
+    setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
+    setTypeLayouts(s.typeLayouts || freshTypeLayouts());
+    setFontSizes(s.fontSizes || freshFontSizes());
+    const nextLayers=(s.overlayLayers || []).map(layer => ({ ...layer, uid:"ol_" + Math.random().toString(36).slice(2) }));
+    setOverlayLayers(nextLayers);
+    setSelOverlay(null);
+    setOverlayChromeVisible(false);
+    setPhotoSel(false);
+    setTextSelected(false);
+    if (s.imageSrc) {
+      setImage(s.imageSrc);
+      imgFrom(s.imageSrc).then(img=>setImageObj(img)).catch(()=>{});
+      setVideoObj(null);
+      setMediaKind("image");
+    }
+    setMarkTab((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary");
+    setOverlayDirty(false);
+  };
+  const deleteDesignTemplate = (id) => setDesignTemplates(prev => prev.filter(t => t.id !== id));
   const isOverride = (() => {
     const l = overlayLayers.find(x => x.uid === selOverlay);
     return dimensionId !== MASTER_DIM && !!l?.byDim?.[dimensionId];
@@ -1387,72 +1504,82 @@ export default function App() {
 
           <Sec label="Brand marks" summary={markTab.charAt(0).toUpperCase()+markTab.slice(1)}>
             {/* Logos, photo overlays and editable accessories */}
-            <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
+            <div style={{display:"flex",gap:6,marginBottom:markTab==="overlays"?8:10,alignItems:"center",flexWrap:"wrap"}}>
               {["primary","secondary","overlays","accessories"].map(g=>(
                 <Chip key={g} on={markTab===g} click={()=>setMarkTab(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
               ))}
-              {markTab==="overlays"&&(
-                <button onClick={()=>overlayInputRef.current?.click()} title="Upload an SVG/PNG"
-                  style={{marginLeft:"auto",padding:"6px 12px",background:B.burnham,border:"none",borderRadius:40,cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,color:"#fff",letterSpacing:0.3,whiteSpace:"nowrap"}}>＋ SVG</button>
-              )}
             </div>
-
             {!(["overlays","accessories"].includes(markTab))?(
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-                {LOGO_VARIANTS.filter(v=>v.group===markTab).map(v=>{
-                  const isSel = selectedLogoId===v.id;
-                  const isAuto = suggestedColor===v.color && !isSel && imageObj;
-                  return (
-                    <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
-                      title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
-                      style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
-                      <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
-                      <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
-                      {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
-                      {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ):(
               <>
-                <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
-                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Tap to add · tap again to remove</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:overlayLayers.length?10:0}}>
-                  {overlays.filter(o=>(o.category||"overlays")===markTab).map(o=>{
-                    const placed=overlayLayers.some(l=>l.assetId===o.id);
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                  {LOGO_VARIANTS.filter(v=>v.group===markTab).map(v=>{
+                    const isSel = selectedLogoId===v.id;
+                    const isAuto = suggestedColor===v.color && !isSel && imageObj;
                     return (
-                      <div key={o.id} style={{position:"relative"}}>
-                        <button aria-pressed={placed} onClick={()=>toggleOverlay(o)} title={`${o.name} — tap to ${placed?"remove":"add"}`}
-                          style={{width:"100%",aspectRatio:"1/1",borderRadius:8,border:`2px solid ${placed?B.tangerine:B.ash+"33"}`,background:placed?B.tangerine+"11":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,transition:"all 0.12s"}}>
-                          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain"}} />
-                          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
-                          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.tangerine,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
-                        </button>
-                        {!o.builtin&&(
-                          <button onClick={()=>{setOverlays(prev=>prev.filter(x=>x.id!==o.id));}} title="Remove from library"
-                            style={{position:"absolute",top:-6,left:-6,width:16,height:16,borderRadius:8,border:"none",background:B.jet,color:"#fff",fontSize:10,lineHeight:"16px",cursor:"pointer",padding:0}}>×</button>
-                        )}
-                      </div>
+                      <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
+                        title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
+                        style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
+                        <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
+                        <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
+                        {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
+                        {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                      </button>
                     );
                   })}
                 </div>
-
-                {overlayLayers.length>0&&(
-                  <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:8}}>
-                    {overlayLayers.map(l=>{
-                      const a=overlays.find(o=>o.id===l.assetId); const on=l.uid===selOverlay;
-                      return (
-                        <div key={l.uid} onClick={()=>{setSelOverlay(on?null:l.uid);setOverlayChromeVisible(!on);}}
-                          style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,cursor:"pointer",border:`1.5px solid ${on?B.tangerine:B.ash+"33"}`,background:on?B.tangerine+"11":"#fff"}}>
-                          <img src={a?.dataUrl||a?.src} alt="" style={{width:24,height:24,objectFit:"contain"}} />
-                          <span style={{flex:1,fontSize:12,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a?.name||"overlay"}</span>
-                          <button onClick={e=>{e.stopPropagation();deleteLayer(l.uid);}} style={{border:"none",background:"none",color:B.ash,fontSize:16,cursor:"pointer",padding:"0 2px"}}>×</button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[logoPosition]?.label||"Position"} · ${logoSize.toUpperCase()}`} />
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
+                  {[
+                    "top-left","top-center","top-right",
+                    "mid-left","center","mid-right",
+                    "bottom-left","bottom-center","bottom-right"
+                  ].map(pos=>{
+                    const on=logoPosition===pos;
+                    return(
+                      <button key={pos} aria-pressed={on} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
+                        style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
+                        <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
+                  {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
+                    <Chip key={s.id} on={logoSize===s.id} click={()=>setLogoSize(s.id)} sm>{s.label}</Chip>
+                  ))}
+                </div>
+              </>
+            ):(
+              <>
+                <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Tap to add or edit · × removes from canvas</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:overlayLayers.length?10:0}}>
+                  {overlays.filter(o=>(o.category||"overlays")===markTab).map(o=>{
+                    const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
+                    const placed=!!placedLayer;
+                    const selected=placedLayer?.uid===selOverlay;
+                    return (
+                      <div key={o.id} style={{position:"relative"}}>
+                        <button aria-pressed={placed} onClick={()=>{if(placedLayer){setSelOverlay(placedLayer.uid);setOverlayChromeVisible(true);}else toggleOverlay(o);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
+                          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`2px solid ${selected?B.tangerine:placed?B.burnham:B.ash+"33"}`,background:selected?B.tangerine+"0F":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,transition:"all 0.12s"}}>
+                          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.55}} />
+                          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
+                          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:selected?B.tangerine:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+                        </button>
+                        <button onClick={e=>{e.stopPropagation(); if(placedLayer) deleteLayer(placedLayer.uid); else if(!o.builtin) setOverlays(prev=>prev.filter(x=>x.id!==o.id));}} title={placed?"Remove from canvas":!o.builtin?"Remove from library":"Add this shape first"}
+                          style={{position:"absolute",top:-6,left:-6,width:18,height:18,borderRadius:9,border:"none",background:(placed||!o.builtin)?B.jet:B.ash,color:"#fff",fontSize:12,lineHeight:"18px",cursor:(placed||!o.builtin)?"pointer":"default",padding:0,opacity:(placed||!o.builtin)?1:0.35}}>×</button>
+                      </div>
+                    );
+                  })}
+                  {markTab==="overlays"&&(
+                    <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG overlay"
+                      style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`2px dashed ${B.ash}`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:700,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
+                      <span style={{fontSize:22,lineHeight:1}}>＋</span>
+                      Add new
+                    </button>
+                  )}
+                </div>
 
                 {(()=>{ const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null; return (
                   <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
@@ -1466,10 +1593,10 @@ export default function App() {
                     </div>
                     {selAsset?.category!=="accessories"&&<>
                       <div style={{display:"flex",gap:6,marginBottom:8}}>
-                        {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"overlay",l:"On top"}].map(({m,l})=>{
+                        {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"},{m:"overlay",l:"On top"}].map(({m,l})=>{
                           const on=(selLayer.mode||"frame")===m;
-                          return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Shape border as a solid colour on top":"Shape drawn as-is on top"}
-                            style={{flex:1,padding:"6px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>;
+                          return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Outer silhouette border only":m==="lineart"?"Keep internal stroke pattern and remove pale fills":"Shape drawn as-is on top"}
+                            style={{flex:1,padding:"6px 3px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{l}</button>;
                         })}
                       </div>
                       {(selLayer.mode==="outline")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
@@ -1479,6 +1606,15 @@ export default function App() {
                             style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
                         </div>
                         <Slider label="Weight" min={0.02} max={0.25} step={0.005} value={selLayer.outlineWidth??0.08} suffix={Math.round((selLayer.outlineWidth??0.08)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{outlineWidth:v})} />
+                      </div>}
+                      {(selLayer.mode==="lineart")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
+                        <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Line art colour</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
+                          {["burnham","whiteSmoke","tangerine","celadon","wisteria","jet"].map(key=>{const on=(selLayer.lineArtColor||"burnham")===key;return <button key={key} aria-label={`Line art ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{lineArtColor:key})}
+                            style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
+                        </div>
+                        <Slider label="Ink sensitivity" min={0.45} max={0.9} step={0.01} value={selLayer.lineArtThreshold??0.72} suffix={Math.round((selLayer.lineArtThreshold??0.72)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{lineArtThreshold:v})} />
+                        <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Use this for flower marks and patterned artwork: it keeps dark linework, removes pale fill, then recolours the strokes.</div>
                       </div>}
                     </>}
                     {selAsset?.category==="accessories"&&<>
@@ -1500,41 +1636,9 @@ export default function App() {
                   </div>
                 ); })()}
 
-                {overlayLayers.length>0&&(
-                  <button onClick={saveOverlays} disabled={!overlayDirty}
-                    style={{width:"100%",marginTop:8,padding:"10px",borderRadius:8,border:"none",cursor:overlayDirty?"pointer":"default",background:overlayDirty?B.burnham:`${B.ash}55`,color:"#fff",fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>
-                    {overlayDirty?(dimensionId===MASTER_DIM?"Save master placement":"Save "+dim.label+" override"):"Saved ✓"}
-                  </button>
-                )}
               </>
             )}
           </Sec>
-
-          {showLogoCtrl&&!(["overlays","accessories"].includes(markTab))&&(
-            <Sec label="Logo Placement" summary={`${LOGO_POSITIONS[logoPosition]?.label||"Position"} · ${logoSize.toUpperCase()}`}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
-                {[
-                  "top-left","top-center","top-right",
-                  "mid-left","center","mid-right",
-                  "bottom-left","bottom-center","bottom-right"
-                ].map(pos=>{
-                  const on=logoPosition===pos;
-                  return(
-                    <button key={pos} aria-pressed={on} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
-                      style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
-                      <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
-                {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
-                  <Chip key={s.id} on={logoSize===s.id} click={()=>setLogoSize(s.id)} sm>{s.label}</Chip>
-                ))}
-              </div>
-            </Sec>
-          )}
 
           {(postType==="quote"||postType==="text_post"||postType==="event"||hasFrameLayer||(mediaObj&&imgT.zoom<0.999))&&(
             <Sec label="Background" summary={curBg?.label}>
@@ -1560,6 +1664,35 @@ export default function App() {
               {bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
             </Sec>
           )}
+
+          {/* Final template save / reuse */}
+          <div style={{marginTop:12,padding:"12px",borderRadius:12,background:"#fff",border:`1px solid ${B.ash}44`}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:designTemplates.length?10:0}}>
+              <div>
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Before export</div>
+                <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginTop:2}}>Save this full design as a reusable template.</div>
+              </div>
+              <button onClick={saveDesignTemplate} title="Save this full design as a reusable template"
+                style={{border:"none",borderRadius:999,background:B.burnham,color:"#fff",cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"9px 12px",whiteSpace:"nowrap"}}>
+                Save template
+              </button>
+            </div>
+            {designTemplates.length>0&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                {designTemplates.slice(0,6).map(template=>(
+                  <div key={template.id} style={{position:"relative"}}>
+                    <button onClick={()=>applyDesignTemplate(template)} title={`Apply ${template.name}`}
+                      style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
+                      {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,textTransform:"uppercase"}}>Template</span>}
+                    </button>
+                    <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
+                      style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
+                    <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Export format */}
           <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8,alignItems:"center"}}>
@@ -1727,14 +1860,18 @@ function GuardrailTooltip({text}){
 function Sec({label,children,summary,defaultOpen=false}){
   const [open,setOpen]=useState(defaultOpen);
   const bodyId=`editor-section-${label.toLowerCase().replace(/[^a-z0-9]+/g,"-")}`;
-  return <section aria-label={label} style={{marginBottom:8,border:`1px solid ${B.ash}44`,borderRadius:11,background:"#fff",overflow:"hidden"}}>
+  return <section className="generator-section" aria-label={label} style={{marginBottom:8,border:`1px solid ${B.ash}44`,borderRadius:11,background:"#fff",overflow:"hidden"}}>
     <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={()=>setOpen(value=>!value)}
-      style={{width:"100%",minHeight:48,padding:"11px 13px",border:"none",background:open?`${B.whiteSmoke}77`:"#fff",display:"flex",alignItems:"center",gap:10,cursor:"pointer",textAlign:"left"}}>
+      style={{width:"100%",minHeight:48,padding:"11px 13px",border:"none",background:open?`${B.whiteSmoke}77`:"#fff",display:"flex",alignItems:"center",gap:10,cursor:"pointer",textAlign:"left",transition:"background-color 0.22s ease"}}>
       <span className="generator-section-label" style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.8,textTransform:"uppercase",color:open?B.burnham:B.ash,flex:"0 0 auto"}}>{label}</span>
       {summary&&<span style={{fontSize:11,fontFamily:FU.body,color:B.ash,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"right",marginLeft:"auto"}}>{summary}</span>}
-      <span aria-hidden="true" style={{fontSize:12,color:B.burnham,transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.18s ease",flex:"0 0 auto"}}>⌄</span>
+      <span aria-hidden="true" style={{fontSize:12,color:B.burnham,transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.24s cubic-bezier(.22,1,.36,1)",flex:"0 0 auto"}}>⌄</span>
     </button>
-    {open&&<div id={bodyId} style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>{children}</div>}
+    <div className="generator-section-body" data-open={open?"true":"false"} aria-hidden={!open} id={bodyId}>
+      <div className="generator-section-body-inner" style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>
+        {children}
+      </div>
+    </div>
   </section>;
 }
 function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"8px 13px":"10px 16px",minHeight:sm?36:40,borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
