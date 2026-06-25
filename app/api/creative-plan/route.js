@@ -134,6 +134,27 @@ Brand context: ${JSON.stringify(brandContext)}`;
 
   const userPrompt = `Post goal and reason: ${goal}\nAudience: ${audience || 'Not specified'}\nPreferred channel: ${channel}\nCreate the best editable starting composition.`;
 
+  // Default to a widely-available model; override with OPENAI_ART_DIRECTOR_MODEL.
+  const model = process.env.OPENAI_ART_DIRECTOR_MODEL || 'gpt-4o-mini';
+  // `reasoning` is only valid for reasoning models (o-series / gpt-5 family).
+  const isReasoning = /^(o\d|gpt-5)/i.test(model);
+  const payload = {
+    model,
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+      { role: 'user', content: [{ type: 'input_text', text: userPrompt }] },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'creative_plan',
+        strict: true,
+        schema: planSchema,
+      },
+    },
+  };
+  if (isReasoning) payload.reasoning = { effort: 'low' };
+
   let openAIResponse;
   try {
     openAIResponse = await fetch('https://api.openai.com/v1/responses', {
@@ -142,22 +163,7 @@ Brand context: ${JSON.stringify(brandContext)}`;
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_ART_DIRECTOR_MODEL || 'gpt-5.4-mini',
-        input: [
-          { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
-          { role: 'user', content: [{ type: 'input_text', text: userPrompt }] },
-        ],
-        reasoning: { effort: 'low' },
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'creative_plan',
-            strict: true,
-            schema: planSchema,
-          },
-        },
-      }),
+      body: JSON.stringify(payload),
     });
   } catch {
     return Response.json({ error: 'The AI service could not be reached. Please try again.' }, { status: 502 });
@@ -165,8 +171,10 @@ Brand context: ${JSON.stringify(brandContext)}`;
 
   const result = await openAIResponse.json().catch(() => ({}));
   if (!openAIResponse.ok) {
-    console.error('OpenAI creative plan error:', result?.error?.message || openAIResponse.statusText);
-    return Response.json({ error: 'The Art Director could not create a suggestion. Please try again.' }, { status: 502 });
+    const reason = result?.error?.message || openAIResponse.statusText;
+    console.error('OpenAI creative plan error:', reason);
+    // Surface the upstream reason so misconfig (bad key / model / quota) is debuggable.
+    return Response.json({ error: 'The Art Director could not create a suggestion.', detail: reason }, { status: 502 });
   }
 
   try {
