@@ -484,6 +484,29 @@ function drawFrameLayer(ctx, oc, shapeImg, photo, w, h, t, imgT) {
   ctx.restore();
 }
 
+// Outline mode: take only the shape's border (a ring) and paint it a solid
+// colour on top of the image. width = ring thickness as a fraction of scale.
+function drawOutlineLayer(ctx, oc, shapeImg, w, h, t, color, width) {
+  if (!shapeImg) return;
+  const o = oc.getContext("2d");
+  o.clearRect(0, 0, w, h);
+  o.globalCompositeOperation = "source-over";
+  // full solid silhouette (saturate alpha)
+  for (let i = 0; i < 8; i++) drawOverlayLayer(o, shapeImg, w, h, { ...t, opacity:1 });
+  // knock out an inset silhouette → leaves an outer ring (the outline)
+  const inner = { ...t, scale:(t.scale ?? 0.2) * Math.max(0, 1 - (width ?? 0.08) * 2) };
+  o.globalCompositeOperation = "destination-out";
+  for (let i = 0; i < 8; i++) drawOverlayLayer(o, shapeImg, w, h, { ...inner, opacity:1 });
+  // fill the ring with the chosen solid colour
+  o.globalCompositeOperation = "source-in";
+  o.fillStyle = color || "#F6644E"; o.fillRect(0, 0, w, h);
+  o.globalCompositeOperation = "source-over";
+  ctx.save();
+  ctx.globalAlpha = t.opacity ?? 1;
+  ctx.drawImage(oc, 0, 0);
+  ctx.restore();
+}
+
 async function sGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } }
 async function sSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) { console.error("Storage error:", e); } }
 async function sDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
@@ -523,7 +546,6 @@ export default function App() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [savedVideos, setSavedVideos] = useState([]);      // [{id,name,createdAt}]
   const videoInputRef = useRef(null);
-  const mediaSvgInputRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
@@ -818,7 +840,7 @@ export default function App() {
       return deriveFromMaster(layer.master,a?.kind||"center",a?.ratio||1,w,h);
     };
     const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
-    const topLayers=overlayLayers.filter(l=>(l.mode||"frame")==="overlay"&&overlayImgs.current[l.assetId]);
+    const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
     const layout=typeLayouts[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
     const safe=0.08,bw=Math.min(layout.width||0.76,1-safe*2)*w;
@@ -873,10 +895,15 @@ export default function App() {
     }
 
     // ── Overlay-mode layers (drawn on top of everything) ──
+    const ocv = topLayers.some(l=>(l.mode==="outline")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
     topLayers.forEach(layer => {
       const img = overlayImgs.current[layer.assetId];
       if (!img) return;
       const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
+      if(layer.mode==="outline"){
+        drawOutlineLayer(ctx,ocv,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);
+        return;
+      }
       if(asset?.category==="accessories"){
         const colorId=t.colorId||"auto";
         const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;
@@ -1103,7 +1130,13 @@ export default function App() {
     setOverlayDirty(true);
   };
   const setLayerMode = (uid, mode) => {
-    setOverlayLayers(prev => prev.map(l => l.uid === uid ? { ...l, mode } : l));
+    setOverlayLayers(prev => prev.map(l => l.uid === uid
+      ? { ...l, mode, ...(mode==="outline" ? { outlineColor:l.outlineColor||"tangerine", outlineWidth:l.outlineWidth??0.08 } : {}) }
+      : l));
+    setOverlayDirty(true);
+  };
+  const setLayerStyle = (uid, patch) => {
+    setOverlayLayers(prev => prev.map(l => l.uid === uid ? { ...l, ...patch } : l));
     setOverlayDirty(true);
   };
   const updateLayerT = (uid, patch) => {
@@ -1273,15 +1306,6 @@ export default function App() {
                 </div>}
               </>
             )}
-
-            {/* Frames & overlays — upload an SVG straight from Media */}
-            <EditorSubhead label="Frames & overlays" summary={overlayLayers.length?`${overlayLayers.length} placed`:"SVG shapes"} />
-            <input ref={mediaSvgInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f){uploadOverlay(f);setMarkTab("overlays");}e.target.value="";}} style={{display:"none"}} />
-            <button onClick={()=>mediaSvgInputRef.current?.click()}
-              style={{width:"100%",padding:"10px 12px",background:"transparent",border:`1.5px dashed ${B.burnham}66`,borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-              ＋ Upload SVG frame / overlay
-            </button>
-            <div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Frames clip your photo into a shape. Pick &amp; place uploaded shapes under <strong style={{fontWeight:600,color:B.burnham}}>Brand marks → Overlays</strong>.</div>
           </Sec>
 
           {/* Content fields appear right under the type when the type needs text */}
@@ -1440,13 +1464,23 @@ export default function App() {
                         {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
                       </button>
                     </div>
-                    {selAsset?.category!=="accessories"&&<div style={{display:"flex",gap:6,marginBottom:8}}>
-                      {[{m:"frame",l:"Frame photo"},{m:"overlay",l:"On top"}].map(({m,l})=>{
-                        const on=(selLayer.mode||"frame")===m;
-                        return <button key={m} onClick={()=>setLayerMode(selOverlay,m)}
-                          style={{flex:1,padding:"6px 8px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>;
-                      })}
-                    </div>}
+                    {selAsset?.category!=="accessories"&&<>
+                      <div style={{display:"flex",gap:6,marginBottom:8}}>
+                        {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"overlay",l:"On top"}].map(({m,l})=>{
+                          const on=(selLayer.mode||"frame")===m;
+                          return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Shape border as a solid colour on top":"Shape drawn as-is on top"}
+                            style={{flex:1,padding:"6px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>;
+                        })}
+                      </div>
+                      {(selLayer.mode==="outline")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
+                        <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Outline colour</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
+                          {["tangerine","burnham","whiteSmoke","celadon","wisteria","jet"].map(key=>{const on=(selLayer.outlineColor||"tangerine")===key;return <button key={key} aria-label={`Outline ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{outlineColor:key})}
+                            style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
+                        </div>
+                        <Slider label="Weight" min={0.02} max={0.25} step={0.005} value={selLayer.outlineWidth??0.08} suffix={Math.round((selLayer.outlineWidth??0.08)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{outlineWidth:v})} />
+                      </div>}
+                    </>}
                     {selAsset?.category==="accessories"&&<>
                       <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Accessory colour</div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
