@@ -146,6 +146,30 @@ const TYPE_LAYOUT_DEFAULTS = {
 };
 const freshTypeLayouts=()=>Object.fromEntries(Object.entries(TYPE_LAYOUT_DEFAULTS).map(([key,value])=>[key,{...value}]));
 
+// Per-category font sizing. Each text element has a role; the user picks a size step per role.
+const FONT_SIZE_STEPS=[
+  {id:"xs",label:"XS",mult:0.7},
+  {id:"s", label:"S", mult:0.85},
+  {id:"m", label:"M", mult:1},
+  {id:"l", label:"L", mult:1.25},
+  {id:"xl",label:"XL",mult:1.55},
+];
+const FONT_ROLES=[
+  {id:"heading",   label:"Heading"},
+  {id:"subheading",label:"Subheading"},
+  {id:"content",   label:"Content"},
+  {id:"highlight", label:"Highlight"},
+];
+// Which roles each post type actually uses (drives the controls shown)
+const TYPE_TEXT_ROLES={
+  quote:["heading","content"],
+  event:["subheading","heading","content"],
+  text_post:["subheading","heading","content"],
+  texture_text:["highlight"],
+};
+const freshFontSizes=()=>({heading:"m",subheading:"m",content:"m",highlight:"m"});
+const fontMultOf=(fontSizes,role)=>FONT_SIZE_STEPS.find(s=>s.id===((fontSizes&&fontSizes[role])||"m"))?.mult??1;
+
 /* ───────── TWO LOGO SYSTEM ───────── */
 const LOGO_VARIANTS = [
   // Primary
@@ -519,6 +543,8 @@ export default function App() {
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
+  const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
+  const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
 
   // TWO Logo system
@@ -799,6 +825,7 @@ export default function App() {
     const by=Math.max(safe,Math.min(0.82,layout.y??0.18))*h;
     const maxTextH=Math.max(h*0.16,h*(1-safe)-by);
     const align=layout.align||"left",scale=layout.scale||1,lineRatio=layout.lineHeight||1.16;
+    const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
     const setTextBounds=used=>{textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     if(postType==="photo_logo")textBoundsRef.current=null;
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -814,34 +841,34 @@ export default function App() {
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
-      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale,bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
+      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
       ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
-      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale,bw,Math.max(58*S,maxTextH-used-gap),1.2,28*S);ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,28*S);ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
       setTextBounds(used);
       endText();
       putLogo();
     }else if(postType==="event"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}}
       beginText();ctx.fillStyle=tc;let used=0;
-      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale,bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
-      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale,bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;used+=drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);if(rest){ctx.font=`600 ${36*S*scale}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale,align);ctx.letterSpacing="0px";}}
-      if(subtext){const gap=Math.max(36*S,used?44*S:0),sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale,bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
+      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;used+=drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);if(rest){ctx.font=`600 ${36*S*scale*fm("subheading")}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale*fm("subheading"),align);ctx.letterSpacing="0px";}}
+      if(subtext){const gap=Math.max(36*S,used?44*S:0),sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
       setTextBounds(used);
       endText();
       putLogo();
     }else if(postType==="text_post"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
       beginText();ctx.fillStyle=tc;let used=0;
-      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale,bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
-      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale,bw,Math.max(remaining,150*S),1.08,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}
-      if(attribution){const gap=Math.max(36*S,48*S),af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale,bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}
+      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
+      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}
+      if(attribution){const gap=Math.max(36*S,48*S),af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}
       setTextBounds(used);
       endText();
       putLogo();
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
-      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale,bw,maxTextH,lineRatio,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else setTextBounds(h*0.12);
+      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else setTextBounds(h*0.12);
     }
 
     // ── Overlay-mode layers (drawn on top of everything) ──
@@ -856,7 +883,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit,typeLayouts]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,fontSizes]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
 
@@ -1262,6 +1289,28 @@ export default function App() {
                 </div>
                 <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
               </div>
+
+              {/* Font size per text category */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
+                <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
+              </div>
+              {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
+                const meta=FONT_ROLES.find(r=>r.id===role);
+                return (
+                  <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+                    <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
+                    <div style={{display:"flex",gap:4,flex:1}}>
+                      {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
+                        <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
+                          style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+                      );})}
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{height:10}} />
+
               <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
               <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
               <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
