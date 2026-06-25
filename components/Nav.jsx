@@ -26,6 +26,10 @@ export default function Nav({ section }) {
             borderBottom: 'none',
             letterSpacing: 0,
             transition: 'color 140ms',
+            display: 'inline-flex',
+            alignItems: 'center',
+            minHeight: 44,
+            padding: '0 4px',
           }}>
             {label}
           </Link>
