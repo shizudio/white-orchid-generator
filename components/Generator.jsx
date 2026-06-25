@@ -523,6 +523,7 @@ export default function App() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [savedVideos, setSavedVideos] = useState([]);      // [{id,name,createdAt}]
   const videoInputRef = useRef(null);
+  const mediaSvgInputRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
@@ -1272,6 +1273,15 @@ export default function App() {
                 </div>}
               </>
             )}
+
+            {/* Frames & overlays — upload an SVG straight from Media */}
+            <EditorSubhead label="Frames & overlays" summary={overlayLayers.length?`${overlayLayers.length} placed`:"SVG shapes"} />
+            <input ref={mediaSvgInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f){uploadOverlay(f);setMarkTab("overlays");}e.target.value="";}} style={{display:"none"}} />
+            <button onClick={()=>mediaSvgInputRef.current?.click()}
+              style={{width:"100%",padding:"10px 12px",background:"transparent",border:`1.5px dashed ${B.burnham}66`,borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              ＋ Upload SVG frame / overlay
+            </button>
+            <div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Frames clip your photo into a shape. Pick &amp; place uploaded shapes under <strong style={{fontWeight:600,color:B.burnham}}>Brand marks → Overlays</strong>.</div>
           </Sec>
 
           {/* Content fields appear right under the type when the type needs text */}
@@ -1693,7 +1703,7 @@ function Sec({label,children,summary,defaultOpen=false}){
     {open&&<div id={bodyId} style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>{children}</div>}
   </section>;
 }
-function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"5px 12px":"7px 16px",borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
+function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"8px 13px":"10px 16px",minHeight:sm?36:40,borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
 function In({mt,...p}){return<input aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
 function Area(p){return<textarea aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
 function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input aria-label={label} type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
