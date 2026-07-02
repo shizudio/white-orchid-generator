@@ -549,6 +549,82 @@ function drawPhotoFramed(ctx, img, w, h, t) {
   ctx.restore();
 }
 
+/* ───────── SMART CROP / FOCAL POINT (design spec §4) ─────────
+   Pure heuristic saliency on a downsampled grid — no ML. Cached per image source
+   in a WeakMap so estimation runs once per image load, never per frame. */
+const focalCache=new WeakMap();
+function estimateFocalPoint(img){
+  if(!img)return{fx:0.5,fy:0.38,confidence:0,band:[0.2,0.6]};
+  const cached=focalCache.get(img);if(cached)return cached;
+  let result={fx:0.5,fy:0.38,confidence:0,band:[0.2,0.6]};
+  try{
+    const N=40,c=document.createElement("canvas");c.width=N;c.height=N;
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    const {iw,ih}=srcDims(img);if(!iw||!ih){focalCache.set(img,result);return result;}
+    ctx.drawImage(img,0,0,N,N);
+    const d=ctx.getImageData(0,0,N,N).data;
+    // Precompute luminance grid (0..1) for local-contrast neighbourhoods.
+    const lum=new Float32Array(N*N);
+    for(let i=0;i<N*N;i++){const p=i*4;lum[i]=getLuminance(d[p],d[p+1],d[p+2]);}
+    const scores=new Float32Array(N*N);
+    let sumS=0,sfx=0,sfy=0;const all=[];
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+      const i=y*N+x,p=i*4,r=d[p],g=d[p+1],b=d[p+2];
+      // Skin-tone probability (YCbCr band, spec §4.1).
+      const Y=0.299*r+0.587*g+0.114*b, Cb=128-0.168736*r-0.331264*g+0.5*b, Cr=128+0.5*r-0.418688*g-0.081312*b;
+      let Sc=0;
+      if(Y>=40&&Y<=250){
+        const cbC=(77+127)/2,crC=(133+173)/2,cbH=(127-77)/2,crH=(173-133)/2;
+        const inCb=Cb>=77&&Cb<=127,inCr=Cr>=133&&Cr<=173;
+        if(inCb&&inCr)Sc=1;
+        else{const dc=Math.max(0,(Math.abs(Cb-cbC)-cbH)/cbH),dr=Math.max(0,(Math.abs(Cr-crC)-crH)/crH);const dist=Math.max(dc,dr);Sc=dist<0.15?Math.max(0,1-dist/0.15):0;}
+      }
+      // Local contrast: stddev of luminance in a 3x3 neighbourhood.
+      let n=0,m=0,m2=0;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const yy=y+dy,xx=x+dx;if(yy<0||xx<0||yy>=N||xx>=N)continue;const v=lum[yy*N+xx];m+=v;m2+=v*v;n++;}
+      m/=n;const varr=Math.max(0,m2/n-m*m),C=Math.min(1,Math.sqrt(varr)/0.25);
+      // Rule-of-thirds prior.
+      const fx=x/(N-1),fy=y/(N-1);let T=0;
+      for(const [ix,iy] of [[1/3,1/3],[2/3,1/3],[1/3,2/3],[2/3,2/3]]){const dd=(fx-ix)*(fx-ix)+(fy-iy)*(fy-iy);T=Math.max(T,Math.exp(-dd/(2*0.12*0.12)));}
+      if(fy>=0.30&&fy<=0.45)T+=0.15;
+      const Score=0.5*Sc+0.3*C+0.2*Math.min(1,T);
+      scores[i]=Score;sumS+=Score;sfx+=Score*fx;sfy+=Score*fy;all.push({fy,Score});
+    }
+    if(sumS>0){
+      const fx=sfx/sumS,fy=sfy/sumS;
+      // Subject bounding band: smallest y-range holding >=70% of score mass.
+      const rows=new Float32Array(N);for(let y=0;y<N;y++){let s=0;for(let x=0;x<N;x++)s+=scores[y*N+x];rows[y]=s;}
+      // Confidence: top 15% cells share of total score.
+      const sorted=[...scores].sort((a,b)=>b-a);const top=Math.max(1,Math.floor(N*N*0.15));let topSum=0;for(let k=0;k<top;k++)topSum+=sorted[k];
+      const confidence=topSum/sumS;
+      // Band via expanding around the centroid row until 70% mass captured.
+      let cRow=Math.round(fy*(N-1)),lo=cRow,hi=cRow,mass=rows[cRow];const target=0.70*sumS;
+      while(mass<target&&(lo>0||hi<N-1)){const nlo=lo>0?rows[lo-1]:-1,nhi=hi<N-1?rows[hi+1]:-1;if(nhi>=nlo){hi++;mass+=rows[hi];}else{lo--;mass+=rows[lo];}}
+      const bh=(hi-lo)/(N-1);const pad=bh*0.10;const bandLo=Math.max(0,lo/(N-1)-pad),bandHi=Math.min(1,hi/(N-1)+pad);
+      result={fx,fy,confidence,band:[bandLo,bandHi]};
+    }
+  }catch(_){/* fall through to default */}
+  focalCache.set(img,result);
+  return result;
+}
+
+// Given a target aspect and a per-format focal target, compute a cover-crop
+// imgT {zoom,cx,cy} that lands the focal point at (target_fx,target_fy) within
+// the frame, clamped so the image still covers (spec §4.2). userZoom carries the
+// user's master zoom through where it still covers.
+function focalToImgT(img,w,h,focal,targetFx,targetFy,userZoom=1){
+  const {iw,ih}=srcDims(img);if(!iw||!ih)return{zoom:userZoom,cx:0.5,cy:0.5,rotation:0};
+  // photoGeom uses s = max(w/iw,h/ih)*zoom and clamps center in canvas coords.
+  // We want the source focal point (focal.fx,focal.fy) to appear at (targetFx,targetFy).
+  // In canvas-normalized center coords: cx is image center. The image spans dw=iw*s.
+  // Point at source-fraction fx maps to canvas x = imgCenterX + (fx-0.5)*dw.
+  // Solve imgCenterX so that x = targetFx*w  →  cx_px = targetFx*w - (fx-0.5)*dw.
+  const s=Math.max(w/iw,h/ih)*(userZoom||1),dw=iw*s,dh=ih*s;
+  const cxPx=targetFx*w-(focal.fx-0.5)*dw, cyPx=targetFy*h-(focal.fy-0.5)*dh;
+  // Return normalized center; photoGeom re-clamps to guarantee coverage.
+  return {zoom:userZoom||1,cx:cxPx/w,cy:cyPx/h,rotation:0};
+}
+
 /* ───────── OVERLAY ASSETS ───────── */
 const MASTER_DIM = "ig_square"; // square is the master; other formats cascade from it
 
@@ -849,6 +925,9 @@ export default function App() {
 
   // Photo reframe: normalized focal point + zoom (cover-fill, clamped no-gap)
   const [imgT, setImgT] = useState({ zoom:1, cx:0.5, cy:0.5, rotation:0 });
+  // Per-dimension manual photo overrides {dimId:{...imgT}} — written only when the
+  // user drags/zooms the photo while a non-master dimension is active (spec §4).
+  const [imgTByDim, setImgTByDim] = useState({});
   const [photoSel, setPhotoSel] = useState(false);   // photo selected → show transform handles
   const [mediaKind, setMediaKind] = useState("image"); // image | video
   const [markTab, setMarkTab] = useState("primary");   // primary | secondary | overlays
@@ -930,6 +1009,32 @@ export default function App() {
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
+  // Effective photo transform for the CURRENT dimension (drag/handles/UI use this).
+  // MASTER_DIM → master imgT; a per-dim manual override wins; otherwise the auto
+  // smart-crop transform so the editor baseline matches what renderScene draws
+  // (no jump when the user starts dragging on a non-master format).
+  const autoPhotoT = (() => {
+    if(dimensionId===MASTER_DIM||!imageObj) return imgT;
+    const fmt=formatLayoutFor(dimensionId,postType);
+    const focal=estimateFocalPoint(imageObj);
+    const textLeft=fmt.textZone.align==="left"&&(fmt.sideBySide||["twitter","facebook","banner"].includes(dimensionId));
+    const targetFx=fmt.sideBySide?0.50:(textLeft?0.66:0.50);
+    const targetFy=focal.confidence<0.35?0.38:Math.max(0.30,Math.min(0.55,(focal.band[0]+focal.band[1])/2));
+    const uz=(imgT.zoom&&imgT.zoom!==1)?imgT.zoom:1;
+    const f=focal.confidence<0.35?{...focal,fx:0.5,fy:0.38}:focal;
+    return {...focalToImgT(imageObj,W,H,f,targetFx,targetFy,uz),rotation:imgT.rotation||0};
+  })();
+  const photoT = dimensionId===MASTER_DIM ? imgT : (imgTByDim[dimensionId] || autoPhotoT);
+  // Apply a photo-transform patch to the right target (master vs per-dim override).
+  const setPhotoT = (patchOrFn) => {
+    if(dimensionId===MASTER_DIM){ setImgT(patchOrFn); return; }
+    setImgTByDim(prev=>{
+      const base=prev[dimensionId]||imgT;
+      const patch=typeof patchOrFn==="function"?patchOrFn(base):patchOrFn;
+      return {...prev,[dimensionId]:{...base,...patch}};
+    });
+  };
+
   // Effective layout for the CURRENT dimension (spec resolution rule).
   const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim);
   // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
@@ -1080,7 +1185,7 @@ export default function App() {
   }, [selectedLogoId, selectedLogoVariant]);
 
   /* ── Reset reframe when a new photo/video loads ── */
-  useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setPhotoSel(false); }, [imageObj, videoObj]);
+  useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setImgTByDim({}); setPhotoSel(false); }, [imageObj, videoObj]);
 
   // Accessibility director: whenever the image, background, format or template
   // changes, find quiet regions, avoid text/logo collisions, and apply the
@@ -1254,17 +1359,38 @@ export default function App() {
     // right band, text the left. photoBox constrains the photo draw region.
     const sideFrac=fmt.sideBySide;   // undefined unless a wide photo layout
     const photoBox=sideFrac?{x:sideFrac*w,y:0,w:(1-sideFrac)*w,h}:null;
-    // Photo draw respecting an optional side-by-side band. The photo is
-    // cover-fitted to the band so the subject fills it (smart-crop lands the
-    // focal point within, added in commit 3).
+    // Effective photo transform for this dimension (spec §4 smart crop):
+    //   MASTER_DIM         → user's master imgT (verbatim)
+    //   user per-dim edit  → that override (manual drag/zoom on this format)
+    //   otherwise          → auto focal placement: land the subject at the format's
+    //                        target rule-of-thirds x (text-left wide → 0.66; else
+    //                        centre 0.50), fy = subject band centre clamped [0.30,0.55],
+    //                        carrying the master zoom. Estimation is cached per image.
+    const effImgTFor=(pw,ph,isSideBand)=>{
+      if(dimId===MASTER_DIM)return imgT;
+      if(imgTByDim[dimId])return imgTByDim[dimId];
+      if(!mediaObj)return imgT;
+      const focal=estimateFocalPoint(mediaObj);
+      // Text-left wide layout → subject biased right (0.66). Side-band photo is
+      // already isolated to the right, so centre the subject inside the band.
+      const textLeft=fmt.textZone.align==="left"&&(fmt.sideBySide||["twitter","facebook","banner"].includes(dimId));
+      const targetFx=isSideBand?0.50:(textLeft?0.66:0.50);
+      let targetFy;
+      if(focal.confidence<0.35)targetFy=0.38;                 // low-confidence fallback (spec §4.3)
+      else targetFy=Math.max(0.30,Math.min(0.55,(focal.band[0]+focal.band[1])/2));
+      const uz=(imgT.zoom&&imgT.zoom!==1)?imgT.zoom:1;         // carry a sane master zoom
+      const t=focalToImgT(mediaObj,pw,ph,focal.confidence<0.35?{...focal,fx:0.5,fy:0.38}:focal,targetFx,targetFy,uz);
+      return {...t,rotation:imgT.rotation||0};
+    };
+    // Photo draw respecting an optional side-by-side band + smart-crop transform.
     const drawPhoto=()=>{
       if(!mediaObj)return;
       if(photoBox){
         ctx.save();ctx.beginPath();ctx.rect(photoBox.x,photoBox.y,photoBox.w,photoBox.h);ctx.clip();
         ctx.translate(photoBox.x,photoBox.y);
-        drawPhotoFramed(ctx,mediaObj,photoBox.w,photoBox.h,imgT);
+        drawPhotoFramed(ctx,mediaObj,photoBox.w,photoBox.h,effImgTFor(photoBox.w,photoBox.h,true));
         ctx.restore();
-      }else drawPhotoFramed(ctx,mediaObj,w,h,imgT);
+      }else drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
     };
     // Backdrop treatment behind a text zone on a photo (spec §2/§3/§5). box in px.
     // Returns the resolved text color id override when auto quiet-region flips it
@@ -1312,7 +1438,7 @@ export default function App() {
         beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
       }else if(live){textBoundsRef.current=null;}
     }else if(postType==="quote"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
       ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
@@ -1324,7 +1450,7 @@ export default function App() {
     }else if(postType==="event"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){
         if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
-        else{drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
+        else{drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
       }}
       if(mediaObj&&!hasFrame&&!photoBox)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
@@ -1339,7 +1465,7 @@ export default function App() {
       endText();
       putLogo();
     }else if(postType==="text_post"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
       if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
@@ -1349,7 +1475,7 @@ export default function App() {
       endText();
       putLogo();
     }else if(postType==="texture_text"){
-      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
+      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       putLogo();
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);
@@ -1380,7 +1506,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -1517,7 +1643,7 @@ export default function App() {
   // Photo handles in display (screen) px: 4 rotated corners + a rotate knob + center.
   const photoHandles = (rect) => {
     if (!mediaObj) return null;
-    const g = photoGeom(mediaObj, W, H, imgT);
+    const g = photoGeom(mediaObj, W, H, photoT);
     if (!g) return null;
     const k = rect.width / W;                            // display px per export px
     const toD = (px,py) => ({ x:rect.left + px*k, y:rect.top + py*k });
@@ -1564,17 +1690,17 @@ export default function App() {
     // Rotate + resize handles only active once the photo is selected.
     if (photoSel && near(hp.rotKnob)) {
       const a0 = Math.atan2(e.clientY-hp.centerD.y, e.clientX-hp.centerD.x);
-      dragRef.current = { mode:"rotate", a0, startRot:imgT.rotation||0, cD:hp.centerD };
+      dragRef.current = { mode:"rotate", a0, startRot:photoT.rotation||0, cD:hp.centerD };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     if (photoSel && hp.corners.some(near)) {
       const startDist = Math.hypot(e.clientX-hp.centerD.x, e.clientY-hp.centerD.y) || 1;
-      dragRef.current = { mode:"resize", startDist, startZoom:imgT.zoom, cD:hp.centerD };
+      dragRef.current = { mode:"resize", startDist, startZoom:photoT.zoom, cD:hp.centerD };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     if (pointInPhoto(hp, e.clientX, e.clientY)) {
       setPhotoSel(true); setSelOverlay(null);
-      dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:imgT.cx, cy:imgT.cy, rect };
+      dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:photoT.cx, cy:photoT.cy, rect };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     // clicked empty space → deselect
@@ -1603,7 +1729,7 @@ export default function App() {
       const snap = Math.round(deg/45)*45;
       if (Math.abs(deg - snap) < 6) deg = snap;
       deg = ((deg % 360) + 360) % 360; if (deg > 180) deg -= 360;
-      setImgT(t => ({ ...t, rotation:Math.round(deg*10)/10 }));
+      setPhotoT(t => ({ ...t, rotation:Math.round(deg*10)/10 }));
       return;
     }
     if (d.mode === "resize") {
@@ -1611,7 +1737,7 @@ export default function App() {
       let z = Math.max(0.1, Math.min(6, d.startZoom * (dist / d.startDist)));
       // soft-lock to common sizes
       for (const s of [0.25,0.5,0.75,1,1.5,2]) { if (Math.abs(z-s) < 0.025) { z = s; break; } }
-      setImgT(t => ({ ...t, zoom:z }));
+      setPhotoT(t => ({ ...t, zoom:z }));
       return;
     }
     if (d.mode === "photomove") {
@@ -1620,7 +1746,7 @@ export default function App() {
       // soft-lock to centered
       if (Math.abs(cx-0.5) < 0.02) cx = 0.5;
       if (Math.abs(cy-0.5) < 0.02) cy = 0.5;
-      setImgT(t => ({ ...t, cx, cy }));
+      setPhotoT(t => ({ ...t, cx, cy }));
     }
   };
   const onPanEnd = () => {
@@ -1629,7 +1755,7 @@ export default function App() {
     if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusPrimaryText();
     dragRef.current = null;
   };
-  const setZoom = (z) => setImgT(t => ({ ...t, zoom:z }));
+  const setZoom = (z) => setPhotoT(t => ({ ...t, zoom:z }));
 
   /* ── Overlay assets: upload, place, transform, save ── */
   const assetFor = (uid) => {
@@ -1706,16 +1832,16 @@ export default function App() {
         updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,textLayout.x+dx*step)),y:Math.max(0.08,Math.min(0.82,textLayout.y+dy*step))});
       } else if (canPan) {
         setPhotoSel(true);
-        setImgT(t => ({ ...t, cx:t.cx+dx*step, cy:t.cy+dy*step }));
+        setPhotoT(t => ({ ...t, cx:t.cx+dx*step, cy:t.cy+dy*step }));
       }
       return;
     }
     if (!canPan || selOverlay || textSelected) return;
     if (["+","=","-","_","[","]"].includes(e.key)) e.preventDefault();
-    if (e.key === "+" || e.key === "=") setImgT(t => ({ ...t, zoom:Math.min(6,t.zoom+0.05) }));
-    if (e.key === "-" || e.key === "_") setImgT(t => ({ ...t, zoom:Math.max(0.1,t.zoom-0.05) }));
-    if (e.key === "[") setImgT(t => ({ ...t, rotation:(t.rotation||0)-1 }));
-    if (e.key === "]") setImgT(t => ({ ...t, rotation:(t.rotation||0)+1 }));
+    if (e.key === "+" || e.key === "=") setPhotoT(t => ({ ...t, zoom:Math.min(6,t.zoom+0.05) }));
+    if (e.key === "-" || e.key === "_") setPhotoT(t => ({ ...t, zoom:Math.max(0.1,t.zoom-0.05) }));
+    if (e.key === "[") setPhotoT(t => ({ ...t, rotation:(t.rotation||0)-1 }));
+    if (e.key === "]") setPhotoT(t => ({ ...t, rotation:(t.rotation||0)+1 }));
   };
   const resetLayer = (uid) => {
     setOverlayLayers(prev => prev.map(l => {
@@ -1738,7 +1864,7 @@ export default function App() {
     postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize,
-    imgT:clonePlain(imgT), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
+    imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
     overlayLayers:clonePlain(overlayLayers),
     imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
   });
@@ -1780,6 +1906,7 @@ export default function App() {
     // (If it didn't, format defaults would apply — starter templates always do.)
     setUserLogoTouched(true);
     setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
+    setImgTByDim(s.imgTByDim || {});
     setTypeLayouts(s.typeLayouts || freshTypeLayouts());
     setTypeLayoutsByDim(s.typeLayoutsByDim || {});
     setFontSizes(s.fontSizes || freshFontSizes());
@@ -1949,11 +2076,11 @@ export default function App() {
                 <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
                 {mediaObj&&<>
                   <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
-                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
-                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
-                    <button onClick={()=>{setPhotoSel(true);setImgT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
-                    <button onClick={()=>{setImgT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
+                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
+                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
+                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
+                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
+                    <button onClick={()=>{setPhotoT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
                   </div>
                   <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
                 </>}
@@ -2291,7 +2418,7 @@ export default function App() {
                 style={{position:"absolute",inset:0,width:"100%",height:"100%",display:"block",borderRadius:8,boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:canPan?(dragRef.current?"grabbing":"grab"):"default",touchAction:"none"}} />
               <EditorChrome
                 width={W} height={H} scale={editorScale}
-                photo={photoSel && !selOverlay && canPan && mediaObj ? photoGeom(mediaObj,W,H,imgT) : null}
+                photo={photoSel && !selOverlay && canPan && mediaObj ? photoGeom(mediaObj,W,H,photoT) : null}
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
