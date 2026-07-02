@@ -778,6 +778,30 @@ canvas[role="application"]:focus-visible {
     margin-bottom: 6px !important;
   }
 
+  /* Keep the format strip a single compact scrollable row inside the
+     sticky panel — wrapping thumbs blew the footprint cap on mobile. */
+  .generator-format-strip {
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-top: 8px !important;
+    gap: 8px !important;
+    scrollbar-width: none;
+  }
+  .generator-format-strip::-webkit-scrollbar { display: none; }
+  .generator-format-strip canvas,
+  .generator-format-strip img {
+    max-height: 40px !important;
+    width: auto !important;
+  }
+  /* Thumb + highlight carries the meaning on mobile; labels cost too
+     much sticky height. */
+  .generator-format-strip span,
+  .generator-format-strip figcaption {
+    display: none !important;
+  }
+
   .generator-controls {
     order: 2;
     width: 100%;
