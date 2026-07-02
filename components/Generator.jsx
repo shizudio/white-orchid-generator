@@ -174,24 +174,21 @@ function drawSolidBand(ctx,w,h,textBox,color,opacity=0.92){
 }
 
 // Quiet-region check under a text zone (spec §3). Samples a 6×6 luminance/variance
-// grid over the zone (+10% margin). Returns whether the region is quiet+legible
-// for the given resolved text colour, plus the recommended backdrop treatment.
+// grid over the zone (+10% margin) FROM THE ALREADY-RENDERED CANVAS, so it reflects
+// the actual per-dimension smart-crop, any brand tint, and side-by-side panels —
+// not a naive centered cover-fit (which mismatched the shifted banner/wide crops
+// and was a cause of the dark-text-on-dark-hair miss). Returns quiet+legible mode.
 // mode: "skip" (no scrim, shadow only) | "reduced" (0.20 peak) | "full" (0.45/0.55).
-function analyzeQuietRegion(source,zone,tc){
-  const light=hexLuminance(tc)>0.5;   // light text
+function analyzeQuietRegion(srcCtx,zone,tc){
   try{
     const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
     const ctx=c.getContext("2d",{willReadFrequently:true});
-    const {iw,ih}=srcDims(source);if(!iw||!ih)return{mode:"full"};
-    // Map the zone (canvas-fraction) onto the source cover-fit region.
-    const cw=zone.cw,ch=zone.ch;// canvas dims
-    const s=Math.max(cw/iw,ch/ih);const dw=iw*s,dh=ih*s;const ox=(cw-dw)/2,oy=(ch-dh)/2;
-    // zone in canvas px, +10% margin
+    // zone in canvas px, +10% margin, clamped to the canvas.
     const mx=zone.w*0.10,my=zone.h*0.10;
-    const zx=zone.x-mx,zy=zone.y-my,zw=zone.w+mx*2,zh=zone.h+my*2;
-    // → source px
-    const sx=(zx-ox)/s,sy=(zy-oy)/s,sw=zw/s,sh=zh/s;
-    ctx.drawImage(source,sx,sy,sw,sh,0,0,N,N);
+    const zx=Math.max(0,zone.x-mx),zy=Math.max(0,zone.y-my);
+    const zw=Math.min(zone.cw-zx,zone.w+mx*2),zh=Math.min(zone.ch-zy,zone.h+my*2);
+    if(zw<=0||zh<=0)return{mode:"full"};
+    ctx.drawImage(srcCtx.canvas,zx,zy,zw,zh,0,0,N,N);
     const d=ctx.getImageData(0,0,N,N).data;
     const cell=N/6;let meanSum=0,cells=0,maxV=0,minCellL=1,maxCellL=0;
     for(let r=0;r<6;r++)for(let col=0;col<6;col++){
@@ -344,11 +341,114 @@ function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim){
   const master=typeLayouts?.[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
   if(dimId===MASTER_DIM)return master;
   const fmt=formatLayoutFor(dimId,postType),tz=fmt.textZone;
+  // ABSOLUTE geometry (x,y,width) ALWAYS comes from the per-format spec default —
+  // master absolute positions do NOT translate across aspect ratios and were the
+  // core banner bug. Only RELATIVE typographic intent (scale, lineHeight, align)
+  // carries over from the master edit, falling back to the format's own align.
   return{
-    x:tz.x, y:tz.y, width:tz.width, align:tz.align,
+    x:tz.x, y:tz.y, width:tz.width,
+    align:master.align??tz.align,          // relative tweak carries over
     scale:master.scale??1,                 // relative tweak carries over
     lineHeight:master.lineHeight??(TYPE_LAYOUT_DEFAULTS[postType]?.lineHeight||1.16),
   };
+}
+
+/* ── Per-dimension LOGO placement resolution (spec §1 + collision/focal guard) ──
+   Mirror of the text byDim pattern. `userLogoTouched` (UI / template / AI apply)
+   pins the logo ONLY for MASTER_DIM; every other format uses its own per-format
+   spec default UNLESS the user has placed the logo while THAT format was active
+   (logoByDim[dimId]). This is the single clean rule that stops a square-tuned
+   position (e.g. Now Enrolling's top-center) from carrying verbatim onto Banner. */
+function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,globalSizeId){
+  const override=logoByDim?.[dimId];
+  if(override)return{position:override.position,sizeId:override.sizeId};
+  if(userLogoTouched&&dimId===MASTER_DIM)return{position:globalPos,sizeId:globalSizeId};
+  const fmt=formatLayoutFor(dimId,postType);
+  return{position:fmt.logo.position,sizeId:fmt.logo.sizeId};
+}
+// Focal-exclusion radius: the logo box must not intersect a band around the
+// smart-crop focal point (fx,fy). 0.22×min(W,H) keeps the mark clear of a face
+// (spec §4 subject) even when the text zone is elsewhere. Comment per prompt.
+const LOGO_FOCAL_RADIUS=0.22;
+// Choose the final logo position/size for a specific render dimension, scoring the
+// 9-grid on contrast, excluding any position whose box overlaps the resolved TEXT
+// zone OR the focal band. Falls back to shrinking the logo (down to S) before
+// giving up. Operates purely on the CURRENT dimension's geometry (spec §1/§4).
+function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum){
+  const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+  const pad=Math.min(w,h)*0.045;
+  const exclText=textBox?{x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2}:null;
+  const fr=LOGO_FOCAL_RADIUS*Math.min(w,h);
+  const fx=(focal?.fx??0.5)*w, fy=(focal?.fy??0.42)*h;
+  const exclFocal=focal?{x:fx-fr,y:fy-fr,w:fr*2,h:fr*2}:null;
+  const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBgColor||B.burnham),variance:0};};
+  const boxFor=(pos,lSz)=>{const[cx,cy]=logoCenter(pos,w,h,lSz);return{x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz};};
+  // Contrast of the ACTUAL logo ink against a region (Failure 3): an ivory logo over
+  // a white shirt must score low so the guard relocates it. When ink luminance is
+  // unknown, fall back to the best-of-either-brand-colour (position-only) contrast.
+  const inkContrast=region=>logoInkLum!=null
+    ?contrastRatio(region.mean,logoInkLum)
+    :Math.max(contrastRatio(region.mean,hexLuminance(B.burnham)),contrastRatio(region.mean,hexLuminance(B.whiteSmoke)));
+  const LOGO_MIN_CONTRAST=1.8; // low bar — the mark is decorative, but must not vanish
+  const rank=sizeId=>{
+    const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=w*pct;
+    return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{
+      const box=boxFor(pos,lSz),region=regionFor(pos);
+      const overlapText=exclText&&intersects(exclText,box);
+      const overlapFocal=exclFocal&&intersects(exclFocal,box);
+      return{id,sizeId,lSz,overlap:overlapText||overlapFocal,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)};
+    }).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
+  };
+  // Does the base placement already clear both exclusion zones AND read against the
+  // photo (ink contrast floor)? If so keep it (respects user/spec intent).
+  const basePct=LOGO_SIZES.find(s=>s.id===base.sizeId)?.pct||0.12,baseSz=w*basePct;
+  const basePos=LOGO_POSITIONS[base.position];
+  if(basePos){
+    const bb=boxFor(basePos,baseSz);
+    const clearsText=!exclText||!intersects(exclText,bb);
+    const clearsFocal=!exclFocal||!intersects(exclFocal,bb);
+    const reads=inkContrast(regionFor(basePos))>=LOGO_MIN_CONTRAST;
+    if(clearsText&&clearsFocal&&reads)return{position:base.position,sizeId:base.sizeId};
+  }
+  // Relocate: best-scoring non-overlapping position at the base size, shrinking to
+  // the S floor (spec §6 step 4 — logo shrinks, never drops) if nothing fits.
+  let choices=rank(base.sizeId);
+  if(!choices.length&&base.sizeId!=="s")choices=rank("s");
+  if(choices.length)return{position:choices[0].id,sizeId:choices[0].sizeId};
+  return{position:base.position,sizeId:base.sizeId}; // last resort: honour base
+}
+
+/* ── Per-zone text-COLOUR + backdrop decision (spec §2/§3/§5) ──
+   Deterministic rule so the auto text colour and the auto backdrop AGREE for the
+   text zone actually being rendered on THIS dimension (fixes dark-text-on-dark-hair):
+     1. Sample the resolved zone (6×6, §3). Compute mean/min/max cell luminance.
+     2. Prefer the text colour (ivory vs Burnham) with the higher WCAG contrast
+        against the zone mean — this is the pole the zone wants.
+     3. Auto backdrop:
+        - quiet & the preferred colour passes 4.5:1 at BOTH extremes → skip (shadow only).
+        - quiet but fails → reduced 0.20 band in that colour's scrim variant.
+        - busy → full band. The scrim variant is derived from the text colour inside
+          drawGradientBand (light text → dark scrim; dark text → ivory scrim), so a
+          dark zone deterministically yields light text + dark band, and a bright
+          zone yields dark text + ivory band. Colour and backdrop never disagree. */
+function resolveZoneTextColor(srcCtx,zone,userTextColorId){
+  // Honour an explicit user colour choice; only "auto" gets zone-derived.
+  if(userTextColorId&&userTextColorId!=="auto")return{color:B[userTextColorId]||B.jet,forced:true};
+  const ivory=B.whiteSmoke,dark=B.burnham;
+  try{
+    const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    // Sample the ALREADY-DRAWN canvas zone (reflects per-dim crop/tint), not the raw source.
+    const zx=Math.max(0,zone.x),zy=Math.max(0,zone.y);
+    const zw=Math.min(zone.cw-zx,zone.w),zh=Math.min(zone.ch-zy,zone.h);
+    if(zw<=0||zh<=0)return{color:ivory,forced:false};
+    ctx.drawImage(srcCtx.canvas,zx,zy,zw,zh,0,0,N,N);
+    const d=ctx.getImageData(0,0,N,N).data;let sum=0,n=0;
+    for(let i=0;i<d.length;i+=4){if(d[i+3]<16)continue;sum+=getLuminance(d[i],d[i+1],d[i+2]);n++;}
+    const meanL=n?sum/n:0.3;
+    const cIvory=contrastRatio(meanL,hexLuminance(ivory)),cDark=contrastRatio(meanL,hexLuminance(dark));
+    return{color:cIvory>=cDark?ivory:dark,forced:false};
+  }catch(_){return{color:ivory,forced:false};}
 }
 
 // Per-category font sizing. Each text element has a role; the user picks a size step per role.
@@ -427,6 +527,24 @@ function analyzeImageRegions(source){
     regions.push({row,col,mean,variance});
   }
   return regions;
+}
+// 3×3 region map sampled from an ALREADY-RENDERED canvas — reflects the actual
+// per-dimension crop/tint/panels (used by the logo guard so ivory-on-white is
+// detected on the format actually being drawn, not a naive centered cover-fit).
+function analyzeCanvasRegions(srcCtx,w,h){
+  try{
+    const size=90,c=document.createElement("canvas");c.width=size;c.height=size;
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(srcCtx.canvas,0,0,w,h,0,0,size,size);
+    const data=ctx.getImageData(0,0,size,size).data,regions=[];
+    for(let row=0;row<3;row++)for(let col=0;col<3;col++){
+      let sum=0,sumSq=0,count=0;
+      for(let y=row*30;y<(row+1)*30;y+=2)for(let x=col*30;x<(col+1)*30;x+=2){const i=(y*size+x)*4;if(data[i+3]<16)continue;const lum=getLuminance(data[i],data[i+1],data[i+2]);sum+=lum;sumSq+=lum*lum;count++;}
+      const mean=count?sum/count:0.5,variance=count?Math.max(0,sumSq/count-mean*mean):0.2;
+      regions.push({row,col,mean,variance});
+    }
+    return regions;
+  }catch(_){return null;}
 }
 function suggestTextColor(surfaceLuminance){
   return contrastRatio(surfaceLuminance,hexLuminance(B.whiteSmoke))>=contrastRatio(surfaceLuminance,hexLuminance(B.jet))?"whiteSmoke":"jet";
@@ -978,6 +1096,11 @@ export default function App() {
   // True once the user explicitly changes logo placement/size (template & AI applies count).
   // While false, renderScene uses the per-format spec logo default.
   const [userLogoTouched, setUserLogoTouched] = useState(false);
+  // Per-dimension logo overrides {dimId:{position,sizeId}} — written ONLY when the
+  // user changes logo placement/size while a NON-master dimension is active. Mirrors
+  // imgTByDim/typeLayoutsByDim so a square pin never carries verbatim onto other
+  // formats (spec §1 user-edit model / Failure 2 fix).
+  const [logoByDim, setLogoByDim] = useState({});
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
   const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
@@ -1011,6 +1134,10 @@ export default function App() {
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
+  // Resolved logo base for the CURRENT dimension (spec §1), used by the UI so the
+  // "Logo placement" summary + active dot reflect what THIS format actually uses —
+  // the per-dim override / master pin / per-format default — not stale global state.
+  const resolvedLogo = resolveLogoBase(dimensionId,postType,userLogoTouched,logoByDim,logoPosition,logoSize);
   // Effective photo transform for the CURRENT dimension (drag/handles/UI use this).
   // MASTER_DIM → master imgT; a per-dim manual override wins; otherwise the auto
   // smart-crop transform so the editor baseline matches what renderScene draws
@@ -1055,6 +1182,20 @@ export default function App() {
       setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
     }else{
       setTypeLayoutsByDim(prev=>{const nd={...(prev[dimensionId]||{})};delete nd[postType];return {...prev,[dimensionId]:nd};});
+    }
+  };
+
+  // Apply a logo placement change from the UI (Failure 2 rule): on MASTER_DIM this
+  // pins the logo globally (userLogoTouched); on any OTHER format it writes a
+  // per-dimension override (logoByDim) so it does NOT leak onto the other formats.
+  const placeLogo = (patch) => {
+    const nextPos=patch.position??logoPosition, nextSize=patch.sizeId??logoSize;
+    if(patch.position!=null)setLogoPosition(patch.position);
+    if(patch.sizeId!=null)setLogoSize(patch.sizeId);
+    if(dimensionId===MASTER_DIM){
+      setUserLogoTouched(true);
+    }else{
+      setLogoByDim(prev=>({...prev,[dimensionId]:{position:nextPos,sizeId:nextSize}}));
     }
   };
 
@@ -1323,17 +1464,40 @@ export default function App() {
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
     const fmt=formatLayoutFor(dimId,postType);
-    // Logo position/size come from state, which is seeded from the format spec
-    // default (see the logo-seed effect) and refined by the collision guard when
-    // the user hasn't explicitly placed it; a user placement pins state directly.
-    const m=w*0.12, lSz=w*logoSizePct;
-    const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
-    const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
+    // ── PER-DIMENSION logo placement (spec §1 + §4 focal/collision guard) ──
+    // renderScene draws every format (live canvas, format strip, downloads) so logo
+    // position/size CANNOT come from the single global state (that only tracks the
+    // live dim). Resolve the base per-dim (user pin → master only; else per-format
+    // spec default; a per-dim user override wins), then run the focal+text-aware
+    // guard against THIS dimension's geometry so the mark clears both the face and
+    // the copy. Deferred until the text box is known so the guard can exclude it.
+    const logoBase=resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,logoPosition,logoSize);
+    const logoFocal=mediaObj?estimateFocalPoint(mediaObj):null;
+    // The logo's actual ink luminance drives the contrast score (Failure 3): an
+    // ivory mark over white clothing scores low and gets relocated; green over the
+    // same spot would stay. Derived from the selected variant's colour.
+    const logoInkLum=selectedLogoVariant?.color==="ivory"?getLuminance(245,240,232):getLuminance(43,80,64);
+    const putLogo=(textBox)=>{
+      if(!logoObj)return;
+      // Sample regions from the CURRENT canvas (photo already drawn) so the guard
+      // reads the real per-dimension crop.
+      const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
+      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,logoInkLum);
+      const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
+      const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
+      const[lx,ly]=logoCenter(pos,w,h,lSz);
+      containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);
+    };
+    // Per-dimension resolved text colour (spec §3). Assigned after the text box is
+    // known (see zoneTc computation below); until then it defaults to the global tc.
+    // texture_text/photo_logo override it per-zone so the auto colour agrees with the
+    // per-format zone (dark hair → light text) and the auto backdrop decision.
+    let zoneTc=tc;
     // A tight, low-opacity drop shadow — just enough to separate letterforms
     // from a busy photo. The heavy lifting for legibility is the background
     // tint (quote/event/text_post) or the local scrim (texture_text/photo_logo)
     // drawn ahead of beginText(); this is a safety net, not the primary effect.
-    const beginText=()=>{ctx.save();if(mediaObj){const light=hexLuminance(tc)>0.5;ctx.shadowColor=light?"rgba(0,0,0,0.32)":"rgba(255,255,255,0.28)";ctx.shadowBlur=3.5*S;ctx.shadowOffsetY=1.5*S;}};
+    const beginText=()=>{ctx.save();if(mediaObj){const light=hexLuminance(zoneTc)>0.5;ctx.shadowColor=light?"rgba(0,0,0,0.32)":"rgba(255,255,255,0.28)";ctx.shadowBlur=3.5*S;ctx.shadowOffsetY=1.5*S;}};
     const endText=()=>{ctx.restore();};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 ${24*S}px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
@@ -1407,6 +1571,15 @@ export default function App() {
     // (no extra scrim) — the backdrop control only adds an explicit gradient/band
     // for these (spec §5: "if the whole-photo tint already guarantees legibility,
     // Auto may resolve to none"). texture_text/photo_logo have no tint → full auto.
+    // For untinted photo types (texture_text/photo_logo) pick the per-zone text
+    // colour from the ALREADY-DRAWN canvas so dark hair → light text, bright wall →
+    // dark text — and so the backdrop decision (below) uses the same colour. Assigns
+    // the closure `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
+    const resolveZoneTc=(box)=>{
+      if(!mediaObj||textColorId!=="auto")return;   // explicit colour honoured as-is
+      const r=resolveZoneTextColor(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},textColorId);
+      zoneTc=r.color;
+    };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
       if(!mediaObj)return;
       const mode=backdropMode||"auto";
@@ -1414,16 +1587,21 @@ export default function App() {
       if(tintedType&&mode==="auto")return;     // tint is the backdrop
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        const light=hexLuminance(tc)>0.5;
+        const light=hexLuminance(zoneTc)>0.5;
         drawSolidBand(ctx,w,h,box,light?B.burnham:B.whiteSmoke,0.92);
         return;
       }
-      if(mode==="gradient"){drawGradientBand(ctx,w,h,box,tc,{side:anchorSide});return;}
-      // auto: quiet-region check under the zone.
-      const q=analyzeQuietRegion(mediaObj,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},tc);
+      if(mode==="gradient"){drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide});return;}
+      // auto: quiet-region check under the zone, sampled from the rendered canvas.
+      // Deterministic escalation (spec §3): quiet+passes → skip; quiet+fails → reduced
+      // 0.20 band; busy → full band. The scrim variant is derived inside drawGradientBand
+      // from zoneTc (light text → dark scrim / dark text → ivory scrim), so the colour and
+      // the backdrop always AGREE — dark zone ⇒ light text + dark band; bright zone ⇒ dark
+      // text + ivory band. This is what guarantees the §3 contrast floor.
+      const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      if(q.mode==="reduced"){drawGradientBand(ctx,w,h,box,tc,{side:anchorSide,peak:0.20});return;}
-      drawGradientBand(ctx,w,h,box,tc,{side:anchorSide});
+      if(q.mode==="reduced"){drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide,peak:0.20});return;}
+      drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide});
     };
     const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -1435,14 +1613,15 @@ export default function App() {
 
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
-      putLogo();
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);
         const preUsed=hf.lines.length*hf.lineHeight;
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
-        if(mediaObj&&!photoBox)drawBackdrop({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
-        beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
-      }else if(live){textBoundsRef.current=null;}
+        if(mediaObj&&!photoBox){resolveZoneTc(tbox);drawBackdrop(tbox);}
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+        putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
+      }else{putLogo();if(live)textBoundsRef.current=null;}
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
@@ -1452,7 +1631,7 @@ export default function App() {
       if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,28*S);ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
       setTextBounds(used);
       endText();
-      putLogo();
+      putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="event"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){
         if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
@@ -1482,7 +1661,7 @@ export default function App() {
       }
       setTextBounds(used);
       endText();
-      putLogo();
+      putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="text_post"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
@@ -1497,16 +1676,17 @@ export default function App() {
       }
       setTextBounds(used);
       endText();
-      putLogo();
+      putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
-      putLogo();
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);
         const preUsed=hf.lines.length*hf.lineHeight;
-        if(mediaObj)drawBackdrop({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
-        beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
-      }else setTextBounds(h*0.12);
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
+        if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+        putLogo(tbox);
+      }else{setTextBounds(h*0.12);putLogo();}
     }
 
     // Surface dropped-copy info for the live dimension only (spec §6 step 5 hint).
@@ -1533,7 +1713,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -1550,34 +1730,12 @@ export default function App() {
     setDropHint(prev=>prev===next?prev:next);
   },[draw,fontsLoaded]);
 
-  // Hard collision guard: rendered copy owns a padded exclusion zone. If a
-  // manual or automatic logo placement enters it, move the logo to the best
-  // remaining contrast-safe region; reduce to S only when space is unusually tight.
-  useEffect(()=>{
-    if(!fontsLoaded)return;
-    const raf=requestAnimationFrame(()=>{
-      const textBox=textBoundsRef.current;if(!textBox)return;
-      const pad=W*0.045,expanded={x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2};
-      let regions=null;try{if(mediaObj)regions=analyzeImageRegions(mediaObj);}catch(_){}
-      const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBg?.color||B.burnham),variance:0};};
-      const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-      const ranked=sizeId=>{
-        const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=W*pct;
-        return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{const[cx,cy]=logoCenter(pos,W,H,lSz),box={x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz},region=regionFor(pos),contrast=Math.max(contrastRatio(region.mean,hexLuminance(B.burnham)),contrastRatio(region.mean,hexLuminance(B.whiteSmoke)));return{id,overlap:intersects(expanded,box),score:contrast-region.variance*8-(id==="center"?0.7:0)};}).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
-      };
-      // Only relocate when the CURRENT logo box actually collides with the text
-      // exclusion zone — otherwise the format-default (or user) placement stands.
-      const curPct=LOGO_SIZES.find(s=>s.id===logoSize)?.pct||0.12,curSz=W*curPct;
-      const curPos=LOGO_POSITIONS[logoPosition];
-      let collides=false;
-      if(curPos){const[ccx,ccy]=logoCenter(curPos,W,H,curSz);collides=intersects(expanded,{x:ccx-curSz/2,y:ccy-curSz/2,w:curSz,h:curSz});}
-      if(!collides)return;
-      let choices=ranked(logoSize),nextSize=logoSize;
-      if(!choices.length&&logoSize!=="s"){nextSize="s";choices=ranked("s");}
-      if(choices.length){if(nextSize!==logoSize)setLogoSize(nextSize);if(choices[0].id!==logoPosition)setLogoPosition(choices[0].id);}
-    });
-    return()=>cancelAnimationFrame(raf);
-  },[fontsLoaded,draw,headline,subtext,attribution,dateText,typeLayouts,postType,logoSize,logoPosition,W,H,mediaObj,curBg]);
+  // NOTE: the former global-state collision guard useEffect was removed. Logo
+  // placement (spec §1 default + §4 focal/text collision guard) is now resolved
+  // deterministically PER DIMENSION inside renderScene via pickLogoPlacement, so it
+  // works for the live canvas, the format strip, and downloads alike — the single
+  // source of truth. Global logoPosition/logoSize now only carry the user pin
+  // (MASTER_DIM) and drive the UI summary.
 
   /* ── Video render loop: composite each frame (photo + overlays + logo) ── */
   useEffect(() => {
@@ -1897,7 +2055,7 @@ export default function App() {
   const currentTemplateState = () => ({
     postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     headline, subtext, attribution, dateText,
-    selectedLogoId, logoPosition, logoSize,
+    selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
     overlayLayers:clonePlain(overlayLayers),
     imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
@@ -1936,9 +2094,12 @@ export default function App() {
     setSelectedLogoId(s.selectedLogoId || "p3-ivory");
     setLogoPosition(s.logoPosition || "bottom-center");
     setLogoSize(s.logoSize || "m");
-    // A template explicitly specifies logo placement; honour it (spec §1).
-    // (If it didn't, format defaults would apply — starter templates always do.)
-    setUserLogoTouched(true);
+    // A template explicitly specifies logo placement; honour it (spec §1). The pin
+    // applies to MASTER_DIM only — every other format falls back to its per-format
+    // spec default (Failure 2 fix), so a square-tuned pin never lands on Banner.
+    // Newer templates also round-trip per-dim logo overrides.
+    setUserLogoTouched(s.userLogoTouched ?? true);
+    setLogoByDim(s.logoByDim || {});
     setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
     setImgTByDim(s.imgTByDim || {});
     setTypeLayouts(s.typeLayouts || freshTypeLayouts());
@@ -2245,16 +2406,16 @@ export default function App() {
                     );
                   })}
                 </div>
-                <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[logoPosition]?.label||"Position"} · ${logoSize.toUpperCase()}`} />
+                <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[resolvedLogo.position]?.label||"Position"} · ${resolvedLogo.sizeId.toUpperCase()}`} />
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
                   {[
                     "top-left","top-center","top-right",
                     "mid-left","center","mid-right",
                     "bottom-left","bottom-center","bottom-right"
                   ].map(pos=>{
-                    const on=logoPosition===pos;
+                    const on=resolvedLogo.position===pos;
                     return(
-                      <button key={pos} aria-pressed={on} onClick={()=>{setUserLogoTouched(true);setLogoPosition(pos);}} title={pos.replace(/-/g," ")}
+                      <button key={pos} aria-pressed={on} onClick={()=>placeLogo({position:pos})} title={pos.replace(/-/g," ")}
                         style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
                         <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
                       </button>
@@ -2264,7 +2425,7 @@ export default function App() {
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
                   <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
                   {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
-                    <Chip key={s.id} on={logoSize===s.id} click={()=>{setUserLogoTouched(true);setLogoSize(s.id);}} sm>{s.label}</Chip>
+                    <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
                   ))}
                 </div>
               </>
