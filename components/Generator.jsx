@@ -614,6 +614,7 @@ export default function App() {
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
   const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
+  const [contentOpen, setContentOpen] = useState(false);   // Content Sec open state (controllable for click-to-edit)
 
   // TWO Logo system
   const [selectedLogoId, setSelectedLogoId] = useState("p3-ivory");
@@ -643,6 +644,17 @@ export default function App() {
   const textLayout = typeLayouts[postType] || TYPE_LAYOUT_DEFAULTS.text_post;
   const updateTextLayout = patch => setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
   const resetTextLayout = () => setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
+
+  // Click text on the canvas → open the Content section and focus its primary
+  // input so the copy can be edited immediately.
+  const focusPrimaryText = () => {
+    setContentOpen(true);
+    // Sec animates open; wait a frame so the (previously hidden) input is focusable.
+    setTimeout(() => {
+      const el = document.getElementById("wo-text-primary");
+      if (el) { el.focus({ preventScroll:true }); el.scrollIntoView({ behavior:"smooth", block:"center" }); }
+    }, 60);
+  };
 
   const applyCreativePlan = plan => {
     setPreAiState({ postType, dimensionId, headline, subtext, attribution, dateText, bgColor, textColorId, selectedLogoId, logoPosition, logoSize });
@@ -1083,7 +1095,7 @@ export default function App() {
     const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
     if(postType!=="photo_logo"&&bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
       setTextSelected(true);setPhotoSel(false);setSelOverlay(null);
-      dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect};
+      dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
     }
     setTextSelected(false);
@@ -1113,6 +1125,9 @@ export default function App() {
   const onPanMove = (e) => {
     const d = dragRef.current; if (!d) return;
     if(d.mode==="text"){
+      // Below the click threshold, treat as a tap-in-progress: don't nudge the text.
+      if(!d.moved&&Math.hypot(e.clientX-d.downX,e.clientY-d.downY)<=5)return;
+      d.moved=true;
       const nx=d.ox+(e.clientX-d.x)/d.rect.width,ny=d.oy+(e.clientY-d.y)/d.rect.height;
       updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
       return;
@@ -1150,7 +1165,12 @@ export default function App() {
       setImgT(t => ({ ...t, cx, cy }));
     }
   };
-  const onPanEnd = () => { dragRef.current = null; };
+  const onPanEnd = () => {
+    const d = dragRef.current;
+    // A tap (not a drag) inside the text block opens the Content editor.
+    if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusPrimaryText();
+    dragRef.current = null;
+  };
   const setZoom = (z) => setImgT(t => ({ ...t, zoom:z }));
 
   /* ── Overlay assets: upload, place, transform, save ── */
@@ -1436,11 +1456,11 @@ export default function App() {
 
           {/* Content fields appear right under the type when the type needs text */}
           {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text")&&(
-            <Sec label="Content" summary={headline||subtext||"Add copy"}>
-              {postType==="quote"&&<><Area placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="event"&&<><In placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-              {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="texture_text"&&<In placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+            <Sec label="Content" summary={headline||subtext||"Add copy"} open={contentOpen} onOpenChange={setContentOpen}>
+              {postType==="quote"&&<><Area id="wo-text-primary" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="event"&&<><In id="wo-text-primary" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+              {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id="wo-text-primary" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+              {postType==="texture_text"&&<In id="wo-text-primary" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
               <EditorSubhead label="Typography" summary="Editorial auto-fit" />
               <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -1866,11 +1886,14 @@ function GuardrailTooltip({text}){
   </div>;
 }
 
-function Sec({label,children,summary,defaultOpen=false}){
-  const [open,setOpen]=useState(defaultOpen);
+function Sec({label,children,summary,defaultOpen=false,open:openProp,onOpenChange}){
+  const [openState,setOpen]=useState(defaultOpen);
+  const controlled=openProp!==undefined;
+  const open=controlled?openProp:openState;
+  const toggle=()=>{const next=!open;if(!controlled)setOpen(next);onOpenChange?.(next);};
   const bodyId=`editor-section-${label.toLowerCase().replace(/[^a-z0-9]+/g,"-")}`;
   return <section className="generator-section" aria-label={label} style={{marginBottom:8,border:`1px solid ${B.ash}44`,borderRadius:11,background:"#fff",overflow:"hidden"}}>
-    <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={()=>setOpen(value=>!value)}
+    <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={toggle}
       style={{width:"100%",minHeight:48,padding:"11px 13px",border:"none",background:open?`${B.whiteSmoke}77`:"#fff",display:"flex",alignItems:"center",gap:10,cursor:"pointer",textAlign:"left",transition:"background-color 0.22s ease"}}>
       <span className="generator-section-label" style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.8,textTransform:"uppercase",color:open?B.burnham:B.ash,flex:"0 0 auto"}}>{label}</span>
       {summary&&<span style={{fontSize:11,fontFamily:FU.body,color:B.ash,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"right",marginLeft:"auto"}}>{summary}</span>}
