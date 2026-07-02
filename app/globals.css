@@ -1031,3 +1031,20 @@ canvas[role="application"]:focus-visible {
     font-size: 11px !important;
   }
 }
+
+/* Landing "Designing your starting point…" generating state (P2 transition).
+   Kept here (not inline) to avoid a React hydration text-mismatch on the style tag. */
+@keyframes wo-orchid-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.94); }
+  50%      { opacity: 1;    transform: scale(1.06); }
+}
+@keyframes wo-dots-fade {
+  0%, 20% { opacity: 0.2; }
+  50%     { opacity: 1; }
+  100%    { opacity: 0.2; }
+}
+.wo-generating-orchid { animation: wo-orchid-pulse 1.3s ease-in-out infinite; }
+.wo-dots { display: inline-block; animation: wo-dots-fade 1.3s ease-in-out infinite; margin-left: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .wo-generating-orchid, .wo-dots { animation: none !important; }
+}

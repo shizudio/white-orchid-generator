@@ -119,6 +119,13 @@ const MIN_FONT_PX={
   date:    h=>Math.max(0.100*h,60*(h/1080)),
   intro:   h=>Math.max(0.055*h,34*(h/1080)),
   body:    h=>Math.max(0.048*h,24*(h/1080)),
+  // The event date's SMALL secondary label ("JULY" under the big "18"). It sits
+  // between body (0.048*h) and intro (0.055*h): it must read as a caption, never
+  // microscopically (P3 — it rendered tiny on banner/facebook where fontMult is
+  // 0.35–0.55×). Floor ≈0.040*h with a 22px@1080 term → banner 1500×500 ≈20px,
+  // facebook 1200×630 ≈25px, square 1080 ≈43px. Slightly below body since it's a
+  // one-word all-caps token, not a reading line, but still comfortably legible.
+  dateLabel:h=>Math.max(0.040*h,22*(h/1080)),
 };
 // Resolve the effective minSize for a fitText call: the larger of the caller's
 // legacy S-floor and the per-format readability floor, but never above `ceil`
@@ -2043,7 +2050,15 @@ export default function App() {
         // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
         // above its baseline — advance by that so it clears the title above it.
         used+=df.size*0.72;
-        drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);used+=(df.lines.length-1)*df.lineHeight+df.size*0.28;if(rest){ctx.font=`600 ${36*S*scale*fm("subheading")}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale*fm("subheading"),align);ctx.letterSpacing="0px";}}
+        drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);used+=(df.lines.length-1)*df.lineHeight+df.size*0.28;if(rest){
+          // Secondary date label ("JULY" under the big day). Route its raw size
+          // through the SAME per-format readable floor (mf) the other roles use, so
+          // it can't render microscopically on short formats (P3). dateLabel floor
+          // ≈0.040*h; the ceiling stays the natural 36·S·scale·fm size so tall
+          // formats keep their designed sizing.
+          const lblSize=mf("dateLabel",36*S*scale*fm("subheading"),20*S);
+          fontMeta.dateLabel=lblSize;
+          ctx.font=`600 ${lblSize}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,lblSize*1.22,align);ctx.letterSpacing="0px";}}
       if(subtext){
         const gap=Math.max(36*S,used?44*S:0);
         const room=maxTextH-used-gap;

@@ -125,7 +125,21 @@ export default function Home() {
             </button>
           </form>
 
-          {note && (
+          {/* In-place generating state: the ~2–5s wait reads as intentional rather
+              than a dead click. The brand orchid pulses beside a status line; the
+              input above is disabled while loading. On response we navigate as before. */}
+          {loading && (
+            <div role="status" aria-live="polite" style={{
+              marginTop: 18, display: 'inline-flex', alignItems: 'center', gap: 10,
+              fontFamily: 'var(--font-body)', fontSize: 15, color: 'var(--fg, #3a3f3a)',
+            }}>
+              <img src="/assets/logos/ds/logo-circle.png" alt="" className="wo-generating-orchid"
+                style={{ width: 24, height: 24, objectFit: 'contain' }} />
+              <span>Designing your starting point<span className="wo-dots" aria-hidden="true">…</span></span>
+            </div>
+          )}
+
+          {note && !loading && (
             <p role="status" style={{
               marginTop: 14, fontFamily: 'var(--font-body)', fontSize: 14,
               color: 'var(--fg-muted, #6b6f6b)', lineHeight: 1.5,

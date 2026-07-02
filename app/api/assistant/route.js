@@ -117,7 +117,13 @@ export async function POST(request) {
   ].join('\n');
 
   const contextRule = context === 'landing'
-    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.`
+    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
+
+VARIETY (important — the studio has felt repetitive):
+- CHOOSE the postType, bgColor and dimensionId that best fit the REQUEST'S INTENT, and vary them meaningfully between different requests. Not everything is an Instagram square on the same background.
+  - A quote / saying → "quote" type. A hiring / announcement / reminder → "text_post" or "event". A dated happening (open house, sports day, term dates) → "event". A photo-led moment → "photo_logo" or "texture_text".
+  - Pick a background that suits the mood: burnham (calm, premium), whiteSmoke (light, airy), wisteria (soft, warm), celadon (fresh), jet (bold). Do not default to the same one every time.
+- OVERLAYS / FRAMES: only add an overlay (addOverlay) — and ESPECIALLY the orchid-petal frame — when the request implies decoration or celebration (an invite, an open day, a festive or photo-centric moment) OR the user explicitly asks for a frame/shape. For plain informational posts (a reminder, a notice, a hiring post, a quote) DO NOT add any overlay. Never reach for the orchid-petal frame as a default — most posts should have no overlay at all.`
     : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).`;
 
   const systemPrompt = `You are the Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
