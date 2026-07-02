@@ -1060,3 +1060,82 @@ canvas[role="application"]:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .wo-generating-orchid, .wo-dots { animation: none !important; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ELEMENTS RAIL + CONTEXTUAL INSPECTOR
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Desktop vertical rail lives beside the preview; only shown when the preview
+   panel has spare horizontal room (>= ~1100px). Hidden otherwise — the mobile
+   horizontal strip in the controls column takes over. */
+.wo-rail { display: none; }
+.wo-strip { display: none; }
+@media (min-width: 1100px) {
+  .wo-rail { display: flex !important; }
+}
+/* Mobile / narrow: hide the desktop rail, show the horizontal chip strip. */
+@media (max-width: 760px) {
+  .wo-rail { display: none !important; }
+  .wo-strip {
+    display: flex !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .wo-strip::-webkit-scrollbar { display: none; }
+}
+
+.wo-rail-chip:hover { border-color: var(--tw-burnham) !important; }
+
+/* ── Inspector: shared shell ── */
+.wo-inspector {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 70px rgba(37, 78, 72, 0.24);
+  overflow: hidden;
+}
+
+/* Desktop dock: right edge, inset ABOVE the Art Director FAB (56px + margin)
+   so the two never collide. Below the chat/FAB (z 359/360) in stacking. */
+.wo-inspector-dock {
+  position: fixed;
+  /* Dock just LEFT of the vertical rail (rail = 52px wide at right:10) so the
+     rail chips stay visible + clickable to switch elements while editing. */
+  right: 74px;
+  top: 84px;
+  bottom: 96px;
+  width: 300px;
+  max-width: calc(100vw - 96px);
+  max-height: 70vh;
+  z-index: 200;
+  border-radius: var(--radius-lg, 16px);
+}
+
+.wo-inspector-backdrop { display: none; }
+
+/* Mobile: inspector becomes a bottom sheet + dismiss backdrop. */
+@media (max-width: 760px) {
+  .wo-inspector-dock {
+    position: fixed;
+    left: 0; right: 0; bottom: 0; top: auto;
+    width: 100%;
+    max-width: 100%;
+    max-height: 72vh;
+    height: 72vh;
+    border-radius: 18px 18px 0 0;
+    z-index: 362;              /* above the FAB (360) so it isn't obscured */
+    animation: wo-sheet-up 220ms cubic-bezier(.22,1,.36,1);
+  }
+  .wo-inspector-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(37, 45, 40, 0.42);
+    z-index: 361;
+  }
+}
+@keyframes wo-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .wo-inspector-dock { animation: none !important; }
+}

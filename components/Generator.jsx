@@ -1226,6 +1226,14 @@ export default function App() {
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
   const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
+  // Lightweight selection flags for elements that have no canvas hit-region of
+  // their own (Background, Logo). They only drive the rail active-state + which
+  // contextual inspector is open — they never affect the render.
+  const [bgSel, setBgSel] = useState(false);
+  const [logoSel, setLogoSel] = useState(false);
+  // Contextual inspector: which element's compact panel is open, or null.
+  // Values: 'bg' | 'photo' | 'text' | 'logo' | <overlay-uid> | null.
+  const [inspectorEl, setInspectorEl] = useState(null);
   const [contentOpen, setContentOpen] = useState(false);   // Content Sec open state (controllable for click-to-edit)
   const [formatThumbs, setFormatThumbs] = useState({});     // dimensionId -> dataURL (live format strip)
   const [galleryOpen, setGalleryOpen] = useState(true);     // template gallery Sec open state
@@ -1330,16 +1338,59 @@ export default function App() {
     }
   };
 
-  // Click text on the canvas → open the Content section and focus its primary
-  // input so the copy can be edited immediately.
+  // Click text on the canvas → open the contextual inspector for the text
+  // element and focus its primary copy input so it can be edited immediately.
+  // Convergence: tap-to-edit no longer jumps to the left Content section — it
+  // opens the inspector (the left section still exists as the full view). We
+  // prefer the inspector's copy of the primary input; if the inspector is not
+  // mounted (e.g. very narrow desktop where the rail is hidden) we fall back to
+  // the left-column input so accessibility focus never dead-ends.
   const focusPrimaryText = () => {
     setContentOpen(true);
-    // Sec animates open; wait a frame so the (previously hidden) input is focusable.
+    selectElement("text");
+    // Panels animate in; wait a frame so the input is mounted + focusable.
     setTimeout(() => {
-      const el = document.getElementById("wo-text-primary");
+      const el = document.getElementById("wo-text-primary-inspector")
+              || document.getElementById("wo-text-primary");
       if (el) { el.focus({ preventScroll:true }); el.scrollIntoView({ behavior:"smooth", block:"center" }); }
-    }, 60);
+    }, 70);
   };
+
+  /* ── ELEMENTS RAIL + CONTEXTUAL INSPECTOR selection orchestration (Commit 2) ──
+     selectElement() is the single entry point for selecting one design element
+     from ANY source (rail chip, canvas tap, keyboard). It makes the canvas
+     selection state coherent (one element selected at a time), highlights it via
+     the existing EditorChrome flags, and opens the inspector for it. It never
+     mutates the design itself. closeInspector() clears selection + closes. */
+  const selectElement = (kind, uid=null) => {
+    // Reset every selection flag first, then set the one for `kind`.
+    setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
+    setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
+    if (kind === "photo")      { setPhotoSel(true); }
+    else if (kind === "text")  { setTextSelected(true); }
+    else if (kind === "logo")  { setLogoSel(true); }
+    else if (kind === "bg")    { setBgSel(true); }
+    else if (kind === "overlay" && uid) { setSelOverlay(uid); setOverlayChromeVisible(true); }
+    setInspectorEl(kind === "overlay" ? uid : kind);
+  };
+  const closeInspector = () => {
+    setInspectorEl(null);
+    setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
+    setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
+  };
+  // Escape closes the inspector — but not while typing in one of its fields
+  // (there Escape should just blur / be a no-op for the browser).
+  useEffect(() => {
+    if (inspectorEl == null) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) { t.blur(); return; }
+      closeInspector();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inspectorEl]);
 
   /* ── UNIFIED AI APPLY PATH ──
      applyDesignPatch(patch) is the ONE place any AI-driven change touches the
@@ -2462,12 +2513,15 @@ export default function App() {
     if (selOverlay) {
       const layer = overlayLayers.find(l => l.uid === selOverlay);
       const t = layer ? effectiveT(layer) : null;
-      if (t) { setOverlayChromeVisible(true); dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
+      if (t) { setOverlayChromeVisible(true); setInspectorEl(selOverlay); dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
     }
     const bounds=textBoundsRef.current;
     const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
     if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
-      setTextSelected(true);setPhotoSel(false);setSelOverlay(null);
+      setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
+      // Canvas convergence: selecting text opens its inspector (tap → focus copy
+      // input is handled in onPanEnd via focusPrimaryText).
+      setInspectorEl("text");
       dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
     }
@@ -2488,12 +2542,15 @@ export default function App() {
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     if (pointInPhoto(hp, e.clientX, e.clientY)) {
-      setPhotoSel(true); setSelOverlay(null);
+      setPhotoSel(true); setSelOverlay(null); setBgSel(false); setLogoSel(false);
+      // Canvas convergence: tapping the photo opens the Photo inspector.
+      setInspectorEl("photo");
       dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:photoT.cx, cy:photoT.cy, rect };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
-    // clicked empty space → deselect
+    // clicked empty space → deselect everything + close the inspector.
     setPhotoSel(false);
+    closeInspector();
   };
   const onPanMove = (e) => {
     const d = dragRef.current; if (!d) return;
@@ -2580,6 +2637,7 @@ export default function App() {
     setSelOverlay(uid);
     setOverlayChromeVisible(true);
     setPhotoSel(false);
+    setInspectorEl(uid);   // open the inspector on the freshly placed overlay
     setOverlayDirty(true);
   };
   const setLayerMode = (uid, mode) => {
@@ -2645,6 +2703,8 @@ export default function App() {
   const deleteLayer = (uid) => {
     setOverlayLayers(prev => prev.filter(l => l.uid !== uid));
     if (selOverlay === uid) { setSelOverlay(null); setOverlayChromeVisible(false); }
+    // Gracefully close the inspector if it was showing the deleted overlay.
+    setInspectorEl(prev => prev === uid ? null : prev);
     setOverlayDirty(true);
   };
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
@@ -2875,13 +2935,16 @@ export default function App() {
   );
 
   // TEXT / CONTENT — copy inputs (per post type) + full typography controls.
-  const renderTextPanel = () => (
+  // idPrefix keeps the primary copy input's DOM id unique when the panel is
+  // rendered in two places at once (left column + inspector) — duplicate ids
+  // would break focusPrimaryText and accessibility.
+  const renderTextPanel = (idPrefix="wo-text-primary") => (
     <>
-      {postType==="quote"&&<><Area id="wo-text-primary" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-      {postType==="event"&&<><In id="wo-text-primary" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-      {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id="wo-text-primary" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-      {postType==="texture_text"&&<In id="wo-text-primary" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
-      {postType==="photo_logo"&&<><In id="wo-text-primary" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      {postType==="quote"&&<><Area id={idPrefix} placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+      {postType==="event"&&<><In id={idPrefix} placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+      {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id={idPrefix} placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+      {postType==="texture_text"&&<In id={idPrefix} placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+      {postType==="photo_logo"&&<><In id={idPrefix} placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
       <EditorSubhead label="Typography" summary="Editorial auto-fit" />
       <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -3055,6 +3118,97 @@ export default function App() {
     );
   };
 
+  /* ── ELEMENTS RAIL model (Commit 2) ──
+     One chip per ACTIVE element of the design, in z-order:
+     Background (always) · Photo (media) · Text (post type has copy) ·
+     Logo (a variant is drawn) · one per overlay layer. */
+  const postHasCopy = ["quote","event","text_post","texture_text","photo_logo"].includes(postType);
+  const logoRendered = !!(selectedLogoVariant && logoObj);
+  const textRoleLabel = postType==="quote"?"Quote":postType==="event"?"Event text":postType==="texture_text"?"Overlay text":postType==="photo_logo"?"Caption":"Text";
+  const activeElements = [
+    { key:"bg",    label:"Background", icon:"◐" },
+    ...(mediaObj ? [{ key:"photo", label:videoObj?"Video":"Photo", icon:"▣" }] : []),
+    ...(postHasCopy ? [{ key:"text", label:textRoleLabel, icon:"T" }] : []),
+    ...(logoRendered ? [{ key:"logo", label:"Logo", icon:"❋" }] : []),
+    ...overlayLayers.map(l => {
+      const a = overlays.find(o => o.id === l.assetId);
+      return { key:l.uid, label:a?.name || "Overlay", icon:"✦", thumb:a?.dataUrl||a?.src, overlay:true };
+    }),
+  ];
+  // Which rail chip is active given the current selection sources.
+  const activeElKey = selOverlay || (inspectorEl!=null ? inspectorEl
+    : photoSel ? "photo" : textSelected ? "text" : logoSel ? "logo" : bgSel ? "bg" : null);
+
+  // Inspector title + body for the currently-open element.
+  const inspectorInfo = (() => {
+    if (inspectorEl == null) return null;
+    if (inspectorEl === "bg")    return { title:"Background", body:renderBackgroundPanel() };
+    if (inspectorEl === "photo") return { title:videoObj?"Video":"Photo", body:renderPhotoPanel() };
+    if (inspectorEl === "text")  return { title:textRoleLabel, body:renderTextPanel("wo-text-primary-inspector") };
+    if (inspectorEl === "logo")  return { title:"Logo", body:(
+      <>
+        <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
+          {["primary","secondary"].map(g=>(
+            <Chip key={g} on={markTab===g} click={()=>setMarkTab(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
+          ))}
+        </div>
+        {renderLogoPanel(["primary","secondary"].includes(markTab)?markTab:"primary")}
+      </>
+    ) };
+    // overlay by uid
+    const layer = overlayLayers.find(l => l.uid === inspectorEl);
+    if (!layer) return null;
+    const a = overlays.find(o => o.id === layer.assetId);
+    return { title:a?.name || "Overlay", body:renderOverlayPanel() };
+  })();
+
+  // A single rail chip (shared by desktop rail + mobile strip).
+  const RailChip = (el) => {
+    const on = activeElKey === el.key;
+    return (
+      <button key={el.key} type="button" aria-pressed={on} title={`Edit ${el.label}`}
+        onClick={()=>{
+          if (el.overlay) selectElement("overlay", el.key);
+          else selectElement(el.key);
+        }}
+        className="wo-rail-chip" data-active={on?"true":"false"}
+        style={{
+          display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,
+          width:52,minHeight:52,padding:"6px 4px",borderRadius:12,cursor:"pointer",flex:"0 0 auto",
+          border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",
+          color:on?"#fff":B.jet,transition:"all 0.12s",
+        }}>
+        {el.thumb
+          ? <img src={el.thumb} alt="" style={{width:20,height:20,objectFit:"contain",filter:on?"brightness(0) invert(1)":"none"}} />
+          : <span aria-hidden="true" style={{fontSize:15,lineHeight:1,fontFamily:el.icon==="T"?F.title:FU.subtitle,fontWeight:700}}>{el.icon}</span>}
+        <span style={{fontSize:8,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.3,maxWidth:48,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{el.label}</span>
+      </button>
+    );
+  };
+
+  // The contextual inspector panel (element name header + ✕ + the element's
+  // extracted control panel). Top-level mount below so position:fixed anchors to
+  // the viewport (no transformed ancestor trap) and it can inset above the FAB.
+  const InspectorPanel = ({mobile=false}) => {
+    if (!inspectorInfo) return null;
+    return (
+      <div role="dialog" aria-label={`${inspectorInfo.title} controls`}
+        className={mobile?"wo-inspector wo-inspector-sheet":"wo-inspector wo-inspector-dock"}>
+        <div className="wo-inspector-head" style={{
+          display:"flex",alignItems:"center",gap:10,padding:"12px 14px",
+          borderBottom:`1px solid ${B.ash}33`,background:"#fff",flex:"0 0 auto",
+        }}>
+          <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.6,textTransform:"uppercase",color:B.burnham}}>{inspectorInfo.title}</span>
+          <button type="button" aria-label="Close inspector" onClick={closeInspector}
+            style={{marginLeft:"auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}22`,color:B.jet,fontSize:16,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
+        </div>
+        <div className="wo-inspector-body" style={{padding:"14px 15px 18px",overflowY:"auto",flex:"1 1 auto",background:"#fff"}}>
+          {inspectorInfo.body}
+        </div>
+      </div>
+    );
+  };
+
   if(!ready) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:B.whiteSmoke,fontFamily:F.body,color:B.burnham}}>Loading...</div>;
 
   /* ───────── UI ───────── */
@@ -3065,6 +3219,15 @@ export default function App() {
       <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
         {/* ── CONTROLS ── */}
         <div className="generator-controls" style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 64px)"}}>
+
+          {/* ── ELEMENTS STRIP (mobile): horizontal scrollable chips, rendered
+                directly under the sticky preview panel (outside the sticky element
+                so it never grows the sticky footprint). Hidden on desktop where the
+                vertical rail beside the preview takes over. */}
+          <div className="wo-strip" role="toolbar" aria-label="Design elements"
+            style={{display:"none",gap:8,overflowX:"auto",padding:"2px 0 12px",marginBottom:4}}>
+            {activeElements.map(RailChip)}
+          </div>
 
           {/* ── TEMPLATES: outcome-first entry point (first thing a new user sees) ── */}
           <Sec label="Templates" summary={activeTemplateName || (galleryOpen?"Start from a design":"Pick a design")}
@@ -3154,7 +3317,7 @@ export default function App() {
                     const selected=placedLayer?.uid===selOverlay;
                     return (
                       <div key={o.id} style={{position:"relative"}}>
-                        <button aria-pressed={placed} onClick={()=>{if(placedLayer){setSelOverlay(placedLayer.uid);setOverlayChromeVisible(true);}else toggleOverlay(o);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
+                        <button aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else toggleOverlay(o);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
                           style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`2px solid ${selected?B.tangerine:placed?B.burnham:B.ash+"33"}`,background:selected?B.tangerine+"0F":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,transition:"all 0.12s"}}>
                           <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.55}} />
                           <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
@@ -3257,7 +3420,14 @@ export default function App() {
         </div>
 
         {/* ── PREVIEW ── */}
-        <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
+        <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
+          {/* ── ELEMENTS RAIL (desktop): slim vertical strip at the right edge of
+                the preview. Hidden < ~1100px via CSS; the mobile chip strip in the
+                controls column takes over there. */}
+          <div className="wo-rail" role="toolbar" aria-label="Design elements"
+            style={{position:"absolute",top:70,right:10,display:"flex",flexDirection:"column",gap:8,zIndex:8}}>
+            {activeElements.map(RailChip)}
+          </div>
           <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
           <div ref={previewRef} className="generator-preview-frame"
             style={{width:"100%",maxWidth:820,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
@@ -3324,6 +3494,16 @@ export default function App() {
         applyPatch={applyDesignPatch}
         undoOnce={undoLastAiChange}
       />
+      {/* ── CONTEXTUAL INSPECTOR — top-level mount so position:fixed anchors to
+          the viewport (no transformed-ancestor trap). Desktop docks to the right
+          inset above the Art Director FAB; mobile renders as a bottom sheet with
+          a dismiss backdrop. A single instance renders; CSS picks the layout. */}
+      {inspectorInfo && (
+        <>
+          <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
+          <InspectorPanel />
+        </>
+      )}
     </div>
   );
 }
