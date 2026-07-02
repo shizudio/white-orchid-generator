@@ -129,21 +129,23 @@ canvas[role="application"]:focus-visible {
 }
 
 .generator-section-body {
+  /* No transform here on purpose: any transform value (even translateY(0))
+     makes this the containing block for position:fixed descendants, which
+     trapped modals like the Midjourney launcher inside the ~400px column
+     instead of centering them on the viewport. Grid-rows + opacity give
+     the same collapse/fade feel without that side effect. */
   display: grid;
   grid-template-rows: 0fr;
   overflow: hidden;
   opacity: 0;
-  transform: translateY(-4px);
   transition:
     grid-template-rows 0.28s cubic-bezier(.22, 1, .36, 1),
-    opacity 0.2s ease,
-    transform 0.28s cubic-bezier(.22, 1, .36, 1);
+    opacity 0.2s ease;
 }
 
 .generator-section-body[data-open="true"] {
   grid-template-rows: 1fr;
   opacity: 1;
-  transform: translateY(0);
 }
 
 .generator-section-body-inner {
