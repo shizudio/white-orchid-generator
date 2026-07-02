@@ -318,6 +318,15 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     }
   }
 
+  // A landing request is a NEW design, but the editor restores previously placed
+  // overlay layers from localStorage — so yesterday's petal frame kept leaking
+  // into every fresh AI design regardless of the gate above. Force a clean
+  // slate: applyDesignPatch removes before it adds, so an explicit decoration
+  // request still lands its overlay on the cleared canvas.
+  if (context === 'landing') {
+    patch.removeOverlays = true;
+  }
+
   // ── In-chat image generation (P4) ──
   // The model sets patch.imagePrompt ONLY when the user asked to create an image.
   // Make a second call to gpt-image-1 (medium) with the brand-style wrapper; return
