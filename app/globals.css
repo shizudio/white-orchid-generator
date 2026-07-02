@@ -277,6 +277,16 @@ canvas[role="application"]:focus-visible {
   color: var(--fg-strong);
   border-bottom-left-radius: 5px;
 }
+.ad-thumb {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-top: 6px;
+  border: 1px solid var(--line, rgba(37,78,72,0.16));
+  box-shadow: 0 2px 8px rgba(37,78,72,0.12);
+}
 .ad-changed {
   font-family: var(--font-syne);
   font-size: 10px;

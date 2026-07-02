@@ -31,7 +31,7 @@ function summarizeKeys(keys) {
 
 const HISTORY_KEY = 'wo-editor-chat';
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onUndo, open, setOpen, seed }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, open, setOpen, seed }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -54,7 +54,12 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onUndo, ope
   // Persist history (per-tab).
   useEffect(() => {
     if (!hydrated) return;
-    try { sessionStorage.setItem(HISTORY_KEY, JSON.stringify(messages.slice(-40))); } catch { /* ignore */ }
+    // Strip the (large base64) thumb before persisting — it would blow the
+    // sessionStorage quota. The thumbnail is transient chat chrome, not state.
+    try {
+      const slim = messages.slice(-40).map(({ thumb, ...rest }) => rest);
+      sessionStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
+    } catch { /* ignore */ }
   }, [messages, hydrated]);
 
   // Seed from the landing handoff exactly once when it arrives.
@@ -117,19 +122,35 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onUndo, ope
       if (patchHasChanges(patch)) {
         changeKeys = onApplyPatch(patch) || [];
       }
+      // Image generation (Commit 4): if the server returned a generated image, ingest
+      // it as the background (same path as an upload) and show a thumbnail bubble +
+      // "changed: photo". A generated image is one undoable action even alongside a
+      // patch — it snapshots the photo onto the same undo stack.
+      let thumb = null;
+      let photoLanded = false;
+      if (data.imageB64 && typeof onGenerateImage === 'function') {
+        const dataUrl = `data:image/png;base64,${data.imageB64}`;
+        thumb = dataUrl;
+        try { await onGenerateImage(dataUrl); photoLanded = true; } catch { /* keep the reply */ }
+      }
+      const summaryParts = [];
+      if (changeKeys.length) summaryParts.push(summarizeKeys(changeKeys));
+      if (photoLanded) summaryParts.push('photo');
+      const didChange = changeKeys.length > 0 || photoLanded;
       // Only attach an undo chip when a real change actually landed.
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: data.reply || 'Done.',
-        summary: changeKeys.length ? summarizeKeys(changeKeys) : '',
-        undoIndex: changeKeys.length ? Date.now() : null,
+        summary: summaryParts.join(', '),
+        thumb,
+        undoIndex: didChange ? Date.now() : null,
       }]);
     } catch {
       setError("I couldn't reach the AI just now. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch]);
+  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage]);
 
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -180,6 +201,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onUndo, ope
             {messages.map((m, i) => (
               <div key={i} className={`ad-msg ad-msg--${m.role}`}>
                 <div className="ad-bubble">{m.content}</div>
+                {m.role === 'assistant' && m.thumb && (
+                  <img className="ad-thumb" src={m.thumb} alt="Generated image applied to the design" />
+                )}
                 {m.role === 'assistant' && m.summary && (
                   <div className="ad-changed">changed: {m.summary}</div>
                 )}

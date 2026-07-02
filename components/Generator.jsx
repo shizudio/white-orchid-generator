@@ -1368,6 +1368,9 @@ export default function App() {
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: JSON.parse(JSON.stringify(overlayLayers)),
     markTab,
+    // Photo source + transform (Commit 4): an in-chat generated image replaces the
+    // background through the AI path, so undo must restore the previous photo too.
+    image, imgT: JSON.parse(JSON.stringify(imgT)),
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
@@ -1496,6 +1499,14 @@ export default function App() {
     setOverlayLayers(layers);
     setSelOverlay(null);
     setMarkTab(s.markTab || ((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary"));
+    // Restore the photo source + transform if this snapshot captured them (Commit 4).
+    // A generated-image apply is the only path that changes the photo through undo,
+    // so only touch it when the field is present (older snapshots omit it → no-op).
+    if ("image" in s) {
+      setImage(s.image);
+      if (s.image) imgFrom(s.image).then(img => setImageObj(img)); else setImageObj(null);
+      if (s.imgT) setImgT(s.imgT);
+    }
     setPhotoSel(false);
   };
 
@@ -1703,6 +1714,33 @@ export default function App() {
       return next.slice(0, MAX_LIB);
     });
   }, []);
+
+  // Apply an AI-generated image (Commit 4). Ingests through the SAME path as an
+  // upload — remove any video, set the canvas photo + save to the local library —
+  // and persists to the Supabase library so it appears in Library like any upload.
+  // Snapshots onto the AI undo stack (photo source + transform are in the snapshot)
+  // so undo restores the previous photo, and re-arms the silent harmonizer so text
+  // stays legible on the new background. `harmonize` is honoured like applyDesignPatch.
+  const applyGeneratedImage = async (dataUrl, opts = {}) => {
+    if (!dataUrl) return;
+    // Snapshot BEFORE changing the photo so undo restores the prior background.
+    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    setPreAiState(snapshotApplyableState());
+    if (videoObj) { videoObj.pause(); setVideoObj(null); setVideoPlaying(false); }
+    await loadImage(dataUrl);   // canvas + local library (same as an upload)
+    // Persist to the Supabase library so it lands in Library (same endpoint uploads use).
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], `ai-generated-${Date.now()}.png`, { type: blob.type || 'image/png' });
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('source_type', 'midjourney_render');   // AI render (not a real photo → no consent gate)
+      await fetch('/api/images', { method: 'POST', body: fd });
+    } catch { /* non-blocking — canvas + local library still work if upload fails */ }
+    // Re-arm the harmonizer so the just-applied AI photo gets accessibility passes
+    // (the folded fixes join this same undo entry via amendUndo).
+    if (opts.harmonize === true) harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
+  };
 
   const loadFile = useCallback(async (file) => {
     if (!file) return;
@@ -3226,6 +3264,7 @@ export default function App() {
       <ArtDirectorChat
         designState={chatDesignState}
         onApplyPatch={(patch) => applyDesignPatch(patch, { harmonize: true })}
+        onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
         onUndo={undoLastAiChange}
         open={chatOpen}
         setOpen={setChatOpen}

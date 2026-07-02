@@ -2,7 +2,58 @@ import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+// Image generation (gpt-image-1, medium quality) can take 10–30s; the default
+// Vercel route timeout would cut it off. 60s gives the second OpenAI call room.
+export const maxDuration = 60;
+
+// Brand-style wrapper for gpt-image-1 (P4). We prepend our aesthetic + palette and
+// a hard "no text/logos/watermarks" instruction, then append the model's concise
+// scene description. Keeps every generated background on-brand and text-free so the
+// studio's own type/logo lockup stays the only copy on the canvas.
+function brandImagePrompt(scene) {
+  return [
+    'Editorial photography for a calm, premium preschool / early-education brand.',
+    'Warm natural light, soft focus, gentle earthy palette (deep forest green, ivory, soft mauve, muted celadon).',
+    'Authentic, unposed, documentary feel; shallow depth of field; no harsh flash.',
+    'Absolutely NO text, letters, words, captions, logos, watermarks, or signage anywhere in the image.',
+    `Scene: ${scene}`,
+  ].join(' ');
+}
+
+// Map the current canvas format to a gpt-image-1 size: wide formats → landscape,
+// everything else → square (portrait/story crop cleanly from a square background).
+function imageSizeForDimension(dimensionId) {
+  const wide = ['twitter', 'facebook', 'banner'];
+  return wide.includes(dimensionId) ? '1536x1024' : '1024x1024';
+}
+
+async function generateBrandImage(apiKey, scene, dimensionId) {
+  const payload = {
+    model: 'gpt-image-1',
+    prompt: brandImagePrompt(scene),
+    n: 1,
+    size: imageSizeForDimension(dimensionId),
+    quality: 'medium',
+  };
+  let res;
+  try {
+    res = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    return { imageB64: null, refused: true };
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // Moderation / refusal / any upstream error → graceful (never a 500 to the client).
+    console.error('gpt-image-1 error:', json?.error?.message || res.statusText);
+    return { imageB64: null, refused: true };
+  }
+  const b64 = json?.data?.[0]?.b64_json || null;
+  return { imageB64: b64, refused: !b64 };
+}
 
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 const WINDOW_MS = 60_000;
@@ -142,6 +193,9 @@ ${enums}
 
 ${contextRule}
 
+Image generation:
+- You CAN generate a photographic background image. When the user asks to create/generate/make an image or photo (e.g. "generate a photo of children painting outdoors"), set patch.imagePrompt to a concise visual description of the scene — no brand name, no text-in-image, no logos. The studio generates the image and places it as the background automatically. Also set postType to "photo_logo" or "texture_text" if it isn't already, so the new photo has a suitable layout. Leave imagePrompt null for every request that is NOT asking for a new image.
+
 Rules:
 - Never invent factual claims, quotations, sources, dates, statistics, offers, or testimonials. Only include a dateText if the user explicitly supplied a date.
 - Use an ivory logo (…-ivory) on dark or photo-heavy backgrounds and a green logo (…-green) on light backgrounds.
@@ -196,13 +250,41 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     return Response.json({ error: "I ran into a problem just now. Please try again.", detail: reason }, { status: 502 });
   }
 
+  let parsed;
   try {
-    const parsed = JSON.parse(getOutputText(result));
-    const reply = typeof parsed?.reply === 'string' ? parsed.reply : '';
-    const patch = parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {};
-    if (!reply) throw new Error('empty reply');
-    return Response.json({ reply, patch });
+    parsed = JSON.parse(getOutputText(result));
   } catch {
     return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
   }
+  const reply = typeof parsed?.reply === 'string' ? parsed.reply : '';
+  const patch = parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {};
+  if (!reply) {
+    return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
+  }
+
+  // ── In-chat image generation (P4) ──
+  // The model sets patch.imagePrompt ONLY when the user asked to create an image.
+  // Make a second call to gpt-image-1 (medium) with the brand-style wrapper; return
+  // the b64 image alongside the reply/patch. imagePrompt is a side-effect trigger,
+  // not a design field, so strip it from the patch before it reaches the client's
+  // applyDesignPatch (which would ignore it anyway — it's not in PATCH_CHANGE_KEYS).
+  const imagePrompt = typeof patch.imagePrompt === 'string' && patch.imagePrompt.trim() ? patch.imagePrompt.trim() : null;
+  if ('imagePrompt' in patch) delete patch.imagePrompt;
+
+  if (imagePrompt) {
+    const { imageB64, refused } = await generateBrandImage(apiKey, imagePrompt, designState.dimensionId);
+    if (imageB64) {
+      return Response.json({ reply, patch, imageB64 });
+    }
+    // Graceful refusal / moderation / error — never a 500. Keep any design patch the
+    // model also produced, but explain the image couldn't be made and suggest a tweak.
+    return Response.json({
+      reply: "I couldn't generate that one — it may have been outside what I can create. Try describing a simple, everyday scene (for example “children reading together in a bright classroom”), or upload a photo instead.",
+      patch,
+      imageB64: null,
+      imageRefused: !!refused,
+    });
+  }
+
+  return Response.json({ reply, patch, imageB64: null });
 }
