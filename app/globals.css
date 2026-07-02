@@ -201,6 +201,36 @@ canvas[role="application"]:focus-visible {
 .ad-launcher:hover { transform: translateY(-2px); background: var(--tw-tangerine-dk); }
 .ad-launcher:focus-visible { outline: 3px solid var(--tw-tangerine); outline-offset: 3px; }
 
+/* Unread indicator: a white badge on the tangerine FAB, shown when messages were
+   appended (landing seed, background AI event) while the panel was closed. Clears
+   the moment the panel opens. A soft pulse draws the eye without shouting. */
+.ad-launcher-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--tw-tangerine-dk, #b5451f);
+  border: 2px solid var(--tw-tangerine);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(37, 78, 72, 0.24);
+  pointer-events: none;
+}
+.ad-launcher--unread { animation: ad-launcher-pulse 1.8s ease-in-out 2; }
+@keyframes ad-launcher-pulse {
+  0%, 100% { box-shadow: 0 10px 28px rgba(37, 78, 72, 0.28); }
+  50% { box-shadow: 0 10px 28px rgba(37, 78, 72, 0.28), 0 0 0 6px rgba(224, 122, 63, 0.18); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ad-launcher--unread { animation: none; }
+}
+
 .ad-panel {
   position: fixed;
   right: 24px;

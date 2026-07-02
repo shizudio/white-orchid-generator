@@ -30,6 +30,11 @@ function summarizeKeys(keys) {
 */
 
 const HISTORY_KEY = 'wo-editor-chat';
+// Per-tab count of messages the user has actually SEEN (panel opened at least once
+// with them present). unread = messages appended while the panel was closed, i.e.
+// messages.length - seenCount. Persisted so a tab refresh (history restored) shows
+// no spurious dot for an exchange already read.
+const SEEN_KEY = 'wo-editor-chat-seen';
 
 export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, open, setOpen, seed }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
@@ -37,19 +42,40 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hydrated, setHydrated] = useState(false);
+  const [seenCount, setSeenCount] = useState(0); // messages the user has seen (panel opened)
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const launcherRef = useRef(null);
   const seededRef = useRef(false);
 
-  // Restore per-tab history once.
+  // Restore per-tab history + seen-count once. If the panel is already open on
+  // mount (unusual — handoff seeds it closed) treat everything as seen.
   useEffect(() => {
+    let restored = [];
     try {
       const raw = sessionStorage.getItem(HISTORY_KEY);
-      if (raw) setMessages(JSON.parse(raw));
+      if (raw) { restored = JSON.parse(raw); setMessages(restored); }
     } catch { /* ignore */ }
+    try {
+      const s = parseInt(sessionStorage.getItem(SEEN_KEY) || '', 10);
+      // A restored history is content the user saw in this tab before the refresh,
+      // so default seenCount to its length (no spurious dot); a stored value wins.
+      setSeenCount(Number.isFinite(s) ? s : restored.length);
+    } catch { setSeenCount(restored.length); }
     setHydrated(true);
   }, []);
+
+  // Persist the seen-count per tab.
+  useEffect(() => {
+    if (!hydrated) return;
+    try { sessionStorage.setItem(SEEN_KEY, String(seenCount)); } catch { /* ignore */ }
+  }, [seenCount, hydrated]);
+
+  // Opening the panel marks every current message as seen (clears the dot). Also
+  // keep seen in step while the panel stays open so live replies don't re-flag.
+  useEffect(() => {
+    if (open) setSeenCount(messages.length);
+  }, [open, messages.length]);
 
   // Persist history (per-tab).
   useEffect(() => {
@@ -174,17 +200,24 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     setMessages(prev => prev.map((m, i) => i >= idx ? { ...m, undoIndex: null } : m));
   }
 
+  // Unread = messages appended while the panel was closed. Never negative; only
+  // meaningful when closed (opening zeroes it via the effect above).
+  const unread = !open && hydrated ? Math.max(0, messages.length - seenCount) : 0;
+
   return (
     <>
       <button
         ref={launcherRef}
         type="button"
-        className="ad-launcher"
-        aria-label={open ? 'Close Art Director' : 'Open Art Director'}
+        className={`ad-launcher${unread ? ' ad-launcher--unread' : ''}`}
+        aria-label={open ? 'Close Art Director' : unread ? `Open Art Director (${unread} unread)` : 'Open Art Director'}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
         <span aria-hidden="true">{open ? '×' : '✦'}</span>
+        {unread > 0 && (
+          <span className="ad-launcher-badge" aria-hidden="true">{unread > 9 ? '9+' : unread}</span>
+        )}
       </button>
 
       {open && (
