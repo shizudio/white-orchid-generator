@@ -615,6 +615,7 @@ export default function App() {
   const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);   // Content Sec open state (controllable for click-to-edit)
+  const [formatThumbs, setFormatThumbs] = useState({});     // dimensionId -> dataURL (live format strip)
 
   // TWO Logo system
   const [selectedLogoId, setSelectedLogoId] = useState("p3-ivory");
@@ -1019,6 +1020,30 @@ export default function App() {
     return () => { if (raf) cancelAnimationFrame(raf); };
   }, [videoObj, videoPlaying, draw]);
 
+  /* ── Live format strip: debounced thumbnails, one per dimension ── */
+  useEffect(() => {
+    if (!fontsLoaded) return;
+    const timer = setTimeout(() => {
+      const THUMB_H = 72;
+      const next = {};
+      DIMENSIONS.forEach(d => {
+        try {
+          // Render at full dimension off-screen, then scale down into the thumb.
+          const full = document.createElement("canvas"); full.width = d.w; full.height = d.h;
+          renderScene(full.getContext("2d"), d.w, d.h, { dimensionId:d.id, live:false });
+          const tw = Math.max(1, Math.round(THUMB_H * d.w / d.h));
+          const thumb = document.createElement("canvas"); thumb.width = tw; thumb.height = THUMB_H;
+          const tx = thumb.getContext("2d");
+          tx.imageSmoothingQuality = "high";
+          tx.drawImage(full, 0, 0, tw, THUMB_H);
+          next[d.id] = thumb.toDataURL("image/png");
+        } catch(_) { /* skip a format that can't render this tick */ }
+      });
+      setFormatThumbs(next);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [renderScene, fontsLoaded]);
+
   /* ── Download + save to history ── */
   const download = async () => {
     const c = canvasRef.current; if (!c) return;
@@ -1050,6 +1075,28 @@ export default function App() {
     const id = Date.now().toString(36);
     const date = new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"});
     setHistory(prev => [{id, thumb, label, date}, ...prev].slice(0, MAX_HIST));
+  };
+
+  /* ── Download every format via off-screen renderScene ── */
+  const downloadAll = async () => {
+    const slug = headline ? headline.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,30) : postType;
+    const isJpg = exportFormat === "jpeg";
+    for (let i=0; i<DIMENSIONS.length; i++) {
+      const d = DIMENSIONS[i];
+      try {
+        const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+        const ctx = c.getContext("2d");
+        if (isJpg) { ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,d.w,d.h); }  // JPEG has no alpha
+        renderScene(ctx, d.w, d.h, { dimensionId:d.id, live:false });
+        const dataUrl = c.toDataURL(isJpg ? "image/jpeg" : "image/png", isJpg ? 0.92 : undefined);
+        const a = document.createElement("a");
+        a.download = `white-orchid-${slug}-${d.id}.${isJpg ? "jpg" : "png"}`;
+        a.href = dataUrl;
+        // Stagger so the browser doesn't block the burst of downloads.
+        await new Promise(res => setTimeout(res, 300));
+        a.click();
+      } catch(e) { console.warn("Could not export", d.id, e); }
+    }
   };
 
   /* ── Photo reframe: drag to pan, slider to zoom ── */
@@ -1735,6 +1782,11 @@ export default function App() {
             border:"none",borderRadius:40,fontSize:14,fontWeight:700,cursor:"pointer",
             letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
           }}>Download {exportFormat.toUpperCase()}</button>
+          <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
+            width:"100%",padding:"11px 40px",marginTop:8,background:"transparent",color:B.burnham,
+            border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
+            letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
+          }}>Download all formats</button>
           <div style={{fontSize:11,color:B.ash,textAlign:"center",marginTop:6}}>{W} × {H} px · {dim.label}</div>
 
           {/* ASSET HISTORY */}
@@ -1783,6 +1835,25 @@ export default function App() {
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
             </div>
+          </div>
+
+          {/* Live format strip — one thumbnail per dimension, click to switch */}
+          <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:16,display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+            {DIMENSIONS.map(d=>{
+              const on=dimensionId===d.id;
+              const tw=Math.max(1,Math.round(72*d.w/d.h));
+              return (
+                <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.label} · ${d.w} × ${d.h}px`}
+                  style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
+                  <span style={{display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
+                    {formatThumbs[d.id]
+                      ? <img src={formatThumbs[d.id]} alt={`${d.label} preview`} style={{maxWidth:"100%",maxHeight:"100%",display:"block"}} />
+                      : <span style={{fontSize:9,color:B.ash,fontFamily:FU.subtitle}}>{d.sub}</span>}
+                  </span>
+                  <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:on?700:600,letterSpacing:0.5,color:on?B.burnham:B.ash}}>{d.label}</span>
+                </button>
+              );
+            })}
           </div>
 
         </div>
