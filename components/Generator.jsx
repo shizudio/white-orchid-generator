@@ -218,20 +218,26 @@ function measureZoneContrast(srcCtx,zone,tc){
     if(zw<=0||zh<=0)return null;
     ctx.drawImage(srcCtx.canvas,zx,zy,zw,zh,0,0,N,N);
     const d=ctx.getImageData(0,0,N,N).data;
-    const cell=N/6;let meanSum=0,cells=0,minCellL=1,maxCellL=0;
+    const cell=N/6;let meanSum=0,cells=0,minCellL=1,maxCellL=0,maxV=0;
     for(let r=0;r<6;r++)for(let col=0;col<6;col++){
-      let sum=0,n=0;
+      let sum=0,sq=0,n=0;
       for(let y=Math.floor(r*cell);y<(r+1)*cell;y++)for(let x=Math.floor(col*cell);x<(col+1)*cell;x++){
-        const i=(y*N+x)*4;if(d[i+3]<16)continue;sum+=getLuminance(d[i],d[i+1],d[i+2]);n++;
+        const i=(y*N+x)*4;if(d[i+3]<16)continue;const l=getLuminance(d[i],d[i+1],d[i+2]);sum+=l;sq+=l*l;n++;
       }
-      if(!n)continue;const mL=sum/n;meanSum+=mL;cells++;if(mL<minCellL)minCellL=mL;if(mL>maxCellL)maxCellL=mL;
+      if(!n)continue;const mL=sum/n,v=Math.max(0,sq/n-mL*mL);meanSum+=mL;cells++;if(v>maxV)maxV=v;if(mL<minCellL)minCellL=mL;if(mL>maxCellL)maxCellL=mL;
     }
     if(!cells)return null;
     const tcL=hexLuminance(tc);
+    const zoneMeanL=meanSum/cells;
     return{
       min:Math.min(contrastRatio(minCellL,tcL),contrastRatio(maxCellL,tcL)),
       max:Math.max(contrastRatio(minCellL,tcL),contrastRatio(maxCellL,tcL)),
-      mean:contrastRatio(meanSum/cells,tcL),
+      mean:contrastRatio(zoneMeanL,tcL),
+      // Zone stats for the local audit's flat-solid classification (spec §2/§5).
+      // `flat` mirrors analyzeQuietRegion's quiet threshold (maxV<0.015): a flat
+      // solid brand region where a colour-flip — not a band — is the right fix.
+      zoneMeanL,
+      flat:maxV<0.015,
     };
   }catch(_){return null;}
 }
@@ -1954,6 +1960,14 @@ export default function App() {
           bx=Math.max(fbx0+inPad,Math.min(fbx1-bw-inPad,bx));
           by=Math.max(fby0+inPad,by);
           maxTextH=Math.max(h*0.10,Math.min(maxTextH,fby1-inPad-by));
+        }else{
+          // Zone lies entirely OUTSIDE the frame box → the text sits on the flat
+          // solid brand bg (the frame pre-pass paints the whole canvas). The auto
+          // `tc` is tuned for the photo and can fail against the bg (ivory on
+          // celadon ≈1.4:1 in the tall Story format), so force the same
+          // hi-contrast pole the strip-snap branch uses.
+          const bgLum=hexLuminance(curBg?.color||B.burnham);
+          frameBgTextColor=bgLum>0.5?B.burnham:B.whiteSmoke;
         }
       }
     }
@@ -2072,7 +2086,7 @@ export default function App() {
       if(q.mode==="skip")return;               // legible as-is → shadow only
       drawSolidBand(ctx,w,h,box,bandColor,0.92);
     };
-    const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
+    const setTextBounds=used=>{if(live||opts.captureAudit)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
@@ -2174,8 +2188,12 @@ export default function App() {
     if(live)dropInfoRef.current=dropped.length?{dropped}:null;
     if(live)fontMetaRef.current=fontMeta;   // Task 4 verification hook
 
-    // ── AUDIT snapshot (live only) — the engine's own deterministic decisions ──
-    if(live){
+    // ── AUDIT snapshot — the engine's own deterministic decisions ──
+    // Written for the live canvas, OR for an off-screen render explicitly asking to
+    // capture audit (opts.captureAudit) so the harmonizer can sweep EVERY format
+    // (a contrast fail on a format the user isn't currently viewing — e.g. ivory-on-
+    // celadon only in the tall Story layout — must still be caught + repaired).
+    if(live||opts.captureAudit){
       // Font-floor pins: a role whose fitted px sits at (or below) its readable
       // floor is "at the minimum readable size" (spec §1 legibility / §6 step 1).
       const pinPairs=[["headline","headline","Headline"],["date","date","Date"],["subtext","body","Body text"]];
@@ -2189,6 +2207,24 @@ export default function App() {
       const tb=textBoundsRef.current;
       if(mediaObj&&tb&&tb.w>0&&tb.h>0){
         contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},zoneTc);
+        // measureZoneContrast samples the COMPOSITED canvas (glyphs included), so its
+        // per-cell variance `flat` flag is polluted by the drawn text (ivory glyphs on
+        // celadon read as high-variance cells). Recompute a glyph-robust flatness for
+        // the audit: the zone is a FLAT SOLID brand region when its MEAN luminance sits
+        // within a small tolerance of the current solid background's luminance. Sparse
+        // glyphs barely move the zone mean, so a near-bg mean means the text really sits
+        // on the solid brand colour — whether that's the tall-story solid strip, a
+        // side-by-side solid panel, or the clear area beside a petal frame. (When text
+        // is over a photo the mean diverges from bgL, so this stays false there.) Only
+        // the UNTINTED fullscreen-photo types (photo_logo/texture_text, no side panel)
+        // are excluded: their "background" IS the photo, never a flat solid, so a
+        // coincidental luminance match must not trigger a colour-flip fix over a band.
+        if(contrast&&typeof contrast.zoneMeanL==="number"){
+          const bgL=hexLuminance(curBg?.color||B.burnham);
+          const untintedFullPhoto=mediaObj&&!hasFrame&&!photoBox&&["photo_logo","texture_text"].includes(postType);
+          contrast.flat=(!frameOnPhoto&&!untintedFullPhoto&&Math.abs(contrast.zoneMeanL-bgL)<0.10);
+          if(contrast.flat)contrast.zoneMeanL=bgL;   // report the true solid luminance
+        }
       }
       // Safe-zone violation: only meaningful when the user has DRAGGED text into a
       // per-dim override (typeLayoutsByDim) — a spec-default layout is always inside
@@ -2283,11 +2319,37 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScene, W, H, dimensionId, postType, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
 
+  // Sweep EVERY format's contrast audit off-screen. The live runLocalAudit only
+  // reflects the current dimension; an AI design can be legible on Square yet fail
+  // on the tall Story layout (text landing on the solid brand bg). We render each
+  // dimension off-screen with captureAudit so auditRef reflects THAT format, collect
+  // its findings, then restore the live snapshot. Returns [{dimensionId, findings}].
+  const auditAllFormats = useCallback(() => {
+    const out = [];
+    const prev = auditRef.current;         // preserve the live snapshot
+    const prevBounds = textBoundsRef.current;
+    try {
+      for (const d of DIMENSIONS) {
+        try {
+          const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+          renderScene(c.getContext("2d"), d.w, d.h, { dimensionId: d.id, live: false, captureAudit: true });
+          out.push({ dimensionId: d.id, findings: computeLocalAudit(auditRef.current) });
+        } catch { /* skip a format that can't render this tick */ }
+      }
+    } finally {
+      auditRef.current = prev;             // restore so the live audit panel is unaffected
+      textBoundsRef.current = prevBounds;
+    }
+    return out;
+  }, [renderScene]);
+
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
+  // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.__runWoAudit = () => runLocalAudit();
-  }, [runLocalAudit]);
+    window.__runWoAuditAll = () => auditAllFormats();
+  }, [runLocalAudit, auditAllFormats]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
      Fires after an AI patch's render commits. runLocalAudit identity changes on
@@ -2305,9 +2367,34 @@ export default function App() {
     if (!h.armed || !fontsLoaded) return;
     if (h.rounds >= HARMONIZE_MAX_ROUNDS) { harmonizeRef.current.armed = false; return; }
 
-    const findings = runLocalAudit();
-    const fails = findings.filter(f => f.severity === "fail" && f.fix && typeof f.fix === "object");
+    // Sweep ALL formats, not just the live one: a text-on-solid-bg contrast fail can
+    // exist only in a format the user isn't currently viewing (e.g. the tall Story
+    // layout of an AI event design). The colour-flip fix is a GLOBAL textColorId
+    // change, so applying it repairs every format at once. Collect the current live
+    // findings too (they overlap, dedup by id+fix below).
+    const perFormat = auditAllFormats();
+    const collected = [];
+    for (const pf of perFormat) for (const f of pf.findings) collected.push(f);
+    for (const f of runLocalAudit()) collected.push(f);
+    const seen = new Set();
+    const fails = collected.filter(f => {
+      if (!(f.severity === "fail" && f.fix && typeof f.fix === "object")) return false;
+      const k = f.id + ":" + JSON.stringify(f.fix);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
     if (!fails.length) { harmonizeRef.current.armed = false; return; }
+
+    // Conflict guard for the GLOBAL textColorId flip: textColorId is one value shared
+    // by every format, so if two formats want OPPOSITE poles (one solid zone needs
+    // jet, another dark zone needs whiteSmoke) a single flip cannot satisfy both —
+    // forcing one would break the other. When the flip suggestions disagree, drop the
+    // textColorId flips entirely and let each format's own render (frameBgTextColor /
+    // Auto colour-flip / backdrop band) keep that zone legible per-format. Only apply
+    // the flip when every format that wants one agrees on the same pole.
+    const tcVotes = new Set(fails.map(f => f.fix.textColorId).filter(Boolean));
+    const flipConflict = tcVotes.size > 1;
 
     // Merge all fail fixes into one patch. Loop guard: skip a fix whose (finding id
     // + serialized fix) we've already applied in this sequence — reapplying an
@@ -2315,10 +2402,16 @@ export default function App() {
     const fixPatch = {};
     let novel = false;
     for (const f of fails) {
-      const key = f.id + ":" + JSON.stringify(f.fix);
+      // Drop conflicting global colour flips (see conflict guard above); keep the
+      // fix's other fields (e.g. a per-zone backdropMode band) if present.
+      const fix = flipConflict && f.fix.textColorId
+        ? Object.fromEntries(Object.entries(f.fix).filter(([k]) => k !== "textColorId"))
+        : f.fix;
+      if (!Object.keys(fix).length) continue;
+      const key = f.id + ":" + JSON.stringify(fix);
       if (h.applied.includes(key)) continue;
       h.applied.push(key);
-      Object.assign(fixPatch, f.fix);
+      Object.assign(fixPatch, fix);
       novel = true;
     }
     if (!novel || !Object.keys(fixPatch).length) { harmonizeRef.current.armed = false; return; }
@@ -2329,7 +2422,7 @@ export default function App() {
     // the round budget. Silent: not routed through onApplyPatch → no chat suffix.
     applyDesignPatch(fixPatch, { amendUndo: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runLocalAudit, fontsLoaded]);
+  }, [runLocalAudit, auditAllFormats, fontsLoaded]);
 
   // Render the CURRENT dimension off-screen and return a downscaled JPEG data URL
   // (longest side ~768px, quality 0.8) for the vision audit — reuses renderScene
