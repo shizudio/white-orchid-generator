@@ -1745,10 +1745,10 @@ export default function App() {
         {/* ── PREVIEW ── */}
         <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke}}>
           <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
-          <div ref={previewRef}
-            style={{width:"100%",maxWidth:540,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
+          <div ref={previewRef} className="generator-preview-frame"
+            style={{width:"100%",maxWidth:820,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef} style={{
-              position:"relative", width:"100%", maxWidth:`calc(var(--generator-preview-height, 68vh) * ${W / H})`,
+              position:"relative", width:"100%", maxWidth:`calc(var(--generator-preview-height, 78vh) * ${W / H})`,
               aspectRatio:`${W} / ${H}`, flex:"0 1 auto", overflow:"visible",
             }}>
               <canvas ref={canvasRef} width={W} height={H}
