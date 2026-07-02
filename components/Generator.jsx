@@ -360,11 +360,15 @@ function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim){
    (logoByDim[dimId]). This is the single clean rule that stops a square-tuned
    position (e.g. Now Enrolling's top-center) from carrying verbatim onto Banner. */
 function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,globalSizeId){
+  // `explicit`=true when the placement came from a deliberate user choice for THIS
+  // format (a per-dim override, or the master pin on MASTER_DIM). pickLogoPlacement
+  // honours explicit bases VERBATIM — the auto focal/contrast guard only reshuffles
+  // spec-default / non-explicit bases. The user is the boss (Task 1 fix).
   const override=logoByDim?.[dimId];
-  if(override)return{position:override.position,sizeId:override.sizeId};
-  if(userLogoTouched&&dimId===MASTER_DIM)return{position:globalPos,sizeId:globalSizeId};
+  if(override)return{position:override.position,sizeId:override.sizeId,explicit:true};
+  if(userLogoTouched&&dimId===MASTER_DIM)return{position:globalPos,sizeId:globalSizeId,explicit:true};
   const fmt=formatLayoutFor(dimId,postType);
-  return{position:fmt.logo.position,sizeId:fmt.logo.sizeId};
+  return{position:fmt.logo.position,sizeId:fmt.logo.sizeId,explicit:false};
 }
 // Focal-exclusion radius: the logo box must not intersect a band around the
 // smart-crop focal point (fx,fy). 0.22×min(W,H) keeps the mark clear of a face
@@ -408,6 +412,11 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum)
     const clearsText=!exclText||!intersects(exclText,bb);
     const clearsFocal=!exclFocal||!intersects(exclFocal,bb);
     const reads=inkContrast(regionFor(basePos))>=LOGO_MIN_CONTRAST;
+    // Explicit user placement ALWAYS wins — return it verbatim, never relocate or
+    // shrink (Task 1 fix). The guard's collision/contrast reshuffle applies only to
+    // spec-default/auto bases. We still report whether it overlaps the text zone so
+    // the UI can surface a non-blocking hint (overlapsText).
+    if(base.explicit)return{position:base.position,sizeId:base.sizeId,overlapsText:!clearsText};
     if(clearsText&&clearsFocal&&reads)return{position:base.position,sizeId:base.sizeId};
   }
   // Relocate: best-scoring non-overlapping position at the base size, shrinking to
@@ -1035,8 +1044,10 @@ export default function App() {
   const imgRef = useRef(null);
   const textBoundsRef = useRef(null);
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
+  const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
   const initialPreviewRef = useRef(true);
   const [dropHint, setDropHint] = useState(null);   // surfaced non-blocking hint
+  const [logoOverlapHint, setLogoOverlapHint] = useState(false); // surfaced non-blocking logo-overlap notice
 
   // Canvas dimension (social channel format)
   const [dimensionId, setDimensionId] = useState("ig_square");
@@ -1460,6 +1471,7 @@ export default function App() {
     // floor; here we DROP tertiary/secondary copy that still won't fit rather than
     // overflow the safe zone, and record which fields were dropped for a UI hint.
     const dropped=[];
+    if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
@@ -1483,6 +1495,7 @@ export default function App() {
       // reads the real per-dimension crop.
       const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
       const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,logoInkLum);
+      if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
       const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
       const[lx,ly]=logoCenter(pos,w,h,lSz);
@@ -1728,6 +1741,8 @@ export default function App() {
     const info=dropInfoRef.current;
     const next=info?info.dropped.join(", "):null;
     setDropHint(prev=>prev===next?prev:next);
+    const ov=logoOverlapRef.current;
+    setLogoOverlapHint(prev=>prev===ov?prev:ov);
   },[draw,fontsLoaded]);
 
   // NOTE: the former global-state collision guard useEffect was removed. Logo
@@ -2428,6 +2443,11 @@ export default function App() {
                     <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
                   ))}
                 </div>
+                {logoOverlapHint&&(
+                  <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
+                    Logo overlaps the text on this format.
+                  </div>
+                )}
               </>
             ):(
               <>
