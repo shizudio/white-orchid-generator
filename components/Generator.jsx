@@ -3,6 +3,7 @@ import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
+import AuditPanel from "./AuditPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
 
@@ -254,8 +255,14 @@ function measureZoneContrast(srcCtx,zone,tc){
   try{
     const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
     const ctx=c.getContext("2d",{willReadFrequently:true});
-    const zx=Math.max(0,zone.x),zy=Math.max(0,zone.y);
-    const zw=Math.min(zone.cw-zx,zone.w),zh=Math.min(zone.ch-zy,zone.h);
+    // Inset the sampled box by 12% on each edge: the text bounds carry a padding
+    // halo (setTextBounds adds ~5% H) whose feathered/edge cells still show raw
+    // photo even when the scrim/band fully covers the GLYPHS. We measure where the
+    // letters actually sit — the interior — so the audit reflects real legibility,
+    // not the band's anti-aliased boundary (which no glyph touches).
+    const insetX=zone.w*0.12,insetY=zone.h*0.12;
+    const zx=Math.max(0,zone.x+insetX),zy=Math.max(0,zone.y+insetY);
+    const zw=Math.min(zone.cw-zx,zone.w-insetX*2),zh=Math.min(zone.ch-zy,zone.h-insetY*2);
     if(zw<=0||zh<=0)return null;
     ctx.drawImage(srcCtx.canvas,zx,zy,zw,zh,0,0,N,N);
     const d=ctx.getImageData(0,0,N,N).data;
@@ -1231,6 +1238,7 @@ export default function App() {
   // landing page handoff (sessionStorage "wo-landing-plan").
   const [chatOpen, setChatOpen] = useState(false);
   const [chatSeed, setChatSeed] = useState(null);
+  const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -2081,6 +2089,27 @@ export default function App() {
     window.__runWoAudit = () => runLocalAudit();
   }, [runLocalAudit]);
 
+  // Render the CURRENT dimension off-screen and return a downscaled JPEG data URL
+  // (longest side ~768px, quality 0.8) for the vision audit — reuses renderScene
+  // exactly like the format strip / downloads, flattened onto white (JPEG, no alpha).
+  const captureAuditImage = useCallback(() => {
+    try {
+      const c = document.createElement("canvas");
+      c.width = W; c.height = H;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+      renderScene(ctx, W, H, { dimensionId, live: false });
+      const max = 768, s = Math.min(1, max / Math.max(W, H));
+      const o = document.createElement("canvas");
+      o.width = Math.max(1, Math.round(W * s)); o.height = Math.max(1, Math.round(H * s));
+      const ox = o.getContext("2d");
+      ox.imageSmoothingQuality = "high";
+      ox.fillStyle = "#ffffff"; ox.fillRect(0, 0, o.width, o.height);
+      ox.drawImage(c, 0, 0, o.width, o.height);
+      return o.toDataURL("image/jpeg", 0.8);
+    } catch { return null; }
+  }, [renderScene, W, H, dimensionId]);
+
   // NOTE: the former global-state collision guard useEffect was removed. Logo
   // placement (spec §1 default + §4 focal/text collision guard) is now resolved
   // deterministically PER DIMENSION inside renderScene via pickLogoPlacement, so it
@@ -2905,10 +2934,16 @@ export default function App() {
                 <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Before export</div>
                 <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginTop:2}}>Save this full design as a reusable template. It appears in the Templates gallery at the top.</div>
               </div>
-              <button onClick={saveDesignTemplate} title="Save this full design as a reusable template"
-                style={{border:"none",borderRadius:999,background:B.burnham,color:"#fff",cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"9px 12px",whiteSpace:"nowrap"}}>
-                Save template
-              </button>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <button onClick={()=>setAuditOpen(true)} title="Review this design before saving (advisory)"
+                  style={{border:`1.5px solid ${B.burnham}66`,borderRadius:999,background:"transparent",color:B.burnham,cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"8px 11px",whiteSpace:"nowrap"}}>
+                  ✓ AI audit
+                </button>
+                <button onClick={saveDesignTemplate} title="Save this full design as a reusable template"
+                  style={{border:"none",borderRadius:999,background:B.burnham,color:"#fff",cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"9px 12px",whiteSpace:"nowrap"}}>
+                  Save template
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2919,6 +2954,12 @@ export default function App() {
             ))}</div>
             {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
           </div>
+          {/* AI audit — advisory design review; export/save are never blocked */}
+          <button onClick={()=>setAuditOpen(true)} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
+            width:"100%",padding:"11px 40px",marginBottom:8,background:"transparent",color:B.burnham,
+            border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
+            letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+          }}><span aria-hidden="true">✓</span> AI audit</button>
           <button onClick={download} style={{
             width:"100%",padding:"14px 40px",background:B.tangerine,color:"#fff",
             border:"none",borderRadius:40,fontSize:14,fontWeight:700,cursor:"pointer",
@@ -3010,6 +3051,18 @@ export default function App() {
         open={chatOpen}
         setOpen={setChatOpen}
         seed={chatSeed}
+      />
+      {/* AI Audit — advisory design review. Top-level mount (never inside a
+          transformed ancestor) so its fixed panel anchors to the viewport. */}
+      <AuditPanel
+        open={auditOpen}
+        setOpen={setAuditOpen}
+        runLocalAudit={runLocalAudit}
+        captureImage={captureAuditImage}
+        designState={chatDesignState}
+        dimensionId={dimensionId}
+        applyPatch={applyDesignPatch}
+        undoOnce={undoLastAiChange}
       />
     </div>
   );
