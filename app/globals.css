@@ -131,6 +131,7 @@ canvas[role="application"]:focus-visible {
 .generator-section-body {
   display: grid;
   grid-template-rows: 0fr;
+  overflow: hidden;
   opacity: 0;
   transform: translateY(-4px);
   transition:

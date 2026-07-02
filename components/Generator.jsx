@@ -1868,8 +1868,10 @@ function Sec({label,children,summary,defaultOpen=false}){
       <span aria-hidden="true" style={{fontSize:12,color:B.burnham,transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.24s cubic-bezier(.22,1,.36,1)",flex:"0 0 auto"}}>⌄</span>
     </button>
     <div className="generator-section-body" data-open={open?"true":"false"} aria-hidden={!open} id={bodyId}>
-      <div className="generator-section-body-inner" style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>
-        {children}
+      <div className="generator-section-body-inner">
+        <div style={{padding:"12px 13px 14px",borderTop:`1px solid ${B.ash}33`}}>
+          {children}
+        </div>
       </div>
     </div>
   </section>;
