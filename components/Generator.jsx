@@ -97,6 +97,37 @@ const SAMPLE_IMAGES = [
 function wrapText(ctx,text,x,y,maxW,lh){const words=text.split(" ");let line="";const lines=[];for(let i=0;i<words.length;i++){const t=line+words[i]+" ";if(ctx.measureText(t).width>maxW&&i>0){lines.push(line.trim());line=words[i]+" ";}else line=t;}lines.push(line.trim());lines.forEach((l,i)=>ctx.fillText(l,x,y+i*lh));return lines.length;}
 function textLines(ctx,text,maxW){const words=String(text||"").trim().split(/\s+/).filter(Boolean),lines=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
 function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fitted=Math.max(size,minSize),lines=[];while(fitted>=minSize){ctx.font=font(fitted);lines=textLines(ctx,text,maxW);if(lines.length*fitted*lineRatio<=maxH)break;fitted-=2;}return{size:fitted,lines,lineHeight:fitted*lineRatio};}
+// ── Hard per-format readable-font floors (Task 4 / spec §1 legibility + §6) ──
+// Every text role has an ABSOLUTE minimum canvas-px height so no copy can render
+// microscopically small regardless of how fontMult (down to banner's 0.35–0.55×)
+// and the user size step stack up. Derived as a fraction of the canvas height so
+// short formats (banner 500px, facebook 630px) get a real floor, plus an S-scaled
+// term so tall formats never fall below it either. Targets (from the user report +
+// spec §1 "text ≥24px effective" / Twitter/X guidance): at banner 1500×500 the
+// body/subtext floor lands ≈24px and the headline floor ≈34px. These are the LAST
+// line of defence — when they force overflow, the §6 degradation (drop tertiary +
+// hint) takes over so we never microscopically shrink instead. Roles:
+//   headline/title (primary)   : max(0.068*h, 38*S)  → banner ≈34px
+//   date (largest element)     : max(0.100*h, 60*S)  → banner ≈50px
+//   intro/subheading (secondary): max(0.055*h, 34*S) → banner ≈27px
+//   body/subtext/details/credit : max(0.048*h, 24*S) → banner ≈24px
+const MIN_FONT_PX={
+  headline:h=>Math.max(0.068*h,38*(h/1080)),
+  date:    h=>Math.max(0.100*h,60*(h/1080)),
+  intro:   h=>Math.max(0.055*h,34*(h/1080)),
+  body:    h=>Math.max(0.048*h,24*(h/1080)),
+};
+// Resolve the effective minSize for a fitText call: the larger of the caller's
+// legacy S-floor and the per-format readability floor, but never above `ceil`
+// (the natural size the text takes at fontMult=1 on this format) so tall formats
+// keep their design sizing and don't balloon. On short formats (banner/facebook)
+// the readability floor exceeds the degenerate degraded size, so it binds and
+// guarantees legible copy; if that overflows, §6 drop logic handles it.
+// minFloor(role,h,ceil,legacyMin).
+function minFloor(role,h,ceil,legacyMin){
+  const f=MIN_FONT_PX[role]?MIN_FONT_PX[role](h):legacyMin;
+  return Math.max(legacyMin,Math.min(f,ceil));
+}
 function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
 // ── Backdrop system (spec §2/§3/§5) — replaces the old elliptical scrim ──
 // Brand-tinted scrim colours: Burnham darkened ~15% for the dark variant,
@@ -1062,6 +1093,7 @@ export default function App() {
   const textBoundsRef = useRef(null);
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
+  const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
   const initialPreviewRef = useRef(true);
   const [dropHint, setDropHint] = useState(null);   // surfaced non-blocking hint
   const [logoOverlapHint, setLogoOverlapHint] = useState(false); // surfaced non-blocking logo-overlap notice
@@ -1488,6 +1520,7 @@ export default function App() {
     // floor; here we DROP tertiary/secondary copy that still won't fit rather than
     // overflow the safe zone, and record which fields were dropped for a UI hint.
     const dropped=[];
+    const fontMeta={};   // resolved font px per role for this render (Task 4)
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
@@ -1555,6 +1588,13 @@ export default function App() {
     const maxTextH=Math.max(h*0.12,h*(1-sm.b)-by);
     const align=layout.align||"left",scale=(layout.scale||1)*(fmt.fontMult||1),lineRatio=layout.lineHeight||1.16;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
+    // Per-format readable-font floor for a fitText call (Task 4). `start` is the
+    // call's start size. The ceiling is the SQUARE-baseline design size (start with
+    // the per-format fontMult AND the S canvas-scale divided out) so the floor can
+    // raise short-format text to legibility WITHOUT inflating tall formats beyond
+    // their designed size. `legacy` = the call's original S-based floor.
+    const fmul=fmt.fontMult||1;
+    const mf=(role,start,legacy)=>minFloor(role,h,start/(fmul*Math.max(S,1e-3)),legacy);
     // Wide-format side-by-side (photo types only, spec §1): photo occupies the
     // right band, text the left. photoBox constrains the photo draw region.
     const sideFrac=fmt.sideBySide;   // undefined unless a wide photo layout
@@ -1644,7 +1684,7 @@ export default function App() {
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
-        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);
+        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
         const preUsed=hf.lines.length*hf.lineHeight;
         const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
@@ -1656,9 +1696,9 @@ export default function App() {
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
-      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
+      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
       ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
-      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,28*S);ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
       setTextBounds(used);
       endText();
       putLogo({x:bx,y:by,w:bw,h:used});
@@ -1669,8 +1709,8 @@ export default function App() {
       }}
       if(mediaObj&&!hasFrame&&!photoBox)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
-      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
-      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;
+      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,mf("date",190*S*scale*fm("heading"),120*S));fontMeta.date=df.size;ctx.font=`300 ${df.size}px ${F.title}`;
         // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
         // above its baseline — advance by that so it clears the title above it.
         used+=df.size*0.72;
@@ -1679,11 +1719,13 @@ export default function App() {
         const gap=Math.max(36*S,used?44*S:0);
         const room=maxTextH-used-gap;
         const maxDetail=fmt.maxLines?.details??fmt.maxLines??3;
+        const detailFloor=mf("body",38*S*scale*fm("content"),32*S);
         // Tertiary "details" drops entirely if there isn't room for at least one
-        // line at its floor (spec §6 step 2 — a clean drop beats an overflow).
-        if(room<32*S*1.3){dropped.push("Details");}
+        // line at its READABLE floor (spec §6 step 2 + Task 4 — a clean drop beats
+        // microscopic overflow; the floor is now the per-format legible minimum).
+        if(room<detailFloor*1.3){dropped.push("Details");}
         else{
-          const sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,32*S);
+          const sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,detailFloor);fontMeta.subtext=sf.size;
           const lines=sf.lines.slice(0,Math.max(1,maxDetail));
           if(lines.length<sf.lines.length)dropped.push("Details (truncated)");
           ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,lines,bx,by+used+gap,bw,sf.lineHeight,align);
@@ -1696,13 +1738,15 @@ export default function App() {
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
-      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
-      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,52*S);const hlLines=hf.lines.slice(0,Math.max(1,fmt.maxLines??3));if(hlLines.length<hf.lines.length)dropped.push("Headline (truncated)");ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hlLines,bx,by+used+gap,bw,hf.lineHeight,align);}
+      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
+      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,mf("headline",84*S*scale*fm("heading"),52*S));fontMeta.headline=hf.size;const hlLines=hf.lines.slice(0,Math.max(1,fmt.maxLines??3));if(hlLines.length<hf.lines.length)dropped.push("Headline (truncated)");ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hlLines,bx,by+used+gap,bw,hf.lineHeight,align);}
       if(attribution){
         const gap=Math.max(36*S,48*S),room=maxTextH-used-gap;
-        // Tertiary subtext drops if no room for a line at its floor (spec §6 step 2).
-        if(room<32*S*1.3){dropped.push("Subtext");}
-        else{const af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines.slice(0,2),bx,by+used+gap,bw,af.lineHeight,align);}
+        const subFloor=mf("body",38*S*scale*fm("content"),32*S);
+        // Tertiary subtext drops if no room for a line at its READABLE floor (spec §6
+        // step 2 + Task 4 — clean drop beats microscopic text).
+        if(room<subFloor*1.3){dropped.push("Subtext");}
+        else{const af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,subFloor);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines.slice(0,2),bx,by+used+gap,bw,af.lineHeight,align);}
       }
       setTextBounds(used);
       endText();
@@ -1710,7 +1754,7 @@ export default function App() {
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
-        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);
+        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
         const preUsed=hf.lines.length*hf.lineHeight;
         const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
         if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}
@@ -1721,6 +1765,7 @@ export default function App() {
 
     // Surface dropped-copy info for the live dimension only (spec §6 step 5 hint).
     if(live)dropInfoRef.current=dropped.length?{dropped}:null;
+    if(live)fontMetaRef.current=fontMeta;   // Task 4 verification hook
 
     // ── Overlay-mode layers (drawn on top of everything) ──
     const ocv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
@@ -1760,6 +1805,7 @@ export default function App() {
     setDropHint(prev=>prev===next?prev:next);
     const ov=logoOverlapRef.current;
     setLogoOverlapHint(prev=>prev===ov?prev:ov);
+    if(typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook
   },[draw,fontsLoaded]);
 
   // NOTE: the former global-state collision guard useEffect was removed. Logo
