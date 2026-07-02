@@ -689,6 +689,8 @@ export default function App() {
   const [textSelected, setTextSelected] = useState(false);
   const [contentOpen, setContentOpen] = useState(false);   // Content Sec open state (controllable for click-to-edit)
   const [formatThumbs, setFormatThumbs] = useState({});     // dimensionId -> dataURL (live format strip)
+  const [galleryOpen, setGalleryOpen] = useState(true);     // template gallery Sec open state
+  const [activeTemplateName, setActiveTemplateName] = useState(""); // last applied template name (export slug fallback)
 
   // TWO Logo system
   const [selectedLogoId, setSelectedLogoId] = useState("p3-ivory");
@@ -1456,6 +1458,24 @@ export default function App() {
     setOverlayDirty(false);
   };
   const deleteDesignTemplate = (id) => setDesignTemplates(prev => prev.filter(t => t.id !== id));
+
+  // Has the user done meaningful work worth protecting before applying a template?
+  const hasMeaningfulEdits = (
+    !!(headline || subtext || attribution || dateText).trim?.() ||
+    !!headline || !!subtext || !!attribution || !!dateText ||
+    overlayLayers.length > 0 ||
+    (typeof image === "string" && image !== SAMPLE_IMAGES[0].full) ||
+    !!videoObj ||
+    imgT.zoom !== 1 || imgT.cx !== 0.5 || imgT.cy !== 0.5 || (imgT.rotation||0) !== 0
+  );
+  // Unified entry for starter + saved templates: confirm only if work exists.
+  const applyTemplateWithGuard = (template) => {
+    if (hasMeaningfulEdits && !window.confirm("Replace your current design with this template?")) return;
+    setActiveTemplateName(template?.name || "");
+    setGalleryOpen(false);
+    applyDesignTemplate(template);
+  };
+
   const isOverride = (() => {
     const l = overlayLayers.find(x => x.uid === selOverlay);
     return dimensionId !== MASTER_DIM && !!l?.byDim?.[dimensionId];
@@ -1509,6 +1529,39 @@ export default function App() {
       <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
         {/* ── CONTROLS ── */}
         <div className="generator-controls" style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 64px)"}}>
+
+          {/* ── TEMPLATES: outcome-first entry point (first thing a new user sees) ── */}
+          <Sec label="Templates" summary={activeTemplateName || (galleryOpen?"Start from a design":"Pick a design")}
+               open={galleryOpen} onOpenChange={setGalleryOpen}>
+            {!hasMeaningfulEdits&&(
+              <div style={{fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.celadon}44`,border:`1px solid ${B.celadon}`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
+                <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>New here?</strong> Tap a template below and everything is set up — just edit the words.
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+              {STARTER_TEMPLATES.map(t=>(
+                <TemplateCard key={t.id} template={t} onClick={()=>applyTemplateWithGuard(t)} />
+              ))}
+            </div>
+            {designTemplates.length>0&&(
+              <>
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",margin:"16px 0 8px"}}>Your templates</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                  {designTemplates.slice(0,6).map(template=>(
+                    <div key={template.id} style={{position:"relative"}}>
+                      <button onClick={()=>applyTemplateWithGuard(template)} title={`Apply ${template.name}`}
+                        style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
+                        {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,textTransform:"uppercase"}}>Template</span>}
+                      </button>
+                      <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
+                        style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
+                      <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </Sec>
 
           <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
 
@@ -1814,33 +1867,18 @@ export default function App() {
             </Sec>
           )}
 
-          {/* Final template save / reuse */}
+          {/* Save current design as a reusable template (appears in the Templates gallery under "Your templates") */}
           <div style={{marginTop:12,padding:"12px",borderRadius:12,background:"#fff",border:`1px solid ${B.ash}44`}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:designTemplates.length?10:0}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
               <div>
                 <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Before export</div>
-                <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginTop:2}}>Save this full design as a reusable template.</div>
+                <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginTop:2}}>Save this full design as a reusable template. It appears in the Templates gallery at the top.</div>
               </div>
               <button onClick={saveDesignTemplate} title="Save this full design as a reusable template"
                 style={{border:"none",borderRadius:999,background:B.burnham,color:"#fff",cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"9px 12px",whiteSpace:"nowrap"}}>
                 Save template
               </button>
             </div>
-            {designTemplates.length>0&&(
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-                {designTemplates.slice(0,6).map(template=>(
-                  <div key={template.id} style={{position:"relative"}}>
-                    <button onClick={()=>applyDesignTemplate(template)} title={`Apply ${template.name}`}
-                      style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
-                      {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,textTransform:"uppercase"}}>Template</span>}
-                    </button>
-                    <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
-                      style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
-                    <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Export format */}
@@ -2053,6 +2091,47 @@ function Sec({label,children,summary,defaultOpen=false,open:openProp,onOpenChang
   </section>;
 }
 function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={click} style={{padding:sm?"8px 13px":"10px 16px",minHeight:sm?36:40,borderRadius:40,border:`1.5px solid ${on?B.burnham:B.ash+"66"}`,background:on?B.burnham:"transparent",color:on?B.whiteSmoke:B.jet,fontSize:sm?11:13,fontWeight:600,cursor:"pointer",fontFamily:FU.subtitle,letterSpacing:0.5}}>{children}</button>;}
+
+// A cheap, predictable live-ish preview of a starter template: brand bg colour,
+// optional photo, a representative headline in the brand display face, and the
+// logo. It does NOT touch live editor state (no offscreen renderScene).
+function TemplateCard({template,onClick}){
+  const s=template.state||{};
+  const bg=BG_OPTIONS.find(o=>o.id===s.bgColor)||BG_OPTIONS[0];
+  const bgHex=bg.color, lightText=bg.light; // bg.light === dark surface needing light text
+  const ink=lightText?B.whiteSmoke:B.jet;
+  const logo=LOGO_VARIANTS.find(v=>v.id===s.selectedLogoId);
+  // Representative preview line per post type.
+  const line=s.postType==="quote"?`“${s.headline||""}”`
+    :s.postType==="event"?(s.headline||"")
+    :s.postType==="texture_text"?(s.headline||"")
+    :s.postType==="text_post"?(s.headline||s.subtext||"")
+    :"";
+  const sub=s.postType==="event"?(s.dateText||"")
+    :s.postType==="quote"?(s.attribution?`— ${s.attribution}`:"")
+    :s.postType==="text_post"?(s.subtext||""):"";
+  const pos=(s.logoPosition||"bottom-center");
+  const [vy,vx]=[pos.includes("top")?"flex-start":pos.includes("bottom")?"flex-end":"center",
+                 pos.includes("left")?"flex-start":pos.includes("right")?"flex-end":"center"];
+  return (
+    <button type="button" onClick={onClick} title={`Use “${template.name}” — ${template.purpose}`}
+      style={{textAlign:"left",padding:0,border:"none",background:"none",cursor:"pointer",display:"block",width:"100%"}}>
+      <div style={{position:"relative",aspectRatio:"1/1",borderRadius:11,overflow:"hidden",border:`1.5px solid ${B.ash}44`,background:bgHex}}>
+        {s.imageSrc&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />}
+        {s.imageSrc&&<div style={{position:"absolute",inset:0,background:`linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.42))`}} />}
+        {line&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"10px 11px",gap:3}}>
+          <div style={{fontFamily:s.postType==="texture_text"?FU.subtitle:F.title,color:s.imageSrc?B.whiteSmoke:ink,fontSize:s.postType==="texture_text"?13:15,fontWeight:s.postType==="texture_text"?800:600,lineHeight:1.1,letterSpacing:s.postType==="texture_text"?1:0,textTransform:s.postType==="texture_text"?"uppercase":"none",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{line}</div>
+          {sub&&<div style={{fontFamily:FU.body,color:s.imageSrc?`${B.whiteSmoke}cc`:`${ink}cc`,fontSize:9,letterSpacing:0.3}}>{sub}</div>}
+        </div>}
+        {logo&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:vy,justifyContent:vx,padding:8,pointerEvents:"none"}}>
+          <img src={logo.src} alt="" style={{width:s.logoSize==="l"?46:s.logoSize==="s"?26:34,height:"auto",maxHeight:"38%",objectFit:"contain",opacity:0.95}} />
+        </div>}
+      </div>
+      <div style={{fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:B.jet,letterSpacing:0.2,marginTop:6}}>{template.name}</div>
+      <div style={{fontFamily:F.body,fontSize:10.5,color:B.ash,lineHeight:1.35,marginTop:1}}>{template.purpose}</div>
+    </button>
+  );
+}
 function In({mt,...p}){return<input aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
 function Area(p){return<textarea aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
 function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input aria-label={label} type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
