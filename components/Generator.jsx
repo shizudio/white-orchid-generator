@@ -360,6 +360,79 @@ const DEFAULT_OVERLAYS = [
   { id:"acc-wave", name:"Wave", src:"/assets/accessories/wave.svg", kind:"accessory", ratio:3, category:"accessories", builtin:true },
 ];
 
+/* ───────── STARTER TEMPLATES ─────────
+   Built-in, complete design presets a preschool admin can recognise by outcome.
+   Each entry has the SAME `state` shape as currentTemplateState() / saved user
+   templates, so they all flow through one applyDesignTemplate() path.
+   Copy mapping per post type (mirrors the Content section inputs):
+     quote        → headline = quote text, attribution = author
+     event        → headline = title,      dateText = date, subtext = details/CTA
+     text_post    → subtext  = intro line, headline = headline, attribution = subtext
+     texture_text → headline = overlay text
+   Overlay layers use the built-in shape/accessory ids with an explicit `mode`
+   and a `master` transform from suggestPlacement(); applyDesignTemplate assigns
+   fresh uids on apply. */
+const STARTER_TEMPLATES = [
+  {
+    id:"st_open_house", name:"Open House", purpose:"Invite families to visit",
+    state:{
+      postType:"event", dimensionId:"ig_square", bgColor:"burnham",
+      headline:"Open House", dateText:"18 July",
+      subtext:"Join us for a morning of play and discovery — RSVP at thewhiteorchid.sg",
+      selectedLogoId:"p3-ivory", logoPosition:"bottom-center", logoSize:"m",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+      imageSrc:SAMPLE_IMAGES[0].full,
+    },
+  },
+  {
+    id:"st_quote", name:"Quote of the Week", purpose:"Share an early-years quote",
+    state:{
+      postType:"quote", dimensionId:"ig_square", bgColor:"celadon",
+      headline:"Play is the highest form of research.", attribution:"Albert Einstein",
+      selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+    },
+  },
+  {
+    id:"st_term_dates", name:"Term Dates", purpose:"Announce a new term",
+    state:{
+      postType:"text_post", dimensionId:"ig_square", bgColor:"wisteria",
+      subtext:"Term 3 begins", headline:"Monday 14 July",
+      attribution:"Doors open 8:30am · The White Orchid",
+      selectedLogoId:"p3-green", logoPosition:"bottom-center", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+    },
+  },
+  {
+    id:"st_hiring", name:"We're Hiring", purpose:"Post an open role",
+    state:{
+      postType:"text_post", dimensionId:"ig_square", bgColor:"burnham",
+      subtext:"Join our team", headline:"Early Childhood Educators",
+      attribution:"Apply at hello@thewhiteorchid.sg",
+      selectedLogoId:"p3-ivory", logoPosition:"bottom-center", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+    },
+  },
+  {
+    id:"st_enrolling", name:"Now Enrolling", purpose:"Open enrolment shout-out",
+    state:{
+      postType:"texture_text", dimensionId:"ig_square", bgColor:"burnham",
+      headline:"NOW ENROLLING",
+      selectedLogoId:"p3-ivory", logoPosition:"top-center", logoSize:"m",
+      fontSizes:{ heading:"m", subheading:"m", content:"m", highlight:"xl" },
+      imageSrc:SAMPLE_IMAGES[2].full,
+    },
+  },
+  {
+    id:"st_photo_moment", name:"Photo Moment", purpose:"Share a photo, on-brand",
+    state:{
+      postType:"photo_logo", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"m",
+      imageSrc:SAMPLE_IMAGES[1].full,
+    },
+  },
+];
+
 // Classify an uploaded overlay by where its ink sits: frame / strip / corner / center.
 function classifyOverlay(img) {
   const N = 64;
