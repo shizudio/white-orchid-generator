@@ -1595,8 +1595,9 @@ export default function App() {
     let handoff;
     try { handoff = JSON.parse(raw); } catch { return; }
     if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true });
+    // Seed the conversation but leave the panel CLOSED — the user asked to land
+    // on an uncluttered editor; the exchange is waiting behind the FAB.
     setChatSeed({ originalMessage: handoff?.originalMessage || "", reply: handoff?.reply || "" });
-    setChatOpen(true);
     setGalleryOpen(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -3138,6 +3139,16 @@ export default function App() {
   // Which rail chip is active given the current selection sources.
   const activeElKey = selOverlay || (inspectorEl!=null ? inspectorEl
     : photoSel ? "photo" : textSelected ? "text" : logoSel ? "logo" : bgSel ? "bg" : null);
+
+  // Graceful removal: if the open inspector's element is no longer active (photo
+  // removed, post type changed away from copy, logo cleared, overlay deleted),
+  // close the inspector rather than stranding controls for a gone element.
+  const activeKeysSig = activeElements.map(e => e.key).join("|");
+  useEffect(() => {
+    if (inspectorEl == null) return;
+    if (!activeElements.some(e => e.key === inspectorEl)) closeInspector();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKeysSig, inspectorEl]);
 
   // Inspector title + body for the currently-open element.
   const inspectorInfo = (() => {

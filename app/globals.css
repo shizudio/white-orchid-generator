@@ -908,7 +908,9 @@ canvas[role="application"]:focus-visible {
        of the viewport, leaving room to scroll the controls below it. */
     --generator-preview-height: min(27vh, 178px);
     order: 1;
-    position: sticky;
+    /* !important: an inline position:relative on the panel (added so the desktop
+       rail can absolutely-position against it) would otherwise defeat sticky. */
+    position: sticky !important;
     top: 64px;
     z-index: 50;
     flex: 0 0 auto !important;
