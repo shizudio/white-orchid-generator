@@ -2779,6 +2779,282 @@ export default function App() {
   const selectedEditorAsset = selectedEditorLayer && overlays.find(o => o.id === selectedEditorLayer.assetId);
   const selectedEditorT = selectedEditorLayer ? effectiveT(selectedEditorLayer) : null;
 
+  /* ─────────────────────────────────────────────────────────────────────────
+     PER-ELEMENT CONTROL PANELS (extracted, Commit 1)
+     Each returns the SAME JSX that used to live inline in the left-column
+     sections. They are closures over Generator state/setters so they can be
+     rendered in two places (left-column section + contextual inspector) with
+     zero prop threading and no duplicated markup.
+     ───────────────────────────────────────────────────────────────────────── */
+
+  // BACKGROUND — swatches + opacity + (Text-backdrop lives in the Text panel).
+  const renderBackgroundPanel = () => (
+    <>
+      <div style={{display:"flex",gap:10}}>
+        {BG_OPTIONS.map(b=>(
+          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
+            width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
+            background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
+            border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
+            boxShadow:bgColor===b.id?"0 0 0 2px #fff inset":"none",
+          }} />
+        ))}
+      </div>
+      <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
+        <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha}
+          onInput={e=>setBgAlpha(parseFloat(e.currentTarget.value))}
+          onChange={e=>setBgAlpha(parseFloat(e.target.value))}
+          style={{flex:1,accentColor:B.burnham}} />
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
+      </div>
+      {bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+    </>
+  );
+
+  // PHOTO — media kind toggle + samples/library/upload + quick chips + AI idea.
+  const renderPhotoPanel = () => (
+    <>
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
+        <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
+      </div>
+      {mediaKind==="image"?(
+        <>
+          <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
+            {SAMPLE_IMAGES.map((s,i)=>(
+              <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
+                style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
+                title={s.label}>
+                <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
+              </button>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
+            <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
+          </div>
+          <MidjourneyLauncher />
+          <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
+          {mediaObj&&<>
+            <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
+              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
+              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
+              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
+              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
+              <button onClick={()=>{setPhotoT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
+            </div>
+            <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
+          </>}
+        </>
+      ):(
+        <>
+          <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
+          <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
+          {videoObj&&<>
+            <div style={{display:"flex",gap:6,marginBottom:8}}>
+              <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
+              <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
+              <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
+              <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
+            </div>
+            <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
+          </>}
+          {savedVideos.length>0&&<div style={{marginTop:10}}>
+            <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4}}>{savedVideos.map(v=><div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
+              <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
+              <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
+              <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
+            </div>)}</div>
+          </div>}
+        </>
+      )}
+    </>
+  );
+
+  // TEXT / CONTENT — copy inputs (per post type) + full typography controls.
+  const renderTextPanel = () => (
+    <>
+      {postType==="quote"&&<><Area id="wo-text-primary" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+      {postType==="event"&&<><In id="wo-text-primary" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+      {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id="wo-text-primary" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+      {postType==="texture_text"&&<In id="wo-text-primary" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+      {postType==="photo_logo"&&<><In id="wo-text-primary" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      <EditorSubhead label="Typography" summary="Editorial auto-fit" />
+      <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+          <span style={{fontSize:11,fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>Editorial auto-fit</span>
+          <button onClick={resetTextLayout} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",fontFamily:F.body}}>Reset</button>
+        </div>
+        <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
+      </div>
+
+      {/* Font size per text category */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
+        <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
+      </div>
+      {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
+        const meta=FONT_ROLES.find(r=>r.id===role);
+        return (
+          <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+            <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
+            <div style={{display:"flex",gap:4,flex:1}}>
+              {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
+                <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
+                  style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+              );})}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{height:10}} />
+
+      <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
+      <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
+      <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
+      <div style={{display:"flex",gap:6,marginTop:9,marginBottom:10}}>
+        {[{id:"left",label:"Left"},{id:"center",label:"Centre"},{id:"right",label:"Right"}].map(item=><button key={item.id} aria-pressed={textLayout.align===item.id} onClick={()=>updateTextLayout({align:item.id})}
+          style={{flex:1,padding:"7px 8px",borderRadius:8,border:`1.5px solid ${textLayout.align===item.id?B.burnham:B.ash+"44"}`,background:textLayout.align===item.id?B.burnham:"#fff",color:textLayout.align===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700}}>{item.label}</button>)}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,maxWidth:150}}>
+        {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
+          style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
+      </div>
+      <EditorSubhead label="Text backdrop" summary={{auto:"Auto",gradient:"Gradient",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
+      <div style={{display:"flex",gap:6}}>
+        {[{id:"auto",l:"Auto"},{id:"gradient",l:"Gradient"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
+          <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Detect quiet regions; add a full-bleed gradient only where needed":o.id==="gradient"?"Always a full-bleed brand gradient behind text":o.id==="band"?"Solid brand strip behind text":"No scrim — drop shadow only"}
+            style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
+        );})}
+      </div>
+      <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto adds a soft full-bleed gradient only where the photo is too busy.</div>
+      <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
+      <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
+        {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}
+          style={{position:"relative",width:38,height:38,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:hexLuminance(color)>0.55?B.jet:B.whiteSmoke,fontFamily:F.subtitle,fontSize:option.id==="auto"?9:0,fontWeight:800}}>{option.id==="auto"&&"AUTO"}</button>;})}
+      </div>
+      <div style={{fontSize:11,color:B.ash,marginTop:7,fontFamily:F.body,lineHeight:1.45}}>
+        {textColorId==="auto"?`Auto selected ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label}.`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label}
+        {mediaObj&&` Estimated minimum contrast ${(textColorId==="auto"?textMinContrast:textContrast).toFixed(1)}:1.`}
+      </div>
+      <div style={{fontSize:10,color:B.burnham,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>{accessibilityNote}</div>
+      {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
+    </>
+  );
+
+  // LOGO — variant grid + 9-grid placement + size chips. The primary/secondary
+  // group is supplied by the caller (left column reuses the shared Brand-marks
+  // tab strip; the inspector renders its own tabs above this panel).
+  const renderLogoPanel = (group=markTab) => (
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+        {LOGO_VARIANTS.filter(v=>v.group===(["primary","secondary"].includes(group)?group:"primary")).map(v=>{
+          const isSel = selectedLogoId===v.id;
+          const isAuto = suggestedColor===v.color && !isSel && imageObj;
+          return (
+            <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
+              title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
+              style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
+              <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
+              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
+              {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
+              {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
+            </button>
+          );
+        })}
+      </div>
+      <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[resolvedLogo.position]?.label||"Position"} · ${resolvedLogo.sizeId.toUpperCase()}`} />
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
+        {[
+          "top-left","top-center","top-right",
+          "mid-left","center","mid-right",
+          "bottom-left","bottom-center","bottom-right"
+        ].map(pos=>{
+          const on=resolvedLogo.position===pos;
+          return(
+            <button key={pos} aria-pressed={on} onClick={()=>placeLogo({position:pos})} title={pos.replace(/-/g," ")}
+              style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
+              <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
+            </button>
+          );
+        })}
+      </div>
+      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+        <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
+        {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
+          <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
+        ))}
+      </div>
+      {logoOverlapHint&&(
+        <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
+          Logo overlaps the text on this format.
+        </div>
+      )}
+    </>
+  );
+
+  // OVERLAY LAYER — per-layer editor for the currently selected overlay uid.
+  // Renders null when no overlay layer is selected (matches prior inline guard).
+  const renderOverlayPanel = () => {
+    const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null; return (
+      <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
+            {dimensionId===MASTER_DIM?"Default layout (Square)":isOverride?"Custom · "+dim.label:"Auto from default"}
+          </span>
+          <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
+            {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
+          </button>
+        </div>
+        {selAsset?.category!=="accessories"&&<>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"},{m:"overlay",l:"On top"}].map(({m,l})=>{
+              const on=(selLayer.mode||"frame")===m;
+              return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Outer silhouette border only":m==="lineart"?"Keep internal stroke pattern and remove pale fills":"Shape drawn as-is on top"}
+                style={{flex:1,padding:"6px 3px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{l}</button>;
+            })}
+          </div>
+          {(selLayer.mode==="outline")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
+            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Outline colour</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
+              {["tangerine","burnham","whiteSmoke","celadon","wisteria","jet"].map(key=>{const on=(selLayer.outlineColor||"tangerine")===key;return <button key={key} aria-label={`Outline ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{outlineColor:key})}
+                style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
+            </div>
+            <Slider label="Weight" min={0.02} max={0.25} step={0.005} value={selLayer.outlineWidth??0.08} suffix={Math.round((selLayer.outlineWidth??0.08)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{outlineWidth:v})} />
+          </div>}
+          {(selLayer.mode==="lineart")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
+            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Line art colour</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
+              {["burnham","whiteSmoke","tangerine","celadon","wisteria","jet"].map(key=>{const on=(selLayer.lineArtColor||"burnham")===key;return <button key={key} aria-label={`Line art ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{lineArtColor:key})}
+                style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
+            </div>
+            <Slider label="Ink sensitivity" min={0.45} max={0.9} step={0.01} value={selLayer.lineArtThreshold??0.72} suffix={Math.round((selLayer.lineArtThreshold??0.72)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{lineArtThreshold:v})} />
+            <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Use this for flower marks and patterned artwork: it keeps dark linework, removes pale fill, then recolours the strokes.</div>
+          </div>}
+        </>}
+        {selAsset?.category==="accessories"&&<>
+          <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Accessory colour</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
+            {ACCESSORY_COLOR_OPTIONS.map(option=>{const on=(selT.colorId||"auto")===option.id,color=option.id==="auto"?B.whiteSmoke:B[option.id];return <button key={option.id} aria-label={`Accessory colour ${option.label}`} aria-pressed={on} title={option.label} onClick={()=>updateLayerT(selOverlay,{colorId:option.id})}
+              style={{position:"relative",width:34,height:34,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:B.jet,fontFamily:FU.subtitle,fontSize:option.id==="auto"?8:0,fontWeight:800,cursor:"pointer"}}>{option.id==="auto"?"AUTO":""}</button>;})}
+          </div>
+          <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Quick size</div>
+          <div style={{display:"flex",gap:6,marginBottom:9}}>
+            {ACCESSORY_SIZE_PRESETS.map(p=>{const on=Math.abs((selT.scale||0)-p.scale)<0.015;return <button key={p.id} aria-label={`Accessory size ${p.label}`} aria-pressed={on} onClick={()=>updateLayerT(selOverlay,{scale:p.scale})}
+              style={{flex:1,padding:"6px 5px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{p.label}</button>;})}
+          </div>
+        </>}
+        <Slider label="Size" min={selAsset?.category==="accessories"?0.04:0.05} max={selAsset?.category==="accessories"?0.8:1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
+        <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
+        <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
+        <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.45}}>{selAsset?.category==="accessories"&&((selT.colorId||"auto")==="auto")?"Auto continually selects the strongest accessible brand colour for the area beneath the accessory. ":""}Drag on the preview to move. Use the handles or sliders to resize and rotate.</div>
+      </div>
+    );
+  };
+
   if(!ready) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:B.whiteSmoke,fontFamily:F.body,color:B.burnham}}>Loading...</div>;
 
   /* ───────── UI ───────── */
@@ -2848,131 +3124,13 @@ export default function App() {
               {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>setPostType(t.id)}>{t.label}</Chip>)}
             </div>
             <EditorSubhead label="Media" summary={videoObj?"Video added":imageObj?"Image added":"Optional for every post"} />
-            <div style={{display:"flex",gap:6,marginBottom:10}}>
-              <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
-              <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
-            </div>
-            {mediaKind==="image"?(
-              <>
-                <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
-                  {SAMPLE_IMAGES.map((s,i)=>(
-                    <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
-                      style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
-                      title={s.label}>
-                      <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
-                    </button>
-                  ))}
-                </div>
-                <div style={{display:"flex",gap:6}}>
-                  <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
-                  <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
-                </div>
-                <MidjourneyLauncher />
-                <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
-                {mediaObj&&<>
-                  <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
-                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
-                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
-                    <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
-                    <button onClick={()=>{setPhotoT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
-                  </div>
-                  <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
-                </>}
-              </>
-            ):(
-              <>
-                <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
-                <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
-                {videoObj&&<>
-                  <div style={{display:"flex",gap:6,marginBottom:8}}>
-                    <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
-                    <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
-                    <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
-                    <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
-                  </div>
-                  <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
-                </>}
-                {savedVideos.length>0&&<div style={{marginTop:10}}>
-                  <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4}}>{savedVideos.map(v=><div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
-                    <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
-                    <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
-                    <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
-                  </div>)}</div>
-                </div>}
-              </>
-            )}
+            {renderPhotoPanel()}
           </Sec>
 
           {/* Content fields appear right under the type when the type needs text */}
           {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text"||postType==="photo_logo")&&(
             <Sec label="Content" summary={headline||subtext||(postType==="photo_logo"?"No caption":"Add copy")} open={contentOpen} onOpenChange={setContentOpen}>
-              {postType==="quote"&&<><Area id="wo-text-primary" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="event"&&<><In id="wo-text-primary" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-              {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id="wo-text-primary" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-              {postType==="texture_text"&&<In id="wo-text-primary" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
-              {postType==="photo_logo"&&<><In id="wo-text-primary" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
-              <EditorSubhead label="Typography" summary="Editorial auto-fit" />
-              <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
-                  <span style={{fontSize:11,fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>Editorial auto-fit</span>
-                  <button onClick={resetTextLayout} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",fontFamily:F.body}}>Reset</button>
-                </div>
-                <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
-              </div>
-
-              {/* Font size per text category */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
-                <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
-              </div>
-              {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
-                const meta=FONT_ROLES.find(r=>r.id===role);
-                return (
-                  <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
-                    <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
-                    <div style={{display:"flex",gap:4,flex:1}}>
-                      {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
-                        <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
-                          style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
-                      );})}
-                    </div>
-                  </div>
-                );
-              })}
-              <div style={{height:10}} />
-
-              <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
-              <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
-              <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
-              <div style={{display:"flex",gap:6,marginTop:9,marginBottom:10}}>
-                {[{id:"left",label:"Left"},{id:"center",label:"Centre"},{id:"right",label:"Right"}].map(item=><button key={item.id} aria-pressed={textLayout.align===item.id} onClick={()=>updateTextLayout({align:item.id})}
-                  style={{flex:1,padding:"7px 8px",borderRadius:8,border:`1.5px solid ${textLayout.align===item.id?B.burnham:B.ash+"44"}`,background:textLayout.align===item.id?B.burnham:"#fff",color:textLayout.align===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700}}>{item.label}</button>)}
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,maxWidth:150}}>
-                {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
-                  style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
-              </div>
-              <EditorSubhead label="Text backdrop" summary={{auto:"Auto",gradient:"Gradient",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
-              <div style={{display:"flex",gap:6}}>
-                {[{id:"auto",l:"Auto"},{id:"gradient",l:"Gradient"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
-                  <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Detect quiet regions; add a full-bleed gradient only where needed":o.id==="gradient"?"Always a full-bleed brand gradient behind text":o.id==="band"?"Solid brand strip behind text":"No scrim — drop shadow only"}
-                    style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
-                );})}
-              </div>
-              <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto adds a soft full-bleed gradient only where the photo is too busy.</div>
-              <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
-              <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
-                {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}
-                  style={{position:"relative",width:38,height:38,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:hexLuminance(color)>0.55?B.jet:B.whiteSmoke,fontFamily:F.subtitle,fontSize:option.id==="auto"?9:0,fontWeight:800}}>{option.id==="auto"&&"AUTO"}</button>;})}
-              </div>
-              <div style={{fontSize:11,color:B.ash,marginTop:7,fontFamily:F.body,lineHeight:1.45}}>
-                {textColorId==="auto"?`Auto selected ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label}.`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label}
-                {mediaObj&&` Estimated minimum contrast ${(textColorId==="auto"?textMinContrast:textContrast).toFixed(1)}:1.`}
-              </div>
-              <div style={{fontSize:10,color:B.burnham,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>{accessibilityNote}</div>
-              {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
+              {renderTextPanel()}
             </Sec>
           )}
 
@@ -2984,51 +3142,7 @@ export default function App() {
               ))}
             </div>
             {!(["overlays","accessories"].includes(markTab))?(
-              <>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-                  {LOGO_VARIANTS.filter(v=>v.group===markTab).map(v=>{
-                    const isSel = selectedLogoId===v.id;
-                    const isAuto = suggestedColor===v.color && !isSel && imageObj;
-                    return (
-                      <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
-                        title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
-                        style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
-                        <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
-                        <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:isSel?B.burnham:B.ash,marginTop:3,textAlign:"center",lineHeight:1.2}}>{v.label}</span>
-                        {isAuto&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.celadon,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>AUTO</span>}
-                        {isSel&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-                <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[resolvedLogo.position]?.label||"Position"} · ${resolvedLogo.sizeId.toUpperCase()}`} />
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
-                  {[
-                    "top-left","top-center","top-right",
-                    "mid-left","center","mid-right",
-                    "bottom-left","bottom-center","bottom-right"
-                  ].map(pos=>{
-                    const on=resolvedLogo.position===pos;
-                    return(
-                      <button key={pos} aria-pressed={on} onClick={()=>placeLogo({position:pos})} title={pos.replace(/-/g," ")}
-                        style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
-                        <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
-                      </button>
-                    );
-                  })}
-                </div>
-                <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
-                  {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
-                    <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
-                  ))}
-                </div>
-                {logoOverlapHint&&(
-                  <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
-                    Logo overlaps the text on this format.
-                  </div>
-                )}
-              </>
+              renderLogoPanel(markTab)
             ):(
               <>
                 <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
@@ -3060,60 +3174,7 @@ export default function App() {
                   )}
                 </div>
 
-                {(()=>{ const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null; return (
-                  <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                      <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
-                        {dimensionId===MASTER_DIM?"Default layout (Square)":isOverride?"Custom · "+dim.label:"Auto from default"}
-                      </span>
-                      <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
-                        {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
-                      </button>
-                    </div>
-                    {selAsset?.category!=="accessories"&&<>
-                      <div style={{display:"flex",gap:6,marginBottom:8}}>
-                        {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"},{m:"overlay",l:"On top"}].map(({m,l})=>{
-                          const on=(selLayer.mode||"frame")===m;
-                          return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Outer silhouette border only":m==="lineart"?"Keep internal stroke pattern and remove pale fills":"Shape drawn as-is on top"}
-                            style={{flex:1,padding:"6px 3px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{l}</button>;
-                        })}
-                      </div>
-                      {(selLayer.mode==="outline")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
-                        <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Outline colour</div>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
-                          {["tangerine","burnham","whiteSmoke","celadon","wisteria","jet"].map(key=>{const on=(selLayer.outlineColor||"tangerine")===key;return <button key={key} aria-label={`Outline ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{outlineColor:key})}
-                            style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
-                        </div>
-                        <Slider label="Weight" min={0.02} max={0.25} step={0.005} value={selLayer.outlineWidth??0.08} suffix={Math.round((selLayer.outlineWidth??0.08)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{outlineWidth:v})} />
-                      </div>}
-                      {(selLayer.mode==="lineart")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
-                        <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Line art colour</div>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
-                          {["burnham","whiteSmoke","tangerine","celadon","wisteria","jet"].map(key=>{const on=(selLayer.lineArtColor||"burnham")===key;return <button key={key} aria-label={`Line art ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{lineArtColor:key})}
-                            style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
-                        </div>
-                        <Slider label="Ink sensitivity" min={0.45} max={0.9} step={0.01} value={selLayer.lineArtThreshold??0.72} suffix={Math.round((selLayer.lineArtThreshold??0.72)*100)+"%"} onChange={v=>setLayerStyle(selOverlay,{lineArtThreshold:v})} />
-                        <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Use this for flower marks and patterned artwork: it keeps dark linework, removes pale fill, then recolours the strokes.</div>
-                      </div>}
-                    </>}
-                    {selAsset?.category==="accessories"&&<>
-                      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Accessory colour</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
-                        {ACCESSORY_COLOR_OPTIONS.map(option=>{const on=(selT.colorId||"auto")===option.id,color=option.id==="auto"?B.whiteSmoke:B[option.id];return <button key={option.id} aria-label={`Accessory colour ${option.label}`} aria-pressed={on} title={option.label} onClick={()=>updateLayerT(selOverlay,{colorId:option.id})}
-                          style={{position:"relative",width:34,height:34,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:B.jet,fontFamily:FU.subtitle,fontSize:option.id==="auto"?8:0,fontWeight:800,cursor:"pointer"}}>{option.id==="auto"?"AUTO":""}</button>;})}
-                      </div>
-                      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Quick size</div>
-                      <div style={{display:"flex",gap:6,marginBottom:9}}>
-                        {ACCESSORY_SIZE_PRESETS.map(p=>{const on=Math.abs((selT.scale||0)-p.scale)<0.015;return <button key={p.id} aria-label={`Accessory size ${p.label}`} aria-pressed={on} onClick={()=>updateLayerT(selOverlay,{scale:p.scale})}
-                          style={{flex:1,padding:"6px 5px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{p.label}</button>;})}
-                      </div>
-                    </>}
-                    <Slider label="Size" min={selAsset?.category==="accessories"?0.04:0.05} max={selAsset?.category==="accessories"?0.8:1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
-                    <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
-                    <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
-                    <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.45}}>{selAsset?.category==="accessories"&&((selT.colorId||"auto")==="auto")?"Auto continually selects the strongest accessible brand colour for the area beneath the accessory. ":""}Drag on the preview to move. Use the handles or sliders to resize and rotate.</div>
-                  </div>
-                ); })()}
+                {renderOverlayPanel()}
 
               </>
             )}
@@ -3121,26 +3182,7 @@ export default function App() {
 
           {(postType==="quote"||postType==="text_post"||postType==="event"||hasFrameLayer||(mediaObj&&imgT.zoom<0.999))&&(
             <Sec label="Background" summary={curBg?.label}>
-              <div style={{display:"flex",gap:10}}>
-                {BG_OPTIONS.map(b=>(
-                  <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
-                    width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
-                    background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
-                    border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
-                    boxShadow:bgColor===b.id?"0 0 0 2px #fff inset":"none",
-                  }} />
-                ))}
-              </div>
-              <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
-                <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
-                <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha}
-                  onInput={e=>setBgAlpha(parseFloat(e.currentTarget.value))}
-                  onChange={e=>setBgAlpha(parseFloat(e.target.value))}
-                  style={{flex:1,accentColor:B.burnham}} />
-                <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
-              </div>
-              {bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+              {renderBackgroundPanel()}
             </Sec>
           )}
 
