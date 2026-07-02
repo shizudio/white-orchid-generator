@@ -139,72 +139,14 @@ function minFloor(role,h,ceil,legacyMin){
   return Math.max(legacyMin,Math.min(f,ceil));
 }
 function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
-// ── Backdrop system (spec §2/§3/§5) — replaces the old elliptical scrim ──
-// Brand-tinted scrim colours: Burnham darkened ~15% for the dark variant,
-// ivory for the light variant (spec §2 colour).
-const SCRIM_DARK="23,52,48";   // #173430
-const SCRIM_LIGHT="250,250,247"; // ivory
-// 5-stop ease-out ramp (fraction from dark end 0 → transparent end 1, alpha
-// as a fraction of peak). Spec §2 easing.
-const SCRIM_STOPS=[[0.00,1.00],[0.15,0.933],[0.40,0.667],[0.70,0.267],[1.00,0.00]];
-
-// Full-bleed gradient band behind a text zone (spec §2). Spans the full canvas
-// width edge-to-edge (or full height for side-anchored wide layouts) so there is
-// NO visible shape edge inside the frame — the anti-oval requirement. Direction
-// is derived from the text anchor: lower text darkens toward the bottom edge,
-// upper text toward the top, centred text uses a symmetric vertical ramp.
-// textBox = {x,y,w,h} in px. peak defaults to 0.45 (dark) / 0.55 (light).
-function drawGradientBand(ctx,w,h,textBox,tc,opts={}){
-  const light=hexLuminance(tc)>0.5;               // light text → dark scrim
-  const rgb=light?SCRIM_DARK:SCRIM_LIGHT;
-  const peak=opts.peak??(light?0.45:0.55);
-  const {x:tx,y:ty,w:tw,h:th}=textBox;
-  const side=opts.side||false;                    // horizontal band (wide side layout)
-  if(side){
-    // Full-height vertical ramp spanning the canvas: darkest at the text's
-    // outer horizontal edge, feathering across. Left-anchored text → dark at left.
-    const leftAnchored=(tx+tw/2)<w/2;
-    const pad=tw*0.40, feather=w*0.15;
-    const full=leftAnchored?Math.min(w,tx+tw+pad):Math.max(0,tx-pad);
-    const darkEdge=leftAnchored?0:w;
-    const zeroAt=leftAnchored?Math.min(w,full+feather):Math.max(0,full-feather);
-    const g=ctx.createLinearGradient(darkEdge,0,zeroAt,0);
-    SCRIM_STOPS.forEach(([f,a])=>g.addColorStop(f,`rgba(${rgb},${peak*a})`));
-    ctx.save();ctx.fillStyle=g;ctx.fillRect(0,0,w,h);ctx.restore();
-    return;
-  }
-  // Vertical ramp spanning full width. Determine anchor: lower / upper / center.
-  const cy=ty+th/2, lower=cy>h*0.58, upper=cy<h*0.42;
-  const pad=th*0.40, feather=h*0.15;
-  ctx.save();
-  if(lower){
-    const zeroAt=Math.max(0,ty-pad-feather); // dark at bottom edge, transparent above the text
-    // Build a vertical gradient from bottom (dark) upward.
-    const grad=ctx.createLinearGradient(0,h,0,zeroAt);
-    SCRIM_STOPS.forEach(([f,a])=>grad.addColorStop(f,`rgba(${rgb},${peak*a})`));
-    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
-  }else if(upper){
-    const full=Math.max(0,ty-pad), zeroAt=Math.min(h,full+feather);
-    const grad=ctx.createLinearGradient(0,0,0,zeroAt);
-    SCRIM_STOPS.forEach(([f,a])=>grad.addColorStop(f,`rgba(${rgb},${peak*a})`));
-    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
-  }else{
-    // Centred text: symmetric vertical ramp darkest at the band centre,
-    // feathering both ways (matches spec's radial/elliptical intent but as a
-    // full-width horizontal band → no oval edges).
-    const top=Math.max(0,ty-pad), bot=Math.min(h,ty+th+pad);
-    const featT=Math.max(0,top-feather), featB=Math.min(h,bot+feather);
-    const grad=ctx.createLinearGradient(0,featT,0,featB);
-    // ease in to peak at band top, hold, ease out at band bottom
-    const spanTop=(top-featT)/Math.max(1,featB-featT), spanBot=(bot-featT)/Math.max(1,featB-featT);
-    grad.addColorStop(0,`rgba(${rgb},0)`);
-    grad.addColorStop(Math.min(0.49,spanTop),`rgba(${rgb},${peak})`);
-    grad.addColorStop(Math.max(0.51,spanBot),`rgba(${rgb},${peak})`);
-    grad.addColorStop(1,`rgba(${rgb},0)`);
-    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
-  }
-  ctx.restore();
-}
+// ── Backdrop system (spec §2/§3/§5) ──
+// The full-bleed GRADIENT BAND treatment was REMOVED by user decision on
+// 2026-07-02 (it washed a dark veil across the whole canvas — darkening the solid
+// background outside frame shapes and stacking on top of the per-type photo tint).
+// The only legibility treatments that remain are: (1) flip the text colour to the
+// higher-contrast pole, (2) smart placement / quiet-zone snapping, and — as a last
+// resort — (3) the SOLID brand band below. No treatment ever darkens the solid
+// background outside a frame shape. See the Auto ladder in drawBackdrop().
 
 // Solid full-width brand band behind the text zone (spec §5 band mode).
 function drawSolidBand(ctx,w,h,textBox,color,opacity=0.92){
@@ -219,7 +161,8 @@ function drawSolidBand(ctx,w,h,textBox,color,opacity=0.92){
 // the actual per-dimension smart-crop, any brand tint, and side-by-side panels —
 // not a naive centered cover-fit (which mismatched the shifted banner/wide crops
 // and was a cause of the dark-text-on-dark-hair miss). Returns quiet+legible mode.
-// mode: "skip" (no scrim, shadow only) | "reduced" (0.20 peak) | "full" (0.45/0.55).
+// mode: "skip" (no scrim, shadow only) | "band" (solid brand band — the only
+// remaining treatment after the gradient was removed 2026-07-02).
 function analyzeQuietRegion(srcCtx,zone,tc){
   try{
     const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
@@ -247,10 +190,12 @@ function analyzeQuietRegion(srcCtx,zone,tc){
     const tcL=hexLuminance(tc);
     const cMin=contrastRatio(minCellL,tcL),cMax=contrastRatio(maxCellL,tcL);
     const passes=cMin>=4.5&&cMax>=4.5;
+    // The colour-flip (resolveZoneTextColor) already picked the higher-contrast pole.
+    // If a quiet zone STILL passes at both extremes → shadow only. Otherwise the
+    // solid band is the only remaining treatment (no gradient any more).
     if(quiet&&passes)return{mode:"skip",meanL:zoneMeanL,maxV};
-    if(quiet&&!passes)return{mode:"reduced",meanL:zoneMeanL,maxV};
-    return{mode:"full",meanL:zoneMeanL,maxV};
-  }catch(_){return{mode:"full"};}
+    return{mode:"band",meanL:zoneMeanL,maxV};
+  }catch(_){return{mode:"band"};}
 }
 // AUDIT ONLY — measure the EFFECTIVE WCAG contrast of the resolved text colour
 // against the ALREADY-RENDERED canvas under a text zone (scrim/band/tint already
@@ -520,14 +465,14 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
    text zone actually being rendered on THIS dimension (fixes dark-text-on-dark-hair):
      1. Sample the resolved zone (6×6, §3). Compute mean/min/max cell luminance.
      2. Prefer the text colour (ivory vs Burnham) with the higher WCAG contrast
-        against the zone mean — this is the pole the zone wants.
-     3. Auto backdrop:
+        against the zone mean — this is the pole the zone wants (the FIRST rung of the
+        Auto ladder: colour-flip).
+     3. Auto backdrop (the gradient band was removed 2026-07-02):
         - quiet & the preferred colour passes 4.5:1 at BOTH extremes → skip (shadow only).
-        - quiet but fails → reduced 0.20 band in that colour's scrim variant.
-        - busy → full band. The scrim variant is derived from the text colour inside
-          drawGradientBand (light text → dark scrim; dark text → ivory scrim), so a
-          dark zone deterministically yields light text + dark band, and a bright
-          zone yields dark text + ivory band. Colour and backdrop never disagree. */
+        - the preferred colour still can't meet the floor → the SOLID brand band
+          (light text → Burnham band; dark text → ivory band), so a dark zone yields
+          light text + dark band, and a bright zone yields dark text + ivory band.
+          Colour and band never disagree. No feathered gradient in between. */
 function resolveZoneTextColor(srcCtx,zone,userTextColorId){
   // Honour an explicit user colour choice; only "auto" gets zone-derived.
   if(userTextColorId&&userTextColorId!=="auto")return{color:B[userTextColorId]||B.jet,forced:true};
@@ -1209,7 +1154,8 @@ export default function App() {
   const [subtext, setSubtext] = useState("");
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
-  // Text backdrop treatment for text-over-photo (spec §5): auto | gradient | band | none.
+  // Text backdrop treatment for text-over-photo (spec §5): auto | band | none.
+  // (The old "gradient" treatment was removed 2026-07-02.)
   const [backdropMode, setBackdropMode] = useState("auto");
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
@@ -1427,6 +1373,10 @@ export default function App() {
 
   const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
+    // Defensive migration: the gradient backdrop treatment was removed 2026-07-02.
+    // Any incoming patch (old AI schema echo, stale template) asking for "gradient"
+    // is coerced to "auto" so it never hits the (now-deleted) code path.
+    if (patch.backdropMode === "gradient") patch = { ...patch, backdropMode: "auto" };
     const applied = [];
     // amendUndo: fold this change INTO the current top undo entry rather than
     // pushing a new one (used by the harmonizer so its fixes revert together with
@@ -1538,7 +1488,7 @@ export default function App() {
     setDateText(s.dateText);
     setBgColor(s.bgColor);
     setTextColorId(s.textColorId);
-    setBackdropMode(s.backdropMode);
+    setBackdropMode(s.backdropMode === "gradient" ? "auto" : s.backdropMode);
     setSelectedLogoId(s.selectedLogoId);
     setLogoPosition(s.logoPosition);
     setLogoSize(s.logoSize);
@@ -2061,43 +2011,66 @@ export default function App() {
     // (dark region + light text stays; bright quiet region → dark text). We keep
     // it simple: honour the resolved `tc` and only choose scrim strength here.
     // tintedType=true for quote/event/text_post: the full-photo brand tint already
-    // guarantees WCAG legibility everywhere, so Auto & None resolve to tint-only
-    // (no extra scrim) — the backdrop control only adds an explicit gradient/band
-    // for these (spec §5: "if the whole-photo tint already guarantees legibility,
-    // Auto may resolve to none"). texture_text/photo_logo have no tint → full auto.
-    // For untinted photo types (texture_text/photo_logo) pick the per-zone text
-    // colour from the ALREADY-DRAWN canvas so dark hair → light text, bright wall →
-    // dark text — and so the backdrop decision (below) uses the same colour. Assigns
-    // the closure `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
+    // guarantees WCAG legibility almost everywhere, so Auto resolves to tint-only.
+    // If the zone STILL fails the floor, Auto may only DEEPEN that same tint (bounded
+    // +0.10 alpha) — never a band on top of a tint. Only if the tint at MAX still
+    // fails does a band replace the extra tint. texture_text/photo_logo have no tint,
+    // so Auto runs the full ladder (colour-flip already done → skip or solid band).
+    // No treatment ever darkens the solid background outside a frame shape.
+    // For untinted photo types pick the per-zone text colour from the ALREADY-DRAWN
+    // canvas so dark hair → light text, bright wall → dark text. Assigns the closure
+    // `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
     const resolveZoneTc=(box)=>{
       if(frameBgTextColor){zoneTc=frameBgTextColor;return;}   // snapped onto flat bg → forced hi-contrast colour
       if(!mediaObj||textColorId!=="auto")return;   // explicit colour honoured as-is
       const r=resolveZoneTextColor(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},textColorId);
       zoneTc=r.color;
     };
+    // Max extra tint Auto may add on top of the base type tint before falling back
+    // to a band (spec/user 2026-07-02: bounded deepening, then band replaces the
+    // extra tint — never a band stacked on the tint).
+    const TINT_DEEPEN_MAX=0.10;
+    const zoneFails=box=>{
+      const m=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
+      return m?m.min<4.5:false; // no sample → assume ok
+    };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
       if(frameBgTextColor)return;   // text is on flat solid bg (snapped clear of the frame) → no scrim needed
       if(!mediaObj)return;
       const mode=backdropMode||"auto";
+      const light=hexLuminance(zoneTc)>0.5;
+      const bandColor=light?B.burnham:B.whiteSmoke;
       if(mode==="none")return;                 // shadow-only (beginText adds it)
-      if(tintedType&&mode==="auto")return;     // tint is the backdrop
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        const light=hexLuminance(zoneTc)>0.5;
-        drawSolidBand(ctx,w,h,box,light?B.burnham:B.whiteSmoke,0.92);
+        drawSolidBand(ctx,w,h,box,bandColor,0.92);
         return;
       }
-      if(mode==="gradient"){drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide});return;}
-      // auto: quiet-region check under the zone, sampled from the rendered canvas.
-      // Deterministic escalation (spec §3): quiet+passes → skip; quiet+fails → reduced
-      // 0.20 band; busy → full band. The scrim variant is derived inside drawGradientBand
-      // from zoneTc (light text → dark scrim / dark text → ivory scrim), so the colour and
-      // the backdrop always AGREE — dark zone ⇒ light text + dark band; bright zone ⇒ dark
-      // text + ivory band. This is what guarantees the §3 contrast floor.
+      // AUTO. The colour-flip already ran in resolveZoneTc (rung 1); placement/quiet
+      // snapping ran upstream (rung 2). Rung 3 differs by whether the photo is tinted:
+      if(tintedType){
+        // Tinted type: the whole photo already carries a brand tint. If the zone
+        // still fails, DEEPEN that same tint over the text zone width (a band-shaped
+        // extra layer of the SAME brand colour, bounded to +0.10 alpha) — this is a
+        // deepening of the existing tint, not a new treatment. If it's still failing
+        // at max, a band replaces the extra tint (last resort).
+        if(!zoneFails(box))return;             // tint alone is legible
+        for(let step=0.04;step<=TINT_DEEPEN_MAX+1e-6;step+=0.03){
+          drawSolidBand(ctx,w,h,box,(curBg?.color)||B.burnham,Math.min(step,TINT_DEEPEN_MAX));
+          if(!zoneFails(box))return;           // deepened tint now legible
+        }
+        // Tint at max still fails → drop a solid brand band as the last resort.
+        drawSolidBand(ctx,w,h,box,bandColor,0.92);
+        return;
+      }
+      // Untinted (texture_text/photo_logo): quiet-region check under the zone,
+      // sampled from the rendered canvas. quiet+passes → shadow only; otherwise the
+      // solid brand band is the only remaining treatment (no gradient any more). The
+      // band colour is derived from zoneTc so colour + band always AGREE — dark zone
+      // ⇒ light text + dark band; bright zone ⇒ dark text + ivory band.
       const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      if(q.mode==="reduced"){drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide,peak:0.20});return;}
-      drawGradientBand(ctx,w,h,box,zoneTc,{side:anchorSide});
+      drawSolidBand(ctx,w,h,box,bandColor,0.92);
     };
     const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -2744,7 +2717,7 @@ export default function App() {
     setBgAlpha(s.bgAlpha ?? 1);
     setTextColorId(s.textColorId || "auto");
     setExportFormat(s.exportFormat || "png");
-    setBackdropMode(s.backdropMode || "auto");
+    setBackdropMode(s.backdropMode === "gradient" || !s.backdropMode ? "auto" : s.backdropMode);
     setHeadline(s.headline || "");
     setSubtext(s.subtext || "");
     setAttribution(s.attribution || "");
@@ -2987,14 +2960,14 @@ export default function App() {
         {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
           style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
       </div>
-      <EditorSubhead label="Text backdrop" summary={{auto:"Auto",gradient:"Gradient",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
+      <EditorSubhead label="Text backdrop" summary={{auto:"Auto",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
       <div style={{display:"flex",gap:6}}>
-        {[{id:"auto",l:"Auto"},{id:"gradient",l:"Gradient"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
-          <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Detect quiet regions; add a full-bleed gradient only where needed":o.id==="gradient"?"Always a full-bleed brand gradient behind text":o.id==="band"?"Solid brand strip behind text":"No scrim — drop shadow only"}
+        {[{id:"auto",l:"Auto"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
+          <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
             style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
         );})}
       </div>
-      <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto adds a soft full-bleed gradient only where the photo is too busy.</div>
+      <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto flips the text colour first, then adds a solid brand band only where the photo is too busy.</div>
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
       <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
         {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}

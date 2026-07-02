@@ -95,23 +95,30 @@ texture_text is short (1–4 words), all-caps, big — it's a graphic element mo
 
 ---
 
-## 2. Gradient scrim spec (full-bleed band)
+## 2. Auto legibility ladder (gradient scrim removed)
 
-Default legibility treatment behind text zones on photographic backgrounds.
+> **Removed 2026-07-02 by user decision.** The full-bleed **gradient band / scrim**
+> treatment was deleted entirely. It washed a dark veil across the whole canvas —
+> darkening the solid celadon/brand background *outside* a petal frame AND stacking on
+> top of the per-type photo tint — which the user called "the shadow effect I don't
+> like." There is no longer any gradient/scrim code path. The Text-backdrop control is
+> now **Auto / Band / None** (the old "gradient" option is gone; any stored or
+> AI-supplied `"gradient"` value is coerced to `"auto"`).
 
-- **Direction:** derived from text anchor. Text in lower-third → scrim ramps from **canvas bottom edge (opaque) to transparent** moving upward (`to top` in CSS terms). Text in upper region → `to bottom`. Text centered → **radial/elliptical** scrim centered on the text block (matches the "elliptical gradient" scrim convention used in poster/streaming-tile design).
-- **Band height:** = text block height (h from tables above) **+ 40% padding on each side** it faces the canvas edge, then **feathers to fully transparent over an additional 15% of H** beyond that padded box. Formula: `band_start = text_y - 0.40*text_h` (clamped to 0), `band_full_opacity_end = text_y + text_h + 0.40*text_h`, `band_zero_opacity_at = band_full_opacity_end + 0.15*H` (for bottom-anchored text, mirror for top-anchored).
-- **Peak opacity:** **0.45** dark scrim at the edge closest to the text's far boundary, i.e. the darkest point sits just past the text block, not at the canvas edge. Rationale: literature converges on **0.35–0.45** for readability without visibly "graying out" the photo (a 40% black-to-transparent gradient is the most commonly cited value; Smashing Magazine / Upstart precedent at 35%; we pick **0.45** as the upper-middle of that band because brand photography is warm/bright preschool imagery that needs slightly more suppression than average editorial photos to hold white text at target contrast).
-- **Color:** **brand-tinted dark green**, not pure black. Use Burnham #244F49 darkened ~15% (≈ `#173430`) rather than `#000000`. Rationale: pure black scrims read as generic/tech; a brand-hue scrim ties the treatment to Burnham even where the brand color isn't used elsewhere on that asset, and warm skin-tone photography (preschool context) keeps more natural warmth under a green-black tint than under neutral black, which tends to look muddy/cool against warm skin tones.
-- **Easing (5-stop ramp, avoids linear banding):** at the darkest end alpha = peak (0.45), then interpolate with an ease-out curve, not linear. Stops (fraction of band height from dark end 0→1, alpha):
-  - 0.00 → 0.45
-  - 0.15 → 0.42
-  - 0.40 → 0.30
-  - 0.70 → 0.12
-  - 1.00 → 0.00
-  This approximates a cubic-ease falloff (steep near the transparent end, gentler near peak) — the "easing gradient" technique that avoids the visible hard edge/banding a 2-stop linear gradient produces.
-- **Light-text variant:** scrim as above (dark, brand-green-black), text color = ivory/white-smoke (#FAFAF7-ish token), for photo backgrounds of any typical exposure.
-- **Dark-text variant:** used only when backdrop mode forces light content behind text (e.g. `band` mode on ivory, or an unusually bright quiet region) — invert scrim to a **light scrim**: white/ivory at peak opacity **0.55** (needs higher opacity than dark since white-on-photo is generally harder to hold contrast with — most photos have more mid-dark content than pure highlight content), text color = Burnham #244F49.
+**The Auto ladder** (in escalation order — stop at the first rung that meets the 4.5:1 floor):
+
+1. **Colour-flip.** Flip the text colour to the higher-contrast pole for the resolved zone
+   (`resolveZoneTextColor`: ivory vs Burnham against the zone mean).
+2. **Smart placement / quiet-zone snapping.** The existing per-format placement and
+   frame-aware snapping already move text onto quiet strips / the solid-bg region.
+3. **Solid brand band.** If the floor still can't be met → the existing **band** treatment
+   (§5): a clean editorial strip, Burnham behind light text / ivory behind dark text.
+
+**Never** stack a treatment on a type tint. quote/event/text_post already tint the whole
+photo; for those, Auto may only **deepen that same tint** (bounded, up to **+0.10 alpha**)
+if contrast fails — no band on top. Only if the tint *at max* still fails does a band
+**replace** the extra tint. **No treatment ever darkens the solid background outside a
+frame shape.**
 
 ---
 
@@ -127,7 +134,7 @@ Auto mode evaluates the photo under the intended text zone before deciding to re
 - **Quiet-and-light-enough for dark text (skip scrim, use dark text):**
   `zone_max_V < 0.015` AND `zone_mean_L > 0.70`
 - **Variance threshold rationale:** 0.015 (on a 0–1 luminance scale, variance computed over ~16–36px cells at working resolution) corresponds empirically to "flat sky / wall / fabric" vs. "leaves / crowd / patterned floor" — busy natural textures typically produce cell variance ≥0.03.
-- **Contrast ratio floor to go scrim-less:** **4.5:1**, computed WCAG-style between the resolved text color and the **zone_mean_L converted to an equivalent background luminance**, checked at both the darkest and lightest sampled cell within the zone (not just the mean) — if either extreme cell fails 4.5:1, fall back to scrim. We use the *stricter* AA normal-text floor (4.5:1) rather than the 3:1 large-text floor even for big headline type, because photographic backgrounds are non-uniform in ways flat UI backgrounds aren't — the extra margin absorbs micro-texture the 6×6 grid averages over. If quiet-check passes but contrast check fails, still apply a **reduced scrim at 0.20 peak opacity** rather than full 0.45, plus the drop shadow from §5.
+- **Contrast ratio floor to go band-less:** **4.5:1**, computed WCAG-style between the resolved text color and the **zone_mean_L converted to an equivalent background luminance**, checked at both the darkest and lightest sampled cell within the zone (not just the mean) — if either extreme cell fails 4.5:1, escalate to the solid band (§5). We use the *stricter* AA normal-text floor (4.5:1) rather than the 3:1 large-text floor even for big headline type, because photographic backgrounds are non-uniform in ways flat UI backgrounds aren't — the extra margin absorbs micro-texture the 6×6 grid averages over. (The old "reduced scrim at 0.20 peak" fallback is gone with the gradient; the ladder now goes straight to the solid band, or — for tinted types — a bounded deepening of the existing tint per §2.)
 - When scrim is skipped: apply the small **drop-shadow safety net** (§5) unconditionally — quiet regions still benefit from an edge shadow against fine-grain photo noise.
 
 ---
@@ -181,20 +188,19 @@ When `confidence < 0.35`:
 
 ## 5. Backdrop modes
 
-Four user-selectable modes, applied to the text zone from §1.
+Three user-selectable modes (the old **gradient** mode was removed 2026-07-02 — see §2), applied to the text zone from §1.
 
-1. **auto:** run §3 quiet-region check. If quiet-and-legible → skip scrim, apply text in the resolved light/dark variant + the drop-shadow safety net only. Otherwise → apply full gradient scrim per §2.
-2. **gradient:** always apply the §2 gradient scrim regardless of quiet-region result. Peak opacity fixed at 0.45 (dark) / 0.55 (light variant).
-3. **band:** solid rectangle behind the full text zone, **full canvas width** (edge-to-edge, not just zone width — reads as an intentional design block rather than a text-box):
-   - Height: `text_h + 0.12*H` padding top/bottom (tighter than gradient's 40%-of-text-height since a solid band doesn't need feathering room).
+1. **auto:** run the §2 Auto ladder — colour-flip → placement → solid band. Concretely: run the §3 quiet-region check with the colour-flipped text; if quiet-and-legible → no band, apply text in the resolved light/dark variant + the drop-shadow safety net only. Otherwise → the solid **band** below. For tinted types (quote/event/text_post) Auto instead deepens the existing tint (bounded +0.10 alpha) and only bands if the tint at max still fails.
+2. **band:** solid rectangle behind the full text zone, **full canvas width** (edge-to-edge, not just zone width — reads as an intentional design block rather than a text-box):
+   - Height: `text_h + 0.12*H` padding top/bottom.
    - Opacity: **0.92** (near-solid; "90% brand color" per spec intent — 0.92 chosen so a faint hint of photo texture survives at the band edges during the 1-frame anti-aliased boundary, avoiding a hard cutout look).
    - Color pairings (brand-consistent):
      - Burnham #244F49 band → ivory/white-smoke text (primary pairing; matches brand's dominant dark-on-light... here inverted to light-on-dark for the band).
      - Ivory/white-smoke band → Burnham #244F49 text (use when photo is already dark/moody, for maximum brightness contrast to the photo).
      - Tangerine accent band → Burnham #244F49 text only (never white-on-tangerine; tangerine is a mid-value hue that fails 4.5:1 against light text). Reserve tangerine band for short accent labels (e.g. event date badges), not full headline blocks.
-4. **none:** no scrim, no band — text sits directly on photo with only the drop-shadow safety net (below). Intended for already-quiet photos the user selects manually, or brand moments where the photo itself is deliberately kept clean.
+3. **none:** no band — text sits directly on photo with only the drop-shadow safety net (below). Intended for already-quiet photos the user selects manually, or brand moments where the photo itself is deliberately kept clean.
 
-**Drop-shadow safety net (applies whenever no scrim/band, i.e. `auto`-skip and `none` modes):**
+**Drop-shadow safety net (applies whenever there's no band, i.e. `auto`-skip and `none` modes):**
 - Offset: **x = 0, y = 0.15% of H** (≈1.6px at 1080H) — nearly centered, very slight downward bias.
 - Blur radius: **0.9% of H** (≈9.7px at 1080H; scales per format using that format's own H so it stays proportional).
 - Opacity: **0.35**.
