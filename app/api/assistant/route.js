@@ -60,6 +60,44 @@ const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 20; // conversational — allow a few more turns/minute than the one-shot planner
 const requestLog = new Map();
 
+// ── DETERMINISTIC OVERLAY GATE (P1) ──────────────────────────────────────────
+// The model kept reaching for the orchid-petal frame (and other overlays) even on
+// plain informational posts, despite the prompt telling it not to. Prompt-level
+// discouragement is not reliable, so we gate overlays SERVER-SIDE: a patch may only
+// carry addOverlay when the user's own words signal decoration/celebration intent.
+// This is intentionally generous on the "decorate" side (any of these words, in any
+// form, anywhere in the message) but strips the overlay silently otherwise — the
+// reply text is left untouched so the assistant never announces a frame it didn't add.
+const DECOR_INTENT = /\b(frame|petal|orchid|shape|decorat\w*|celebrat\w*|festive|birthday|part(?:y|ies)|fancy|artistic|ornament\w*|flourish\w*|invit\w*|graduat\w*|anniversar\w*)\b/i;
+
+function wantsDecoration(text) {
+  return DECOR_INTENT.test(String(text || ''));
+}
+
+// ── LANDING VARIETY INJECTION (P1) ───────────────────────────────────────────
+// The landing handoff felt repetitive (same square + same background). We rotate a
+// SOFT style-direction hint into the system prompt per request. It's a suggestion the
+// model may override when the user's intent is specific; it just breaks the model out
+// of its single most-likely default. Stateless rotation keyed on the current minute
+// keeps successive requests landing on different combos without any shared state.
+const LANDING_DIRECTIONS = [
+  'lean minimal: solid burnham background, "text_post" layout, no overlay, generous negative space',
+  'warm photographic: a "photo_logo" or "texture_text" layout leading with imagery',
+  'soft pastel: a wisteria or celadon background with a "quote" layout',
+  'bold statement: jet background, large headline, "text_post" layout',
+  'fresh & airy: whiteSmoke background, "quote" or "text_post" layout, green logo',
+  'dated happening: an "event" layout (headline as the title, date only if given)',
+  'premium calm: burnham background, "quote" layout, ivory logo, restrained composition',
+  'friendly notice: celadon or whiteSmoke background, "text_post" layout, clear single message',
+];
+
+function pickLandingDirection() {
+  // Cheap stateless rotation: minute bucket + a small random jitter so identical
+  // prompts fired seconds apart still tend to diverge across runs.
+  const idx = (Math.floor(Date.now() / 60_000) + Math.floor(Math.random() * LANDING_DIRECTIONS.length)) % LANDING_DIRECTIONS.length;
+  return LANDING_DIRECTIONS[idx];
+}
+
 function getOutputText(response) {
   if (typeof response.output_text === 'string') return response.output_text;
   for (const item of response.output || []) {
@@ -167,8 +205,11 @@ export async function POST(request) {
     `overlay mode: ${PATCH_OPTIONS.overlayMode.join(', ')}`,
   ].join('\n');
 
+  const landingDirection = pickLandingDirection();
   const contextRule = context === 'landing'
     ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
+
+STYLE DIRECTION for THIS request (a soft suggestion — follow it unless the user's request clearly calls for something else): ${landingDirection}.
 
 VARIETY (important — the studio has felt repetitive):
 - CHOOSE the postType, bgColor and dimensionId that best fit the REQUEST'S INTENT, and vary them meaningfully between different requests. Not everything is an Instagram square on the same background.
@@ -260,6 +301,17 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   const patch = parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {};
   if (!reply) {
     return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
+  }
+
+  // ── HARD OVERLAY GATE (P1) ──────────────────────────────────────────────────
+  // Strip patch.addOverlay unless the user's own words signal decoration intent.
+  // Landing: the single message. Editor: the LAST user message (the current turn).
+  // Silent — we leave `reply` alone so the assistant never claims a frame it lost.
+  if (patch && patch.addOverlay) {
+    const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    if (!wantsDecoration(lastUserText)) {
+      delete patch.addOverlay;
+    }
   }
 
   // ── In-chat image generation (P4) ──
