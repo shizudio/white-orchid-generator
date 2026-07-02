@@ -702,18 +702,14 @@ canvas[role="application"]:focus-visible {
     font-size: 12px !important;
   }
 
+  /* Keep the guide inline in the top nav on mobile so it never floats
+     over the Media controls or Download button. Icon-only, compact. */
   .quick-guide-trigger--nav {
-    position: fixed;
-    right: 14px;
-    bottom: 14px;
-    z-index: 250;
-    width: 48px;
-    height: 48px;
-    min-height: 48px;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
     padding: 0;
-    border: 0;
-    background: var(--tw-tangerine);
-    box-shadow: var(--shadow-lg);
+    flex: 0 0 auto;
   }
 
   .quick-guide-trigger--nav .quick-guide-label {
@@ -734,9 +730,9 @@ canvas[role="application"]:focus-visible {
   }
 
   .quick-guide-panel {
-    top: auto;
+    top: 72px;
     right: 12px;
-    bottom: 74px;
+    bottom: auto;
     width: calc(100vw - 24px);
     max-height: calc(100vh - 98px);
     padding: 20px;
