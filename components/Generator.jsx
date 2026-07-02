@@ -1334,6 +1334,16 @@ export default function App() {
      logoByDim) end up exactly as if the user had made the change by hand.
      Returns the list of change keys actually applied. */
   const AI_UNDO_DEPTH = 8; // >= 5 required
+  // ── Silent harmonizer wiring (Commit 1) ──
+  // When an AI-driven patch (chat / landing handoff) lands, we arm the harmonizer.
+  // It waits for the NEXT completed live render (so runLocalAudit reads fresh
+  // engine decisions — the audit-signature effect below detects the commit, not a
+  // timeout), runs the local audit, and re-applies any "fail" finding fixes THROUGH
+  // applyDesignPatch with { amendUndo:true } so they FOLD into the same undo entry
+  // as the triggering patch (one user action = one undo). At most 2 rounds; stops
+  // when no fails remain, rounds exhausted, or an identical fix would repeat (loop
+  // guard). Audit "apply" flows are EXCLUDED — those are already user-reviewed.
+  const harmonizeRef = useRef({ armed: false, rounds: 0, applied: [] });
   const snapshotApplyableState = () => ({
     postType, dimensionId, headline, subtext, attribution, dateText,
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
@@ -1345,13 +1355,21 @@ export default function App() {
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
-  const applyDesignPatch = (patch) => {
+  const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
     const applied = [];
+    // amendUndo: fold this change INTO the current top undo entry rather than
+    // pushing a new one (used by the harmonizer so its fixes revert together with
+    // the AI patch that triggered them — one user-visible action = one undo).
+    const amendUndo = opts.amendUndo === true;
 
-    // Snapshot BEFORE mutating so undo restores this exact pre-patch state.
-    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
-    setPreAiState(snapshotApplyableState()); // legacy single-slot mirror (kept in sync)
+    if (!amendUndo) {
+      // Snapshot BEFORE mutating so undo restores this exact pre-patch state.
+      setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+      setPreAiState(snapshotApplyableState()); // legacy single-slot mirror (kept in sync)
+    }
+    // else: no new snapshot — the top entry already captures the pre-AI state, and
+    // undo restoring it also reverts these folded harmonizer fixes.
 
     // Only record a field as "applied" when it actually differs from the
     // current value — the model sometimes echoes unchanged fields into the
@@ -1415,6 +1433,16 @@ export default function App() {
     }
 
     setPhotoSel(false);
+
+    // Arm the silent harmonizer for AI-originated patches (chat / landing). This is
+    // the START of a harmonization sequence, so RESET the round counter + applied-fix
+    // log. Harmonizer re-applies come through with { amendUndo:true } and do NOT
+    // re-arm (they only advance the round counter, handled in the effect). Audit
+    // "apply" flows never pass harmonize:true, so they're excluded by construction.
+    if (opts.harmonize === true && !amendUndo) {
+      harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
+    }
+
     return applied;
   };
 
@@ -1488,7 +1516,7 @@ export default function App() {
     try { sessionStorage.removeItem("wo-landing-plan"); } catch { /* ignore */ }
     let handoff;
     try { handoff = JSON.parse(raw); } catch { return; }
-    if (handoff?.patch) applyDesignPatch(handoff.patch);
+    if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true });
     setChatSeed({ originalMessage: handoff?.originalMessage || "", reply: handoff?.reply || "" });
     setChatOpen(true);
     setGalleryOpen(false);
@@ -2088,6 +2116,48 @@ export default function App() {
     if (typeof window === "undefined") return;
     window.__runWoAudit = () => runLocalAudit();
   }, [runLocalAudit]);
+
+  /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
+     Fires after an AI patch's render commits. runLocalAudit identity changes on
+     every render-affecting state change, so this effect running here GUARANTEES the
+     auditRef snapshot reflects the applied state (runLocalAudit re-renders the live
+     canvas synchronously before reading it — no timeout guess). When armed by an AI
+     patch (opts.harmonize), take "fail" findings that carry a non-null fix and
+     re-apply them with { amendUndo:true } so they fold into the SAME undo entry.
+     Max 2 rounds (a fix may shift zones); stop early if no fails remain or an
+     identical fix would repeat (loop guard). Fully silent — no chat/summary side
+     effects; the harmonizer applies directly, never through onApplyPatch. */
+  const HARMONIZE_MAX_ROUNDS = 2;
+  useEffect(() => {
+    const h = harmonizeRef.current;
+    if (!h.armed || !fontsLoaded) return;
+    if (h.rounds >= HARMONIZE_MAX_ROUNDS) { harmonizeRef.current.armed = false; return; }
+
+    const findings = runLocalAudit();
+    const fails = findings.filter(f => f.severity === "fail" && f.fix && typeof f.fix === "object");
+    if (!fails.length) { harmonizeRef.current.armed = false; return; }
+
+    // Merge all fail fixes into one patch. Loop guard: skip a fix whose (finding id
+    // + serialized fix) we've already applied in this sequence — reapplying an
+    // identical fix means it isn't converging, so we stop rather than thrash.
+    const fixPatch = {};
+    let novel = false;
+    for (const f of fails) {
+      const key = f.id + ":" + JSON.stringify(f.fix);
+      if (h.applied.includes(key)) continue;
+      h.applied.push(key);
+      Object.assign(fixPatch, f.fix);
+      novel = true;
+    }
+    if (!novel || !Object.keys(fixPatch).length) { harmonizeRef.current.armed = false; return; }
+
+    harmonizeRef.current.rounds += 1;
+    // Amend the existing undo entry (no new snapshot). Re-arms nothing; the effect
+    // re-runs on the resulting commit and either finds no more fails or exhausts
+    // the round budget. Silent: not routed through onApplyPatch → no chat suffix.
+    applyDesignPatch(fixPatch, { amendUndo: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runLocalAudit, fontsLoaded]);
 
   // Render the CURRENT dimension off-screen and return a downscaled JPEG data URL
   // (longest side ~768px, quality 0.8) for the vision audit — reuses renderScene
@@ -3046,7 +3116,7 @@ export default function App() {
           transformed ancestor) so its fixed panel anchors to the viewport. */}
       <ArtDirectorChat
         designState={chatDesignState}
-        onApplyPatch={applyDesignPatch}
+        onApplyPatch={(patch) => applyDesignPatch(patch, { harmonize: true })}
         onUndo={undoLastAiChange}
         open={chatOpen}
         setOpen={setChatOpen}
