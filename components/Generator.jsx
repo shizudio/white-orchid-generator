@@ -144,6 +144,7 @@ const TYPE_LAYOUT_DEFAULTS = {
   event:{x:0.10,y:0.12,width:0.68,scale:1,lineHeight:1.16,align:"left"},
   text_post:{x:0.10,y:0.18,width:0.76,scale:1,lineHeight:1.16,align:"left"},
   texture_text:{x:0.10,y:0.68,width:0.80,scale:1,lineHeight:1.12,align:"right"},
+  photo_logo:{x:0.08,y:0.74,width:0.84,scale:1,lineHeight:1.12,align:"left"},
 };
 const freshTypeLayouts=()=>Object.fromEntries(Object.entries(TYPE_LAYOUT_DEFAULTS).map(([key,value])=>[key,{...value}]));
 
@@ -167,6 +168,7 @@ const TYPE_TEXT_ROLES={
   event:["subheading","heading","content"],
   text_post:["subheading","heading","content"],
   texture_text:["highlight"],
+  photo_logo:["highlight"],
 };
 const freshFontSizes=()=>({heading:"m",subheading:"m",content:"m",highlight:"m"});
 const fontMultOf=(fontSizes,role)=>FONT_SIZE_STEPS.find(s=>s.id===((fontSizes&&fontSizes[role])||"m"))?.mult??1;
@@ -990,7 +992,6 @@ export default function App() {
     const align=layout.align||"left",scale=layout.scale||1,lineRatio=layout.lineHeight||1.16;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
     const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
-    if(postType==="photo_logo"&&live)textBoundsRef.current=null;
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
@@ -1001,6 +1002,7 @@ export default function App() {
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
+      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else if(live){textBoundsRef.current=null;}
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
@@ -1069,7 +1071,7 @@ export default function App() {
   // manual or automatic logo placement enters it, move the logo to the best
   // remaining contrast-safe region; reduce to S only when space is unusually tight.
   useEffect(()=>{
-    if(!fontsLoaded||postType==="photo_logo")return;
+    if(!fontsLoaded)return;
     const raf=requestAnimationFrame(()=>{
       const textBox=textBoundsRef.current;if(!textBox)return;
       const pad=W*0.045,expanded={x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2};
@@ -1219,7 +1221,7 @@ export default function App() {
     }
     const bounds=textBoundsRef.current;
     const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
-    if(postType!=="photo_logo"&&bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
+    if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
       setTextSelected(true);setPhotoSel(false);setSelOverlay(null);
       dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
@@ -1370,7 +1372,7 @@ export default function App() {
         const layer = overlayLayers.find(l => l.uid === selOverlay);
         const t = effectiveT(layer);
         if (t) updateLayerT(selOverlay, { x:Math.max(0,Math.min(1,(t.x??0.5)+dx*step)), y:Math.max(0,Math.min(1,(t.y??0.5)+dy*step)) });
-      } else if(textSelected&&postType!=="photo_logo"){
+      } else if(textSelected){
         updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,textLayout.x+dx*step)),y:Math.max(0.08,Math.min(0.82,textLayout.y+dy*step))});
       } else if (canPan) {
         setPhotoSel(true);
@@ -1567,6 +1569,21 @@ export default function App() {
             )}
           </Sec>
 
+          <Sec label="Format" summary={dim.label}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
+              {DIMENSIONS.map(d=>{
+                const on=dimensionId===d.id;
+                return (
+                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.purpose} · ${d.w} × ${d.h}px`}
+                    style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
+                    <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
+                    <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </Sec>
+
           <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
 
           <Sec label="Post Type" summary={`${curType?.label||"Post"} · ${videoObj?"Video":imageObj?"Image":"No media"}`} defaultOpen>
@@ -1632,12 +1649,13 @@ export default function App() {
           </Sec>
 
           {/* Content fields appear right under the type when the type needs text */}
-          {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text")&&(
-            <Sec label="Content" summary={headline||subtext||"Add copy"} open={contentOpen} onOpenChange={setContentOpen}>
+          {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text"||postType==="photo_logo")&&(
+            <Sec label="Content" summary={headline||subtext||(postType==="photo_logo"?"No caption":"Add copy")} open={contentOpen} onOpenChange={setContentOpen}>
               {postType==="quote"&&<><Area id="wo-text-primary" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
               {postType==="event"&&<><In id="wo-text-primary" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
               {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id="wo-text-primary" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
               {postType==="texture_text"&&<In id="wo-text-primary" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+              {postType==="photo_logo"&&<><In id="wo-text-primary" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
               <EditorSubhead label="Typography" summary="Editorial auto-fit" />
               <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -1692,21 +1710,6 @@ export default function App() {
               {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
             </Sec>
           )}
-
-          <Sec label="Format" summary={dim.label}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
-              {DIMENSIONS.map(d=>{
-                const on=dimensionId===d.id;
-                return (
-                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.purpose} · ${d.w} × ${d.h}px`}
-                    style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
-                    <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
-                    <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </Sec>
 
           <Sec label="Brand marks" summary={markTab.charAt(0).toUpperCase()+markTab.slice(1)}>
             {/* Logos, photo overlays and editable accessories */}
