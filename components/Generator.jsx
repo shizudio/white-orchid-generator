@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
-import AIArtDirector from "./AIArtDirector";
+import ArtDirectorChat from "./ArtDirectorChat";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 
 /* ───────── BRAND ───────── */
@@ -1189,6 +1189,10 @@ export default function App() {
   // snapshot of the applyable fields taken *before* a patch was applied, so
   // undoLastAiChange() can pop and restore. Depth >= 5.
   const [aiUndoStack, setAiUndoStack] = useState([]);
+  // Floating Art Director chat: controlled open state + one-time seed from the
+  // landing page handoff (sessionStorage "wo-landing-plan").
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatSeed, setChatSeed] = useState(null);
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -1303,42 +1307,47 @@ export default function App() {
     setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
     setPreAiState(snapshotApplyableState()); // legacy single-slot mirror (kept in sync)
 
-    if (inList(patch.postType, "postType")) { setPostType(patch.postType); applied.push("postType"); }
-    if (inList(patch.dimensionId, "dimensionId")) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
-    if (typeof patch.headline === "string") { setHeadline(patch.headline); applied.push("headline"); }
-    if (typeof patch.subtext === "string") { setSubtext(patch.subtext); applied.push("subtext"); }
-    if (typeof patch.attribution === "string") { setAttribution(patch.attribution); applied.push("attribution"); }
-    if (typeof patch.dateText === "string") { setDateText(patch.dateText); applied.push("dateText"); }
-    if (inList(patch.bgColor, "bgColor")) { setBgColor(patch.bgColor); applied.push("bgColor"); }
-    if (inList(patch.textColorId, "textColorId")) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
-    if (inList(patch.backdropMode, "backdropMode")) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
+    // Only record a field as "applied" when it actually differs from the
+    // current value — the model sometimes echoes unchanged fields into the
+    // patch, and we don't want those in the "changed: …" summary or undo scope.
+    if (inList(patch.postType, "postType") && patch.postType !== postType) { setPostType(patch.postType); applied.push("postType"); }
+    if (inList(patch.dimensionId, "dimensionId") && patch.dimensionId !== dimensionId) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
+    if (typeof patch.headline === "string" && patch.headline !== headline) { setHeadline(patch.headline); applied.push("headline"); }
+    if (typeof patch.subtext === "string" && patch.subtext !== subtext) { setSubtext(patch.subtext); applied.push("subtext"); }
+    if (typeof patch.attribution === "string" && patch.attribution !== attribution) { setAttribution(patch.attribution); applied.push("attribution"); }
+    if (typeof patch.dateText === "string" && patch.dateText !== dateText) { setDateText(patch.dateText); applied.push("dateText"); }
+    if (inList(patch.bgColor, "bgColor") && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
+    if (inList(patch.textColorId, "textColorId") && patch.textColorId !== textColorId) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
+    if (inList(patch.backdropMode, "backdropMode") && patch.backdropMode !== backdropMode) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
 
-    if (inList(patch.logoId, "logoId")) {
+    if (inList(patch.logoId, "logoId") && patch.logoId !== selectedLogoId) {
       setSelectedLogoId(patch.logoId);
       setMarkTab(patch.logoId.startsWith("s") ? "secondary" : "primary");
       applied.push("logoId");
     }
     // A logo placement patch must behave exactly like a human click: pin the
     // logo globally on the master dim, or write a per-dim override elsewhere.
-    if (inList(patch.logoPosition, "logoPosition") || inList(patch.logoSize, "logoSize")) {
-      const nextPos = inList(patch.logoPosition, "logoPosition") ? patch.logoPosition : logoPosition;
-      const nextSize = inList(patch.logoSize, "logoSize") ? patch.logoSize : logoSize;
+    const posChanged = inList(patch.logoPosition, "logoPosition") && patch.logoPosition !== logoPosition;
+    const sizeChanged = inList(patch.logoSize, "logoSize") && patch.logoSize !== logoSize;
+    if (posChanged || sizeChanged) {
+      const nextPos = posChanged ? patch.logoPosition : logoPosition;
+      const nextSize = sizeChanged ? patch.logoSize : logoSize;
       if (dimensionId === MASTER_DIM) {
         setUserLogoTouched(true);
-        if (inList(patch.logoPosition, "logoPosition")) setLogoPosition(nextPos);
-        if (inList(patch.logoSize, "logoSize")) setLogoSize(nextSize);
+        if (posChanged) setLogoPosition(nextPos);
+        if (sizeChanged) setLogoSize(nextSize);
       } else {
         setUserLogoTouched(true);
         setLogoByDim(prev => ({ ...prev, [dimensionId]: { position: nextPos, sizeId: nextSize } }));
       }
-      if (inList(patch.logoPosition, "logoPosition")) applied.push("logoPosition");
-      if (inList(patch.logoSize, "logoSize")) applied.push("logoSize");
+      if (posChanged) applied.push("logoPosition");
+      if (sizeChanged) applied.push("logoSize");
     }
 
     if (patch.fontSizes && typeof patch.fontSizes === "object") {
       const clean = {};
       for (const role of PATCH_OPTIONS.fontRole) {
-        if (inList(patch.fontSizes[role], "fontStep")) clean[role] = patch.fontSizes[role];
+        if (inList(patch.fontSizes[role], "fontStep") && patch.fontSizes[role] !== fontSizes?.[role]) clean[role] = patch.fontSizes[role];
       }
       if (Object.keys(clean).length) { setFontSizes(prev => ({ ...prev, ...clean })); applied.push("fontSizes"); }
     }
@@ -1411,6 +1420,32 @@ export default function App() {
     });
   };
   const undoCreativePlan = () => undoLastAiChange();
+
+  // Compact, blob-free design snapshot for the assistant API (no dataUrls).
+  const chatDesignState = () => ({
+    postType, dimensionId, bgColor, textColorId, backdropMode,
+    headline, subtext, attribution, dateText,
+    selectedLogoId, logoPosition, logoSize,
+    fontSizes: JSON.parse(JSON.stringify(fontSizes)),
+    overlayLayers: overlayLayers.map(l => ({ assetId: l.assetId, mode: l.mode || "frame" })),
+    hasImage: !!(imageObj || videoObj),
+  });
+
+  // Consume the landing handoff once on mount: apply the starting design and
+  // open the chat seeded with the exchange so the conversation continues.
+  useEffect(() => {
+    let raw;
+    try { raw = sessionStorage.getItem("wo-landing-plan"); } catch { raw = null; }
+    if (!raw) return;
+    try { sessionStorage.removeItem("wo-landing-plan"); } catch { /* ignore */ }
+    let handoff;
+    try { handoff = JSON.parse(raw); } catch { return; }
+    if (handoff?.patch) applyDesignPatch(handoff.patch);
+    setChatSeed({ originalMessage: handoff?.originalMessage || "", reply: handoff?.reply || "" });
+    setChatOpen(true);
+    setGalleryOpen(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ── Load fonts ── */
   useEffect(() => {
@@ -2432,8 +2467,6 @@ export default function App() {
             )}
           </Sec>
 
-          <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
-
           <Sec label="Post Type" summary={`${curType?.label||"Post"} · ${videoObj?"Video":imageObj?"Image":"No media"}`} defaultOpen>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>setPostType(t.id)}>{t.label}</Chip>)}
@@ -2838,6 +2871,16 @@ export default function App() {
         </div>
       </div>
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
+      {/* Floating Art Director — mounted at the top level (never inside a Sec /
+          transformed ancestor) so its fixed panel anchors to the viewport. */}
+      <ArtDirectorChat
+        designState={chatDesignState}
+        onApplyPatch={applyDesignPatch}
+        onUndo={undoLastAiChange}
+        open={chatOpen}
+        setOpen={setChatOpen}
+        seed={chatSeed}
+      />
     </div>
   );
 }
