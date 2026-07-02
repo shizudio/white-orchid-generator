@@ -450,13 +450,20 @@ const LOGO_FOCAL_RADIUS=0.22;
 // 9-grid on contrast, excluding any position whose box overlaps the resolved TEXT
 // zone OR the focal band. Falls back to shrinking the logo (down to S) before
 // giving up. Operates purely on the CURRENT dimension's geometry (spec §1/§4).
-function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum){
+function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox){
   const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
   const pad=Math.min(w,h)*0.045;
   const exclText=textBox?{x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2}:null;
   const fr=LOGO_FOCAL_RADIUS*Math.min(w,h);
   const fx=(focal?.fx??0.5)*w, fy=(focal?.fy??0.42)*h;
   const exclFocal=focal?{x:fx-fr,y:fy-fr,w:fr*2,h:fr*2}:null;
+  // Frame-shape boundary exclusion (Commit 2c): treat the frame's bounding box,
+  // padded outward, as an area the auto logo should avoid — so the mark sits in the
+  // clear solid-bg region, not straddling the photo-frame edge. The whole box is
+  // excluded (the mark reads best on the calm bg outside the shape). Explicit user
+  // placements are still honoured verbatim below.
+  const framePad=Math.min(w,h)*0.03;
+  const exclFrame=frameBox?{x:frameBox.x-framePad,y:frameBox.y-framePad,w:frameBox.w+framePad*2,h:frameBox.h+framePad*2}:null;
   const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBgColor||B.burnham),variance:0};};
   const boxFor=(pos,lSz)=>{const[cx,cy]=logoCenter(pos,w,h,lSz);return{x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz};};
   // Contrast of the ACTUAL logo ink against a region (Failure 3): an ivory logo over
@@ -472,7 +479,8 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum)
       const box=boxFor(pos,lSz),region=regionFor(pos);
       const overlapText=exclText&&intersects(exclText,box);
       const overlapFocal=exclFocal&&intersects(exclFocal,box);
-      return{id,sizeId,lSz,overlap:overlapText||overlapFocal,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)};
+      const overlapFrame=exclFrame&&intersects(exclFrame,box);
+      return{id,sizeId,lSz,overlap:overlapText||overlapFocal||overlapFrame,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)};
     }).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
   };
   // Does the base placement already clear both exclusion zones AND read against the
@@ -483,13 +491,14 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum)
     const bb=boxFor(basePos,baseSz);
     const clearsText=!exclText||!intersects(exclText,bb);
     const clearsFocal=!exclFocal||!intersects(exclFocal,bb);
+    const clearsFrame=!exclFrame||!intersects(exclFrame,bb);
     const reads=inkContrast(regionFor(basePos))>=LOGO_MIN_CONTRAST;
     // Explicit user placement ALWAYS wins — return it verbatim, never relocate or
     // shrink (Task 1 fix). The guard's collision/contrast reshuffle applies only to
     // spec-default/auto bases. We still report whether it overlaps the text zone so
     // the UI can surface a non-blocking hint (overlapsText).
     if(base.explicit)return{position:base.position,sizeId:base.sizeId,overlapsText:!clearsText};
-    if(clearsText&&clearsFocal&&reads)return{position:base.position,sizeId:base.sizeId};
+    if(clearsText&&clearsFocal&&clearsFrame&&reads)return{position:base.position,sizeId:base.sizeId};
   }
   // Relocate: best-scoring non-overlapping position at the base size, shrinking to
   // the S floor (spec §6 step 4 — logo shrinks, never drops) if nothing fits.
@@ -1743,6 +1752,10 @@ export default function App() {
     // AUDIT accumulators (live only) — engine decisions surfaced to runLocalAudit().
     const auditLogo={explicit:false,overlapsText:false,inFocalBand:false};
     const flooredRoles=[]; // roles whose fitText result landed at its readable floor
+    // Frame-shape bounding box for THIS dimension (set in the frame-aware snap block
+    // below). putLogo reads it so the auto logo placement avoids a band around the
+    // shape boundary and prefers the clear solid-bg region (Commit 2c).
+    let frameBox=null;
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
@@ -1766,7 +1779,7 @@ export default function App() {
       // Sample regions from the CURRENT canvas (photo already drawn) so the guard
       // reads the real per-dimension crop.
       const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
-      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,logoInkLum);
+      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,logoInkLum,frameBox);
       if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
       const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
@@ -1816,11 +1829,90 @@ export default function App() {
     const layout=resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim);
     const sm=fmt.safe||{t:0.08,b:0.08,l:0.08,r:0.08};
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
-    const bw=Math.min(layout.width||0.76,1-sm.l-sm.r)*w;
-    const bx=Math.max(sm.l,Math.min(1-sm.r-bw/w,layout.x??sm.l))*w;
-    const by=Math.max(sm.t,Math.min(1-sm.b,layout.y??0.18))*h;
-    const maxTextH=Math.max(h*0.12,h*(1-sm.b)-by);
+    // let (not const): FRAME-AWARE COMPOSITION (Commit 2) may snap the text block
+    // off the frame-shape boundary onto the solid background below.
+    let bw=Math.min(layout.width||0.76,1-sm.l-sm.r)*w;
+    let bx=Math.max(sm.l,Math.min(1-sm.r-bw/w,layout.x??sm.l))*w;
+    let by=Math.max(sm.t,Math.min(1-sm.b,layout.y??0.18))*h;
+    let maxTextH=Math.max(h*0.12,h*(1-sm.b)-by);
     const align=layout.align||"left",scale=(layout.scale||1)*(fmt.fontMult||1),lineRatio=layout.lineHeight||1.16;
+    // ── FRAME-AWARE TEXT SNAPPING (Commit 2, fixes P1 at the root) ──
+    // The frame overlay clips the photo INSIDE a shape and leaves solid brand bg
+    // OUTSIDE it (drawFrameLayer). If the spec text zone straddles that boundary,
+    // glyphs render half on the photo and half on flat bg — with a bg-matched auto
+    // colour they can vanish (the user's ivory-on-ivory report). Rule:
+    //   1. Compute the frame's bounding box (widest frame layer: scale·w wide,
+    //      centred at t.x·w / t.y·h — rotation is 0 for frames).
+    //   2. If the text zone overlaps the shape's boundary band, find the largest
+    //      CLEAR solid-bg strip outside the box (top/bottom for tall formats,
+    //      left/right for wide). If it can hold the text block (min-height / min-
+    //      width thresholds), SNAP the block fully into it and force a high-contrast
+    //      bg colour (burnham on ivory bg, ivory on burnham bg) via frameBgTextColor.
+    //   3. Otherwise place the block fully INSIDE the shape (on the photo) and let
+    //      the normal per-zone backdrop/scrim rules run (frameOnPhoto=true).
+    // Prefer OUTSIDE whenever a strip is big enough — text on the calm solid bg is
+    // the most legible, on-brand result and never fights the photo.
+    let frameBgTextColor=null;   // forced hi-contrast colour when text snaps onto bg
+    let frameOnPhoto=false;      // text intentionally kept inside the shape (on photo)
+    if(hasFrame){
+      // Widest frame box (union not needed — a single frame is the norm; use the
+      // largest so the clear strips are conservative when several are stacked).
+      let fb=null;
+      for(const l of frameLayers){
+        const t=resolveT(l),a=overlays.find(o=>o.id===l.assetId),ratio=(overlayImgs.current[l.assetId]?.width/overlayImgs.current[l.assetId]?.height)||a?.ratio||1;
+        const ow=(t.scale??0.2)*w, oh=ow/ratio;
+        const box={x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh};
+        if(!fb||box.w*box.h>fb.w*fb.h)fb=box;
+      }
+      frameBox=fb;   // shared with putLogo → logo avoids the frame boundary (Commit 2c)
+      if(fb){
+        const fbx0=Math.max(0,fb.x),fby0=Math.max(0,fb.y),fbx1=Math.min(w,fb.x+fb.w),fby1=Math.min(h,fb.y+fb.h);
+        // Clear solid-bg strips outside the frame box, respecting safe margins.
+        const strips={
+          top:   {x:sm.l*w, y:sm.t*h,          w:(1-sm.l-sm.r)*w, h:Math.max(0,fby0-sm.t*h)},
+          bottom:{x:sm.l*w, y:fby1,             w:(1-sm.l-sm.r)*w, h:Math.max(0,(1-sm.b)*h-fby1)},
+          left:  {x:sm.l*w, y:sm.t*h,          w:Math.max(0,fbx0-sm.l*w), h:(1-sm.t-sm.b)*h},
+          right: {x:fbx1,   y:sm.t*h,          w:Math.max(0,(1-sm.r)*w-fbx1), h:(1-sm.t-sm.b)*h},
+        };
+        // Does the current spec text zone straddle the shape boundary? (Overlaps the
+        // box AND isn't wholly inside a single clear strip.)
+        const zone={x:bx,y:by,w:bw,h:Math.min(maxTextH,h*0.4)};
+        const overlapsBox=zone.x<fbx1&&zone.x+zone.w>fbx0&&zone.y<fby1&&zone.y+zone.h>fby0;
+        // Thresholds: a horizontal text block needs ≥16% h tall and ≥45% w wide;
+        // a vertical (side) block needs ≥30% w wide and ≥40% h tall.
+        const MIN_H=0.16*h, MIN_W=0.45*w, MIN_SIDE_W=0.30*w, MIN_SIDE_H=0.40*h;
+        // Rank candidate strips: prefer the tallest horizontal strip (top/bottom),
+        // then the widest side strip. Only accept one that clears the thresholds.
+        const horiz=[strips.bottom,strips.top].filter(s=>s.h>=MIN_H&&s.w>=MIN_W).sort((a,b)=>b.h-a.h);
+        const vert=[strips.right,strips.left].filter(s=>s.w>=MIN_SIDE_W&&s.h>=MIN_SIDE_H).sort((a,b)=>b.w-a.w);
+        const pick=horiz[0]||vert[0]||null;
+        if(overlapsBox&&pick){
+          // Snap the text block fully into the clear strip (with a small inner pad).
+          const padIn=Math.min(w,h)*0.02;
+          bx=pick.x+padIn; by=pick.y+padIn;
+          bw=Math.max(0.2*w,pick.w-padIn*2);
+          maxTextH=Math.max(h*0.10,pick.h-padIn*2);
+          // High-contrast colour vs the ACTUAL bg colour (reuse resolveZoneTextColor
+          // against a flat bg by sampling the strip once the bg is drawn — but the bg
+          // is flat here, so decide directly from the bg luminance).
+          const bgLum=hexLuminance(curBg?.color||B.burnham);
+          frameBgTextColor=bgLum>0.5?B.burnham:B.whiteSmoke;
+        }else if(overlapsBox){
+          // No strip big enough → keep the text inside the shape on the photo and
+          // let the normal backdrop/scrim rules make it legible.
+          frameOnPhoto=true;
+          // Nudge the zone to sit within the frame box (clamp inside it) so glyphs
+          // land on the photo, not on the boundary sliver.
+          const inPad=Math.min(w,h)*0.04;
+          bx=Math.max(fbx0+inPad,Math.min(fbx1-bw-inPad,bx));
+          by=Math.max(fby0+inPad,by);
+          maxTextH=Math.max(h*0.10,Math.min(maxTextH,fby1-inPad-by));
+        }
+      }
+    }
+    // Seed the resolved zone colour with the forced frame-bg colour (texture_text /
+    // photo_logo read zoneTc directly; the tc-branches use (frameBgTextColor||tc)).
+    if(frameBgTextColor)zoneTc=frameBgTextColor;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
     // Per-format readable-font floor for a fitText call (Task 4). `start` is the
     // call's start size. The ceiling is the SQUARE-baseline design size (start with
@@ -1881,11 +1973,13 @@ export default function App() {
     // dark text — and so the backdrop decision (below) uses the same colour. Assigns
     // the closure `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
     const resolveZoneTc=(box)=>{
+      if(frameBgTextColor){zoneTc=frameBgTextColor;return;}   // snapped onto flat bg → forced hi-contrast colour
       if(!mediaObj||textColorId!=="auto")return;   // explicit colour honoured as-is
       const r=resolveZoneTextColor(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},textColorId);
       zoneTc=r.color;
     };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
+      if(frameBgTextColor)return;   // text is on flat solid bg (snapped clear of the frame) → no scrim needed
       if(!mediaObj)return;
       const mode=backdropMode||"auto";
       if(mode==="none")return;                 // shadow-only (beginText adds it)
@@ -1929,9 +2023,9 @@ export default function App() {
       }else{putLogo();if(live)textBoundsRef.current=null;}
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
-      if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
+      if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
-      ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
+      ctx.fillStyle=frameBgTextColor||tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
       ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
       if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
       setTextBounds(used);
@@ -1942,8 +2036,8 @@ export default function App() {
         if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
         else{drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
       }}
-      if(mediaObj&&!hasFrame&&!photoBox)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
-      beginText();ctx.fillStyle=tc;let used=0;
+      if(mediaObj&&((!hasFrame&&!photoBox)||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
+      beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
       if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
       if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,mf("date",190*S*scale*fm("heading"),120*S));fontMeta.date=df.size;ctx.font=`300 ${df.size}px ${F.title}`;
         // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
@@ -1971,8 +2065,8 @@ export default function App() {
       putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="text_post"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
-      if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
-      beginText();ctx.fillStyle=tc;let used=0;
+      if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
+      beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
       if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
       if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,mf("headline",84*S*scale*fm("heading"),52*S));fontMeta.headline=hf.size;const hlLines=hf.lines.slice(0,Math.max(1,fmt.maxLines??3));if(hlLines.length<hf.lines.length)dropped.push("Headline (truncated)");ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hlLines,bx,by+used+gap,bw,hf.lineHeight,align);}
       if(attribution){

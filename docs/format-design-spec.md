@@ -216,3 +216,17 @@ Deterministic drop order when a format's text zone cannot fit all content at its
 5. **If content still cannot fit after steps 1–4 (only possible on `banner` with `event` type, the tightest combination):** hint the user in the UI — flag the specific overflowing field(s) by name (e.g. "Details won't fit on Banner — shorten to ≤40 characters") rather than silently truncating mid-word. This is a UI/UX behavior, not a further automatic content drop — silent truncation of user-authored copy is treated as worse than surfacing the constraint.
 
 This order is deterministic and re-run independently per format (a drop applied on `banner` does not affect `story`'s render) so each of the 6 exports is evaluated against its own §1 constraints.
+
+---
+
+## 7. Frame-aware text & logo composition
+
+When a **frame overlay** is active (`overlayMode: "frame"` — e.g. the orchid petal), the overlay clips the photo INSIDE the shape and leaves solid brand background OUTSIDE it. Text and the logo must therefore never straddle the shape boundary (the failure mode: an ivory headline half on the photo and half on the ivory background, rendering the background half invisible).
+
+**Text snapping rule (deterministic, per format):**
+1. Compute the frame's axis-aligned bounding box for this dimension (widest frame layer: `scale·W` wide, `scale·W / ratio` tall, centred at `x·W, y·H`).
+2. If the spec text zone overlaps that box, find the largest **clear solid-bg strip** outside it, respecting the safe margins: top / bottom strips for tall formats, left / right strips for wide formats.
+3. **Prefer OUTSIDE.** If a strip clears the thresholds (horizontal: ≥16% H tall AND ≥45% W wide; vertical/side: ≥30% W wide AND ≥40% H tall), snap the whole text block into it and force the **high-contrast background colour** (Burnham text on an ivory bg, ivory text on a Burnham bg — decided from the bg luminance, the same pole `resolveZoneTextColor` would pick). No scrim is drawn — the text is on a flat brand panel.
+4. **Otherwise INSIDE.** If no strip is big enough (e.g. the petal on a square nearly fills the canvas), clamp the block inside the shape so glyphs land on the photo, and run the normal §2/§3/§5 backdrop/scrim rules (worst-case min-cell contrast sampling) to guarantee legibility on the photo.
+
+**Logo rule:** the auto placement additionally excludes a padded band around the frame's bounding box and prefers positions in the clear solid-bg region. Explicit user placements still win verbatim (§4). The existing text-exclusion still applies, so the logo never overlaps the text block even when both land on the background.
