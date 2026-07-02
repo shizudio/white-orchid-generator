@@ -865,10 +865,13 @@ export default function App() {
 
 
   /* ───────── CANVAS RENDER ───────── */
-  const draw = useCallback(() => {
-    const c=canvasRef.current; if(!c) return;
-    const ctx=c.getContext("2d");
-    const w=W,h=H;
+  // Render the whole composition into any ctx at any dimension. opts.dimensionId
+  // selects which format's overlay cascade to resolve; opts.live=true means this
+  // is the on-screen canvas (only then do we write textBoundsRef for hit-testing).
+  const renderScene = useCallback((ctx, w, h, opts={}) => {
+    if(!ctx) return;
+    const dimId = opts.dimensionId || MASTER_DIM;
+    const live = opts.live !== false;
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
     const m=w*0.12, lSz=w*logoSizePct;
@@ -881,8 +884,8 @@ export default function App() {
 
     // Resolve a layer's transform for the current dimension (master cascade + override)
     const resolveT=(layer)=>{
-      if(dimensionId===MASTER_DIM)return layer.master;
-      if(layer.byDim?.[dimensionId])return layer.byDim[dimensionId];
+      if(dimId===MASTER_DIM)return layer.master;
+      if(layer.byDim?.[dimId])return layer.byDim[dimId];
       const a=overlays.find(o=>o.id===layer.assetId);
       return deriveFromMaster(layer.master,a?.kind||"center",a?.ratio||1,w,h);
     };
@@ -896,8 +899,8 @@ export default function App() {
     const maxTextH=Math.max(h*0.16,h*(1-safe)-by);
     const align=layout.align||"left",scale=layout.scale||1,lineRatio=layout.lineHeight||1.16;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
-    const setTextBounds=used=>{textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
-    if(postType==="photo_logo")textBoundsRef.current=null;
+    const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
+    if(postType==="photo_logo"&&live)textBoundsRef.current=null;
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
@@ -962,7 +965,13 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,W,H,imgT,overlayLayers,overlays,dimensionId,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,fontSizes]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,fontSizes]);
+
+  // Live preview draws the current dimension into the on-screen canvas.
+  const draw = useCallback(() => {
+    const c=canvasRef.current; if(!c) return;
+    renderScene(c.getContext("2d"),W,H,{dimensionId,live:true});
+  },[renderScene,W,H,dimensionId]);
 
   useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
 
