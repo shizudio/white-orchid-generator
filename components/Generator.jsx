@@ -916,7 +916,9 @@ export default function App() {
   const previewRef = useRef(null);
   const imgRef = useRef(null);
   const textBoundsRef = useRef(null);
+  const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const initialPreviewRef = useRef(true);
+  const [dropHint, setDropHint] = useState(null);   // surfaced non-blocking hint
 
   // Canvas dimension (social channel format)
   const [dimensionId, setDimensionId] = useState("ig_square");
@@ -1313,6 +1315,10 @@ export default function App() {
     if(!ctx) return;
     const dimId = opts.dimensionId || MASTER_DIM;
     const live = opts.live !== false;
+    // Content degradation tracking (spec §6). fitText already shrinks type to a
+    // floor; here we DROP tertiary/secondary copy that still won't fit rather than
+    // overflow the safe zone, and record which fields were dropped for a UI hint.
+    const dropped=[];
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
@@ -1460,7 +1466,20 @@ export default function App() {
         // above its baseline — advance by that so it clears the title above it.
         used+=df.size*0.72;
         drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);used+=(df.lines.length-1)*df.lineHeight+df.size*0.28;if(rest){ctx.font=`600 ${36*S*scale*fm("subheading")}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale*fm("subheading"),align);ctx.letterSpacing="0px";}}
-      if(subtext){const gap=Math.max(36*S,used?44*S:0),sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
+      if(subtext){
+        const gap=Math.max(36*S,used?44*S:0);
+        const room=maxTextH-used-gap;
+        const maxDetail=fmt.maxLines?.details??fmt.maxLines??3;
+        // Tertiary "details" drops entirely if there isn't room for at least one
+        // line at its floor (spec §6 step 2 — a clean drop beats an overflow).
+        if(room<32*S*1.3){dropped.push("Details");}
+        else{
+          const sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,32*S);
+          const lines=sf.lines.slice(0,Math.max(1,maxDetail));
+          if(lines.length<sf.lines.length)dropped.push("Details (truncated)");
+          ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,lines,bx,by+used+gap,bw,sf.lineHeight,align);
+        }
+      }
       setTextBounds(used);
       endText();
       putLogo();
@@ -1469,8 +1488,13 @@ export default function App() {
       if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
       if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
-      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}
-      if(attribution){const gap=Math.max(36*S,48*S),af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}
+      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,52*S);const hlLines=hf.lines.slice(0,Math.max(1,fmt.maxLines??3));if(hlLines.length<hf.lines.length)dropped.push("Headline (truncated)");ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hlLines,bx,by+used+gap,bw,hf.lineHeight,align);}
+      if(attribution){
+        const gap=Math.max(36*S,48*S),room=maxTextH-used-gap;
+        // Tertiary subtext drops if no room for a line at its floor (spec §6 step 2).
+        if(room<32*S*1.3){dropped.push("Subtext");}
+        else{const af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,32*S);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines.slice(0,2),bx,by+used+gap,bw,af.lineHeight,align);}
+      }
       setTextBounds(used);
       endText();
       putLogo();
@@ -1484,6 +1508,9 @@ export default function App() {
         beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
       }else setTextBounds(h*0.12);
     }
+
+    // Surface dropped-copy info for the live dimension only (spec §6 step 5 hint).
+    if(live)dropInfoRef.current=dropped.length?{dropped}:null;
 
     // ── Overlay-mode layers (drawn on top of everything) ──
     const ocv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
@@ -1514,7 +1541,14 @@ export default function App() {
     renderScene(c.getContext("2d"),W,H,{dimensionId,live:true});
   },[renderScene,W,H,dimensionId]);
 
-  useEffect(()=>{if(fontsLoaded)draw();},[draw,fontsLoaded]);
+  useEffect(()=>{
+    if(!fontsLoaded)return;
+    draw();
+    // Sync the §6 degradation hint from the ref draw() just wrote (no setState in render).
+    const info=dropInfoRef.current;
+    const next=info?info.dropped.join(", "):null;
+    setDropHint(prev=>prev===next?prev:next);
+  },[draw,fontsLoaded]);
 
   // Hard collision guard: rendered copy owns a padded exclusion zone. If a
   // manual or automatic logo placement enters it, move the logo to the best
@@ -2044,6 +2078,11 @@ export default function App() {
                 );
               })}
             </div>
+            {dropHint&&(
+              <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
+                <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>{dim.label} shows a condensed layout.</strong> Hidden to fit: {dropHint}. Shorten the copy or pick a taller format to show everything.
+              </div>
+            )}
           </Sec>
 
           <AIArtDirector onApply={applyCreativePlan} canUndo={!!preAiState} onUndo={undoCreativePlan} />
