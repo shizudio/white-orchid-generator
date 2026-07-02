@@ -6,6 +6,7 @@ import ArtDirectorChat from "./ArtDirectorChat";
 import AuditPanel from "./AuditPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
+import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -279,6 +280,7 @@ const SK_HIST = "wo-asset-history";
 const SK_OVL = "wo-overlays";       // overlay asset library
 const SK_DOC = "wo-workdoc";        // placed overlay layers (working doc)
 const SK_TPL = "wo-design-templates"; // reusable complete design templates
+const SK_DOC_TS = "wo-workdoc-ts";    // local timestamp of last working-doc save (for cross-device newer-draft detection)
 const MAX_LIB = 15;
 const MAX_HIST = 20;
 
@@ -1131,7 +1133,9 @@ export default function App() {
   const [selOverlay, setSelOverlay] = useState(null);      // selected layer uid
   const [overlayChromeVisible, setOverlayChromeVisible] = useState(false);
   const [overlayDirty, setOverlayDirty] = useState(false);
-  const [designTemplates, setDesignTemplates] = useState([]); // [{id,name,thumb,state,createdAt}]
+  const [designTemplates, setDesignTemplates] = useState([]); // [{id,name,thumb,state,createdAt,synced?,unsynced?}]
+  const [cloudTplConfigured, setCloudTplConfigured] = useState(false); // team library reachable?
+  const [newerDraft, setNewerDraft] = useState(null); // {state, updated_at, device_label} — cross-device draft newer than local
   const [editorScale, setEditorScale] = useState(1);       // display px per export px
   const overlayImgs = useRef({});                          // assetId -> Image
   const overlayInputRef = useRef(null);
@@ -1613,17 +1617,59 @@ export default function App() {
       // Returning with prior work → open collapsed; a fresh visitor sees the gallery.
       if (doc && doc.length) setGalleryOpen(false);
       const tpl = await sGet(SK_TPL);
-      if (tpl) setDesignTemplates(tpl);
+      const localTpls = tpl || [];
+      if (localTpls.length) setDesignTemplates(localTpls);
       try { const vids = await idbAll(); setSavedVideos(vids.map(v => ({ id:v.id, name:v.name, createdAt:v.createdAt })).sort((a,b)=>b.createdAt-a.createdAt)); } catch(_) {}
       setReady(true);
+
+      // ── Cloud sync (no-ops silently when the team library isn't configured) ──
+      // Templates: merge cloud + local, cloud wins on id; push eligible local-only ones up.
+      const { configured, templates: cloudTpls } = await fetchTemplates();
+      if (configured) {
+        setCloudTplConfigured(true);
+        const { merged, localOnlyIds } = mergeTemplates(localTpls, cloudTpls);
+        setDesignTemplates(merged);
+        // Push purely-local, size-eligible templates to the shared library.
+        for (const t of merged) {
+          if (!localOnlyIds.has(t.id)) continue;
+          if (!isTemplateSyncEligible(t)) { markLocalOnly(t.id); continue; }
+          const r = await pushTemplate({ name: t.name, thumb: t.thumb, state: t.state });
+          if (r.configured && r.template) replaceTemplateId(t.id, r.template);
+          else if (r.tooLarge) markLocalOnly(t.id);
+        }
+      }
+      // Draft: if the cloud working-doc is newer than our local save, offer to load it (never auto-clobber).
+      const { configured: draftCfg, draft } = await fetchDraft('current');
+      if (draftCfg && draft?.updated_at) {
+        const localTs = Number(await sGet(SK_DOC_TS)) || 0;
+        if (Date.parse(draft.updated_at) > localTs + 1500) setNewerDraft(draft);
+      }
     })();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Swap a local "dt_*" id for its persisted cloud row (uuid) after a successful push.
+  const replaceTemplateId = (localId, cloudRow) => setDesignTemplates(prev => prev.map(t =>
+    t.id === localId ? { id: cloudRow.id, name: cloudRow.name, thumb: cloudRow.thumb, state: cloudRow.state, createdAt: cloudRow.created_at ? Date.parse(cloudRow.created_at) : t.createdAt, synced: true } : t));
+  const markLocalOnly = (id) => setDesignTemplates(prev => prev.map(t => t.id === id ? { ...t, localOnly: true } : t));
+  const markUnsynced = (id, on) => setDesignTemplates(prev => prev.map(t => t.id === id ? { ...t, unsynced: on } : t));
 
   /* ── Save library/history to storage ── */
   useEffect(() => { if (ready && library.length >= 0) sSet(SK_LIB, library); }, [library, ready]);
   useEffect(() => { if (ready && history.length >= 0) sSet(SK_HIST, history); }, [history, ready]);
   useEffect(() => { if (ready) sSet(SK_OVL, overlays); }, [overlays, ready]);
   useEffect(() => { if (ready) sSet(SK_TPL, designTemplates); }, [designTemplates, ready]);
+
+  /* ── Cross-device draft autosave: debounced (≥3s) cloud push of the working doc ── */
+  const draftPushTimer = useRef(null);
+  useEffect(() => {
+    if (!ready || !cloudTplConfigured) return;
+    if (draftPushTimer.current) clearTimeout(draftPushTimer.current);
+    draftPushTimer.current = setTimeout(() => {
+      sSet(SK_DOC_TS, Date.now()); // keep local ts in step with what we're pushing
+      pushDraft({ id:'current', state:{ overlayLayers }, deviceLabel:(typeof navigator!=='undefined'?navigator.platform:'') || 'device' });
+    }, 3200);
+    return () => { if (draftPushTimer.current) clearTimeout(draftPushTimer.current); };
+  }, [overlayLayers, ready, cloudTplConfigured]);
 
   /* ── Keep overlay Image objects loaded (assetId -> Image) ── */
   useEffect(() => {
@@ -2774,7 +2820,7 @@ export default function App() {
     setInspectorEl(prev => prev === uid ? null : prev);
     setOverlayDirty(true);
   };
-  const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
+  const saveOverlays = () => { sSet(SK_DOC, overlayLayers); sSet(SK_DOC_TS, Date.now()); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
     postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
@@ -2799,8 +2845,21 @@ export default function App() {
     const name = (window.prompt("Template name", `Design template ${designTemplates.length + 1}`) || "").trim();
     if (!name) return;
     const thumb = templateThumb();
-    setDesignTemplates(prev => [{ id:"dt_" + Date.now().toString(36), name, thumb, state:currentTemplateState(), createdAt:Date.now() }, ...prev]);
+    const state = currentTemplateState();
+    const localId = "dt_" + Date.now().toString(36);
+    const tpl = { id:localId, name, thumb, state, createdAt:Date.now() };
+    // Optimistic local insert (works offline / unconfigured / oversized).
+    setDesignTemplates(prev => [tpl, ...prev]);
     saveOverlays();
+    // Sync to the shared library when eligible; on failure keep local + mark unsynced (retried next mount).
+    if (cloudTplConfigured) {
+      if (!isTemplateSyncEligible(tpl)) { markLocalOnly(localId); return; }
+      pushTemplate({ name, thumb, state }).then(r => {
+        if (r.configured && r.template) replaceTemplateId(localId, r.template);
+        else if (r.tooLarge) markLocalOnly(localId);
+        else markUnsynced(localId, true);
+      });
+    }
   };
   const applyDesignTemplate = (template) => {
     const s = template?.state; if (!s) return;
@@ -2844,7 +2903,23 @@ export default function App() {
     setMarkTab((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary");
     setOverlayDirty(false);
   };
-  const deleteDesignTemplate = (id) => setDesignTemplates(prev => prev.filter(t => t.id !== id));
+  const deleteDesignTemplate = (id) => {
+    setDesignTemplates(prev => prev.filter(t => t.id !== id));
+    // Soft-delete cloud rows (uuid ids). Local-only "dt_*" ids never hit the API.
+    if (cloudTplConfigured && /^[0-9a-f-]{36}$/i.test(id)) cloudDeleteTemplate(id);
+  };
+
+  // Load a newer cross-device draft (user-gated — never auto-clobbers local work).
+  const loadNewerDraft = () => {
+    const layers = newerDraft?.state?.overlayLayers;
+    if (Array.isArray(layers)) {
+      const next = layers.map(l => ({ ...l, uid:"ol_" + Math.random().toString(36).slice(2) }));
+      setOverlayLayers(next);
+      sSet(SK_DOC, next); sSet(SK_DOC_TS, Date.now());
+      setGalleryOpen(false);
+    }
+    setNewerDraft(null);
+  };
 
   // Has the user done meaningful work worth protecting before applying a template?
   const hasMeaningfulEdits = (
@@ -3309,6 +3384,13 @@ export default function App() {
           {/* ── TEMPLATES: outcome-first entry point (first thing a new user sees) ── */}
           <Sec label="Templates" summary={activeTemplateName || (galleryOpen?"Start from a design":"Pick a design")}
                open={galleryOpen} onOpenChange={setGalleryOpen}>
+            {newerDraft&&(
+              <div role="status" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.wisteria}33`,border:`1px solid ${B.wisteria}`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
+                <span style={{flex:"1 1 auto",minWidth:140}}>A newer draft from another device is available.</span>
+                <button onClick={loadNewerDraft} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.3,color:"#fff",background:B.burnham,border:"none",borderRadius:7,padding:"5px 11px",cursor:"pointer"}}>Load</button>
+                <button onClick={()=>setNewerDraft(null)} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.3,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}55`,borderRadius:7,padding:"5px 11px",cursor:"pointer"}}>Dismiss</button>
+              </div>
+            )}
             {!hasMeaningfulEdits&&(
               <div style={{fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.celadon}44`,border:`1px solid ${B.celadon}`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
                 <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>New here?</strong> Tap a template below and everything is set up — just edit the words.
@@ -3321,7 +3403,10 @@ export default function App() {
             </div>
             {designTemplates.length>0&&(
               <>
-                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",margin:"16px 0 8px"}}>Your templates</div>
+                <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"16px 0 8px",gap:8}}>
+                  <span style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Your templates</span>
+                  <span title={cloudTplConfigured?"Templates are shared with your team":"Saved on this device only"} style={{fontSize:9,fontFamily:F.body,color:cloudTplConfigured?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{cloudTplConfigured?"◆ Synced to team library":"◇ This device only"}</span>
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                   {designTemplates.slice(0,6).map(template=>(
                     <div key={template.id} style={{position:"relative"}}>
@@ -3329,6 +3414,9 @@ export default function App() {
                         style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
                         {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,textTransform:"uppercase"}}>Template</span>}
                       </button>
+                      {cloudTplConfigured&&(template.localOnly||template.unsynced)&&(
+                        <span title={template.localOnly?"Too large to share — stays on this device":"Not yet synced — will retry"} style={{position:"absolute",top:4,left:4,fontSize:8,fontFamily:F.body,color:"#fff",background:B.jet+"cc",borderRadius:5,padding:"1px 4px",lineHeight:1.3}}>{template.localOnly?"This device":"Unsynced"}</span>
+                      )}
                       <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
                         style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
                       <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
