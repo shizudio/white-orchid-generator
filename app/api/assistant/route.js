@@ -101,6 +101,146 @@ function pickLandingDirection() {
   return LANDING_DIRECTIONS[idx];
 }
 
+// ── CAPTION WRITER (context:"caption") ───────────────────────────────────────
+// A second, self-contained mode on this route: given the current design state +
+// the platform implied by dimensionId, write a ready-to-post caption, a short
+// hashtag set, and an accessibility alt-text. Strict json_schema so the client
+// never has to parse prose. Hashtags are stored WITHOUT the leading '#' and the
+// client renders them with it (single source of truth — no double-# bugs).
+const CAPTION_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    caption: { type: 'string' },
+    hashtags: { type: 'array', items: { type: 'string' }, maxItems: 8 },
+    altText: { type: 'string' },
+  },
+  required: ['caption', 'hashtags', 'altText'],
+};
+
+// dimensionId → platform + its caption conventions. The active format tells us
+// where the post is going, so we tailor length + hashtag habits accordingly.
+function platformForDimension(dimensionId) {
+  switch (dimensionId) {
+    case 'twitter':
+      return {
+        key: 'x',
+        label: 'X (Twitter)',
+        rules: 'X / Twitter: the WHOLE post (caption + hashtags together) MUST be 280 characters or fewer — count them. One clear thought, warm and human. 1–3 hashtags at most, folded naturally at the end.',
+      };
+    case 'facebook':
+      return {
+        key: 'facebook',
+        label: 'Facebook',
+        rules: 'Facebook: conversational and friendly, 1–3 short sentences. 0–3 hashtags, only if they add something. No wall of tags.',
+      };
+    case 'banner':
+      return {
+        key: 'generic',
+        label: 'website / banner',
+        rules: 'Website / banner (generic): ONE clean, welcoming sentence. NO hashtags at all — return an empty hashtags array.',
+      };
+    default:
+      // ig_square / ig_portrait / story
+      return {
+        key: 'instagram',
+        label: 'Instagram',
+        rules: 'Instagram: 1–3 short, warm paragraphs. Put a blank line before the hashtags. 4–8 relevant hashtags on the final line.',
+      };
+  }
+}
+
+function captionSourceFacts(d) {
+  const facts = [];
+  if (d.headline) facts.push(`Headline: ${d.headline}`);
+  if (d.subtext) facts.push(`Subtext: ${d.subtext}`);
+  if (d.attribution) facts.push(`Attribution/quote source: ${d.attribution}`);
+  if (d.dateText) facts.push(`Date on the design: ${d.dateText}`);
+  facts.push(`Post type: ${d.postType || 'text_post'}`);
+  facts.push(`Has a photo/video: ${d.hasImage ? 'yes' : 'no'}`);
+  return facts.join('\n');
+}
+
+async function handleCaption({ apiKey, designState, brandContext, model, rewriteNudge }) {
+  const platform = platformForDimension(designState.dimensionId);
+  const hasCopy = !!(designState.headline || designState.subtext || designState.attribution || designState.dateText);
+
+  const systemPrompt = `You are the social copywriter for The White Orchid, a Singaporean preschool / early-education brand for young families. You write the post caption that a staff member will publish alongside a design they just made.
+
+Brand voice: ${brandContext.tone}. Warm, plain-English, parent-facing, gently reassuring, never salesy, never corporate. Singapore preschool context (write for local parents; British/Singapore English is fine).
+
+Write for this platform — follow its conventions exactly:
+${platform.rules}
+
+Use the design's ACTUAL copy as your source of facts. NEVER invent dates, prices, claims, offers, statistics, testimonials, or event details that are not present below. If a date appears in the design, you may mention it; if none is given, do not make one up.
+${hasCopy
+  ? 'This design has copy — build the caption around it faithfully.'
+  : 'This design has NO copy (photo-led). Write sparingly from the post type and the fact that there is an image — a warm, simple line or two. Do not invent specifics.'}
+
+Design facts:
+${captionSourceFacts(designState)}
+${rewriteNudge ? `\nThis is a REWRITE — produce a genuinely different angle/wording from a typical first draft (fresh opening, different rhythm). Keep the same facts.` : ''}
+
+Return JSON matching the schema: { caption, hashtags, altText }.
+- caption: the post text, ready to paste. Respect the platform length rules above (for X, the caption PLUS hashtags together must be ≤ 280 characters).
+- hashtags: an array of tags WITHOUT the leading '#'. Lowercase or CamelCase, no spaces, relevant to a Singapore preschool. Follow the platform's count guidance (empty array for website/banner).
+- altText: ONE plain sentence describing the image for a screen-reader user (accessibility). If there is no photo, describe the design (e.g. "A text-based announcement card in the brand's colours.").
+
+Brand context: ${JSON.stringify(brandContext)}`;
+
+  const isReasoning = /^(o\d|gpt-5)/i.test(model);
+  const payload = {
+    model,
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+      { role: 'user', content: [{ type: 'input_text', text: rewriteNudge ? 'Write a fresh caption for this design.' : 'Write the caption for this design.' }] },
+    ],
+    text: { format: { type: 'json_schema', name: 'social_caption', strict: true, schema: CAPTION_JSON_SCHEMA } },
+  };
+  if (isReasoning) payload.reasoning = { effort: 'low' };
+
+  let res;
+  try {
+    res = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    return Response.json({ error: "I couldn't reach the AI service. Please try again in a moment." }, { status: 502 });
+  }
+  const result = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const reason = result?.error?.message || res.statusText;
+    console.error('OpenAI caption error:', reason);
+    return Response.json({ error: 'I ran into a problem writing that. Please try again.', detail: reason }, { status: 502 });
+  }
+  let parsed;
+  try { parsed = JSON.parse(getOutputText(result)); } catch { parsed = null; }
+  let caption = typeof parsed?.caption === 'string' ? parsed.caption.trim() : '';
+  let hashtags = Array.isArray(parsed?.hashtags)
+    ? parsed.hashtags.map(t => String(t || '').replace(/^#+/, '').trim()).filter(Boolean).slice(0, 8)
+    : [];
+  const altText = typeof parsed?.altText === 'string' ? parsed.altText.trim() : '';
+  if (!caption) {
+    return Response.json({ error: 'That came back empty. Please try again.' }, { status: 502 });
+  }
+
+  // Hard guard for X: enforce the 280-char ceiling server-side (caption + tags).
+  // The model is told, but we never want to hand staff an over-limit post. Trim
+  // hashtags first, then the caption tail, keeping whole words.
+  if (platform.key === 'x') {
+    const withTags = () => (hashtags.length ? `${caption}\n\n${hashtags.map(t => `#${t}`).join(' ')}` : caption);
+    while (withTags().length > 280 && hashtags.length) hashtags.pop();
+    if (withTags().length > 280) {
+      const budget = 280 - (hashtags.length ? hashtags.map(t => `#${t}`).join(' ').length + 2 : 0);
+      caption = caption.slice(0, Math.max(0, budget - 1)).replace(/\s+\S*$/, '').trim() + '…';
+    }
+  }
+
+  return Response.json({ caption, hashtags, altText, platform: platform.key, platformLabel: platform.label });
+}
+
 function getOutputText(response) {
   if (typeof response.output_text === 'string') return response.output_text;
   for (const item of response.output || []) {
@@ -159,7 +299,7 @@ export async function POST(request) {
     return Response.json({ error: 'Invalid request.' }, { status: 400 });
   }
 
-  const context = body.context === 'landing' ? 'landing' : 'editor';
+  const context = ['landing', 'caption'].includes(body.context) ? body.context : 'editor';
   const designState = compactDesignState(body.designState);
   const rawMessages = Array.isArray(body.messages) ? body.messages : [];
   // Client-trims to ~10; guard again server-side and sanitise shape/length.
@@ -171,7 +311,9 @@ export async function POST(request) {
     }))
     .filter(m => m.content.length > 0);
 
-  if (!messages.length) {
+  // Caption mode works from the design state, not a conversation — skip the
+  // "tell me what you want" guard that the chat contexts need.
+  if (context !== 'caption' && !messages.length) {
     return Response.json({ error: 'Tell me a little about what you want to create.' }, { status: 400 });
   }
 
@@ -190,6 +332,14 @@ export async function POST(request) {
     colors: (brandKit?.colors || []).map(({ label, hex }) => ({ label, hex })),
     guardrails: brandKit?.guardrails || [],
   };
+
+  const model = process.env.OPENAI_ART_DIRECTOR_MODEL || 'gpt-4o-mini';
+
+  // ── CAPTION MODE ── generate a post caption + hashtags + alt-text from the
+  // current design and its platform, then return early (no design-patch path).
+  if (context === 'caption') {
+    return handleCaption({ apiKey, designState, brandContext, model, rewriteNudge: !!body.rewrite });
+  }
 
   const catalog = Object.entries(PATCH_FIELD_GUIDE)
     .map(([field, note]) => `- ${field}: ${note}`)
@@ -251,7 +401,6 @@ Brand context: ${JSON.stringify(brandContext)}
 
 Current design state (compact): ${JSON.stringify(designState)}`;
 
-  const model = process.env.OPENAI_ART_DIRECTOR_MODEL || 'gpt-4o-mini';
   const isReasoning = /^(o\d|gpt-5)/i.test(model);
   const payload = {
     model,

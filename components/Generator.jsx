@@ -4,6 +4,7 @@ import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
 import AuditPanel from "./AuditPanel";
+import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
@@ -1219,6 +1220,7 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatSeed, setChatSeed] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
+  const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -3541,12 +3543,19 @@ export default function App() {
             ))}</div>
             {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
           </div>
-          {/* AI audit — advisory design review; export/save are never blocked */}
-          <button onClick={()=>setAuditOpen(true)} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
-            width:"100%",padding:"11px 40px",marginBottom:8,background:"transparent",color:B.burnham,
-            border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
-            letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
-          }}><span aria-hidden="true">✓</span> AI audit</button>
+          {/* AI audit + Caption writer — advisory helpers; export/save never blocked */}
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <button onClick={()=>setAuditOpen(true)} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
+              flex:1,padding:"11px 8px",background:"transparent",color:B.burnham,
+              border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
+              letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+            }}><span aria-hidden="true">✓</span> AI audit</button>
+            <button onClick={()=>setCaptionOpen(true)} title="Write a brand-voice caption + hashtags for this design" style={{
+              flex:1,padding:"11px 8px",background:"transparent",color:B.burnham,
+              border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
+              letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+            }}><span aria-hidden="true">✎</span> Caption</button>
+          </div>
           <button onClick={download} style={{
             width:"100%",padding:"14px 40px",background:B.tangerine,color:"#fff",
             border:"none",borderRadius:40,fontSize:14,fontWeight:700,cursor:"pointer",
@@ -3658,6 +3667,15 @@ export default function App() {
         dimensionId={dimensionId}
         applyPatch={applyDesignPatch}
         undoOnce={undoLastAiChange}
+      />
+      {/* Caption writer — brand-voice caption + hashtags from the current design.
+          Top-level mount (never inside a transformed ancestor) so its fixed panel
+          anchors to the viewport, matching the Audit + Art Director panels. */}
+      <CaptionPanel
+        open={captionOpen}
+        setOpen={setCaptionOpen}
+        designState={chatDesignState}
+        dimensionId={dimensionId}
       />
       {/* ── CONTEXTUAL INSPECTOR — top-level mount so position:fixed anchors to
           the viewport (no transformed-ancestor trap). Desktop docks to the right
