@@ -817,6 +817,8 @@ export default function App() {
       setOverlays(merged);
       const doc = await sGet(SK_DOC);
       if (doc) setOverlayLayers(doc);
+      // Returning with prior work → open collapsed; a fresh visitor sees the gallery.
+      if (doc && doc.length) setGalleryOpen(false);
       const tpl = await sGet(SK_TPL);
       if (tpl) setDesignTemplates(tpl);
       try { const vids = await idbAll(); setSavedVideos(vids.map(v => ({ id:v.id, name:v.name, createdAt:v.createdAt })).sort((a,b)=>b.createdAt-a.createdAt)); } catch(_) {}
@@ -1122,7 +1124,8 @@ export default function App() {
   /* ── Download + save to history ── */
   const download = async () => {
     const c = canvasRef.current; if (!c) return;
-    const slug = headline ? headline.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,30) : postType;
+    const slugify = str => str.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30);
+    const slug = headline ? slugify(headline) : activeTemplateName ? slugify(activeTemplateName) : postType;
     // Editor chrome lives in a separate DOM layer, so the export canvas is clean.
     draw();
     const isJpg = exportFormat === "jpeg";
@@ -1154,7 +1157,8 @@ export default function App() {
 
   /* ── Download every format via off-screen renderScene ── */
   const downloadAll = async () => {
-    const slug = headline ? headline.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,30) : postType;
+    const slugify = str => str.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30);
+    const slug = headline ? slugify(headline) : activeTemplateName ? slugify(activeTemplateName) : postType;
     const isJpg = exportFormat === "jpeg";
     for (let i=0; i<DIMENSIONS.length; i++) {
       const d = DIMENSIONS[i];
