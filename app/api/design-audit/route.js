@@ -172,7 +172,15 @@ Be honest but generous — a clean, on-brand design should pass with few or no f
 
 Current design (compact): ${JSON.stringify({ ...designState, dimensionId })}`;
 
-  const model = process.env.OPENAI_AUDIT_MODEL || 'gpt-4o-mini';
+  // The audit is a low-frequency, high-value vision pass (rate-limited to 5/min and
+  // only run when the user opens the panel), so it uses the stronger gpt-4o for
+  // sharper, more trustworthy findings. The conversational chat route stays on the
+  // cheap gpt-4o-mini — it fires far more often and doesn't need vision judgement.
+  // Cost note: gpt-4o vision is ~10-20x a gpt-4o-mini call, but at ≤5 audits/min
+  // and one image per call this is a few cents per session — well worth the quality.
+  // OPENAI_AUDIT_MODEL still overrides (e.g. to pin gpt-4o-mini for cost, or a newer
+  // model as it ships).
+  const model = process.env.OPENAI_AUDIT_MODEL || 'gpt-4o';
   const isReasoning = /^(o\d|gpt-5)/i.test(model);
   const payload = {
     model,
