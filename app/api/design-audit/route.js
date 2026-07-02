@@ -1,5 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
-import { buildAuditFixSchema, PATCH_OPTIONS } from '@/lib/design-patch';
+import { buildAuditFixSchema, PATCH_OPTIONS, coerceFixToCategory } from '@/lib/design-patch';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -129,6 +129,13 @@ export async function POST(request) {
     '- brand: does the palette stay on-brand (Burnham green, ivory, wisteria, celadon, tangerine accent, jet)? Any colour drift, off-tone mood, or logo variant that fights the background? Does the tone feel warm/premium/clear, not salesy?',
     '- composition: is the layout balanced? Awkward negative space, crowding, the subject/text fighting for the same area, or the photo crop cutting the subject badly?',
     '- polish: overall finish — awkward crop/overlap artifacts, mismatched treatments, anything that reads as unfinished or "off".',
+    '',
+    'FIX DISCIPLINE (each category may ONLY propose these fix fields — anything else is discarded, so aim correctly):',
+    '- hierarchy: fontSizes (adjust AT MOST TWO roles, and move them in OPPOSITE directions or change a SINGLE role — never shrink/grow ALL roles the same way, that fixes nothing), logoSize, logoPosition.',
+    '- brand: bgColor, textColorId, logoId.',
+    '- composition: NO mechanical fix — set fix to null and let the message advise. The schema has no spacing/layout controls, so any "fix" would be a no-op.',
+    '- polish: backdropMode, logoSize.',
+    'A fix must be a REAL change from the current design. If the only honest fix would repeat the current state, set fix to null (advice only).',
   ].join('\n');
 
   const enumsForFixes = [
@@ -212,7 +219,13 @@ Current design (compact): ${JSON.stringify({ ...designState, dimensionId })}`;
     const parsed = JSON.parse(getOutputText(result));
     const passes = typeof parsed?.passes === 'boolean' ? parsed.passes : true;
     const summary = typeof parsed?.summary === 'string' ? parsed.summary : '';
-    const findings = Array.isArray(parsed?.findings) ? parsed.findings.slice(0, 5) : [];
+    // Enforce the category→field coherence map (P2). For each finding, keep only the
+    // fix fields its category allows; composition is always advice-only; an incoherent
+    // uniform hierarchy resize is stripped. If nothing survives, fix becomes null.
+    const findings = (Array.isArray(parsed?.findings) ? parsed.findings.slice(0, 5) : []).map(f => ({
+      ...f,
+      fix: coerceFixToCategory(f?.category, f?.fix, designState),
+    }));
     return Response.json({ passes, summary, findings });
   } catch {
     return Response.json({ error: 'That response came back incomplete. Your local checks still ran.' }, { status: 502 });

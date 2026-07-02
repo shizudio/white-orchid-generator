@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { patchHasChanges, summarizePatch, stripCopyFromPatch } from '@/lib/design-patch';
+import { summarizePatch, stripCopyFromPatch, fixHasEffect, diffPatchAgainstState } from '@/lib/design-patch';
 
 /* AI Audit panel (Commit 3) — advisory-only design review.
 
@@ -28,6 +28,29 @@ import { patchHasChanges, summarizePatch, stripCopyFromPatch } from '@/lib/desig
 const SEV_ICON = { fail: '✕', warn: '!', info: 'i' };
 const SEV_LABEL = { fail: 'Needs attention', warn: 'Worth a look', info: 'Heads-up' };
 
+// Lightweight canvas signature (Commit 2 post-apply guard). We hash the captured
+// JPEG dataURL — its bytes are a deterministic function of the rendered pixels, so
+// an unchanged canvas yields an identical hash. Sampling every Nth char keeps it
+// cheap on large data URLs while still reflecting any real visual change.
+function canvasSignature(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return '0';
+  let h = 2166136261 >>> 0; // FNV-1a seed
+  const stride = Math.max(1, Math.floor(dataUrl.length / 4096)); // ~4k samples max
+  for (let i = 0; i < dataUrl.length; i += stride) {
+    h ^= dataUrl.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return `${dataUrl.length}:${h.toString(36)}`;
+}
+
+// Compare two finding lists for NEW severity-fail findings (post-apply regression
+// guard). Returns true if applying introduced a fail that wasn't there before.
+function introducedNewFail(before, after) {
+  const failKey = f => `${f.category}:${f.message}`;
+  const beforeFails = new Set((before || []).filter(f => f.severity === 'fail').map(failKey));
+  return (after || []).some(f => f.severity === 'fail' && !beforeFails.has(failKey(f)));
+}
+
 export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage, designState, dimensionId, applyPatch, undoOnce }) {
   const [local, setLocal] = useState([]);        // local findings (Commit 1)
   const [vision, setVision] = useState(null);    // { passes, summary, findings } | null
@@ -36,13 +59,25 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
   const [appliedCount, setAppliedCount] = useState(0); // how many fixes applied this session (for revert)
   const [phase, setPhase] = useState('findings'); // findings | preview
   const [appliedIds, setAppliedIds] = useState([]); // finding ids already applied
+  const [unclean, setUnclean] = useState({});       // finding ids the post-apply guard reverted
   const runIdRef = useRef(0);
+
+  // The post-apply guard reads the canvas + local findings AFTER the applied patch
+  // has re-rendered. captureImage / runLocalAudit are useCallbacks in Generator that
+  // change identity on every render-affecting state change — so we must call the
+  // LATEST versions (closing over post-apply state), not the ones captured when the
+  // click handler ran (which still close over the pre-apply state → stale pixels →
+  // false "no visual change"). Refs always hold the current props.
+  const captureRef = useRef(captureImage);
+  const localAuditRef = useRef(runLocalAudit);
+  useEffect(() => { captureRef.current = captureImage; }, [captureImage]);
+  useEffect(() => { localAuditRef.current = runLocalAudit; }, [runLocalAudit]);
 
   // Run the audit whenever the panel opens.
   const start = useCallback(async () => {
     const myRun = ++runIdRef.current;
     // Reset per-run state; local findings render immediately.
-    setVision(null); setNote(''); setAppliedCount(0); setAppliedIds([]); setPhase('findings');
+    setVision(null); setNote(''); setAppliedCount(0); setAppliedIds([]); setUnclean({}); setPhase('findings');
     let localFindings = [];
     try { localFindings = runLocalAudit() || []; } catch { localFindings = []; }
     setLocal(localFindings);
@@ -81,26 +116,64 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
 
   useEffect(() => { if (open) start(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // All findings with an applicable fix, in display order (local first).
+  // All findings with an applicable fix, in display order (local first). A finding
+  // is fixable only when its fix would ACTUALLY change the current design state
+  // (no-op detection, P2) — an echoed / already-satisfied fix has no Apply chip and
+  // renders as advice instead. We diff against the live state each render so a fix
+  // that becomes a no-op after an earlier apply drops its chip too.
+  const state = (() => { try { return designState() || {}; } catch { return {}; } })();
   const visionFindings = (vision?.findings || []).map((f, i) => ({ ...f, id: `vision-${i}`, layer: 'ai' }));
   const allFindings = [...local, ...visionFindings];
-  const fixable = allFindings.filter(f => f.fix && patchHasChanges(stripCopyFromPatch(f.fix)) && !appliedIds.includes(f.id));
+  const hasEffect = (f) => !!f.fix && fixHasEffect(f.fix, state);
+  const fixable = allFindings.filter(f => hasEffect(f) && !appliedIds.includes(f.id));
+
+  // Post-apply verification (P2): capture a canvas signature + local findings BEFORE
+  // applying, then re-check AFTER the render commits. If the canvas is UNCHANGED (a
+  // no-op slipped through) or a NEW severity-fail appeared, auto-revert and mark the
+  // affected findings as advice with a subtle "couldn't apply cleanly" note.
+  const verifyAfterApply = (ids, beforeSig, beforeFindings) => {
+    // Defer past the applied patch's React commit AND its canvas draw. We wait two
+    // animation frames (commit → paint) plus a short timeout, and read the LATEST
+    // captureImage / runLocalAudit via refs so they reflect post-apply state.
+    const run = () => {
+      let afterSig = beforeSig;
+      let afterFindings = beforeFindings;
+      try { afterSig = canvasSignature(captureRef.current()); } catch { /* keep before */ }
+      try { afterFindings = localAuditRef.current() || []; } catch { /* keep before */ }
+      const noVisualChange = afterSig === beforeSig;
+      const regressed = introducedNewFail(beforeFindings, afterFindings);
+      if (noVisualChange || regressed) {
+        for (let i = 0; i < ids.length; i++) undoOnce(); // LIFO revert of this apply
+        setAppliedCount(c => Math.max(0, c - ids.length));
+        setAppliedIds(prev => prev.filter(id => !ids.includes(id)));
+        setUnclean(prev => { const next = { ...prev }; for (const id of ids) next[id] = true; return next; });
+        // If nothing else is applied, drop back to the findings list.
+        setPhase(p => (p === 'preview' ? 'findings' : p));
+      }
+    };
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+    raf(() => raf(() => setTimeout(run, 40))); // commit → paint → settle, then verify
+  };
 
   const applyOne = (finding) => {
-    if (!finding.fix) return;
+    if (!hasEffect(finding)) return;
     const clean = stripCopyFromPatch(finding.fix);
-    if (!patchHasChanges(clean)) return;
+    const beforeSig = (() => { try { return canvasSignature(captureImage()); } catch { return null; } })();
+    const beforeFindings = (() => { try { return runLocalAudit() || []; } catch { return []; } })();
     const applied = applyPatch(clean) || [];
     if (applied.length) {
       setAppliedCount(c => c + 1);
       setAppliedIds(ids => [...ids, finding.id]);
       setPhase('preview');
+      verifyAfterApply([finding.id], beforeSig, beforeFindings);
     }
   };
 
   const applyAll = () => {
     // Apply each in order; each pushes its own undo entry (LIFO revert unwinds all).
     const toApply = fixable.slice();
+    const beforeSig = (() => { try { return canvasSignature(captureImage()); } catch { return null; } })();
+    const beforeFindings = (() => { try { return runLocalAudit() || []; } catch { return []; } })();
     let count = 0;
     const ids = [];
     for (const f of toApply) {
@@ -112,6 +185,7 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
       setAppliedCount(c => c + count);
       setAppliedIds(prev => [...prev, ...ids]);
       setPhase('preview');
+      verifyAfterApply(ids, beforeSig, beforeFindings);
     }
   };
 
@@ -160,7 +234,7 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
             <div className="audit-group-label">Automatic checks</div>
             {local.length === 0 && <p className="audit-empty">No contrast, size, safe-zone, or layout issues detected.</p>}
             {local.map(f => (
-              <Finding key={f.id} f={f} applied={appliedIds.includes(f.id)} onApply={() => applyOne(f)} chipLabel={fmtChip} />
+              <Finding key={f.id} f={f} applied={appliedIds.includes(f.id)} unclean={!!unclean[f.id]} canApply={hasEffect(f)} onApply={() => applyOne(f)} chipLabel={fmtChip} />
             ))}
 
             {/* AI polish findings */}
@@ -169,7 +243,7 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
             {showNote && <p className="audit-note">{note}</p>}
             {visionState === 'done' && visionFindings.length === 0 && <p className="audit-empty">Nothing else to flag.</p>}
             {visionFindings.map(f => (
-              <Finding key={f.id} f={f} applied={appliedIds.includes(f.id)} onApply={() => applyOne(f)} chipLabel={fmtChip} />
+              <Finding key={f.id} f={f} applied={appliedIds.includes(f.id)} unclean={!!unclean[f.id]} canApply={hasEffect(f)} onApply={() => applyOne(f)} chipLabel={fmtChip} />
             ))}
           </>
         )}
@@ -192,18 +266,26 @@ export default function AuditPanel({ open, setOpen, runLocalAudit, captureImage,
   );
 }
 
-function Finding({ f, applied, onApply, chipLabel }) {
-  const hasFix = !!f.fix && patchHasChanges(stripCopyFromPatch(f.fix));
+function Finding({ f, applied, unclean, canApply, onApply, chipLabel }) {
+  // Advice-only when there's no fix that would actually change the design (no-op
+  // detected, composition category, or the post-apply guard couldn't apply it
+  // cleanly). Advice findings show a small "advice" tag instead of an Apply chip.
+  const showChip = canApply && !applied && !unclean;
+  const showAdvice = !applied && !canApply;
   return (
     <div className={`audit-finding audit-finding--${f.severity}`}>
       <span className={`audit-sev audit-sev--${f.severity}`} title={SEV_LABEL[f.severity] || ''}>{SEV_ICON[f.severity] || '•'}</span>
       <div className="audit-finding-body">
-        <span className="audit-finding-cat">{f.layer === 'ai' ? f.category : f.category}</span>
+        <span className="audit-finding-cat">
+          {f.category}
+          {showAdvice && <span className="audit-advice-tag"> · advice</span>}
+        </span>
         <p className="audit-finding-msg">{f.message}</p>
-        {hasFix && !applied && (
+        {showChip && (
           <button type="button" className="audit-apply-chip" onClick={onApply}>{chipLabel(f.fix)}</button>
         )}
         {applied && <span className="audit-applied">✓ applied</span>}
+        {unclean && <span className="audit-applied audit-unclean">couldn’t apply cleanly — advice only</span>}
       </div>
     </div>
   );

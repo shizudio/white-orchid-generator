@@ -485,6 +485,8 @@ canvas[role="application"]:focus-visible {
 }
 .audit-apply-chip:hover { background: color-mix(in srgb, var(--tw-burnham) 8%, transparent); }
 .audit-applied { font-family: var(--font-body); font-size: 12px; color: var(--tw-burnham); font-weight: 600; }
+.audit-advice-tag { color: var(--fg-muted); font-weight: 600; }
+.audit-unclean { display: block; margin-top: 2px; color: var(--fg-muted); font-weight: 500; font-style: italic; }
 .audit-preview-msg { font-family: var(--font-body); font-size: 13.5px; line-height: 1.5; color: var(--tw-jet); }
 .audit-foot {
   display: flex; gap: 8px; padding: 12px 14px;
