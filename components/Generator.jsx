@@ -302,12 +302,12 @@ const LOGO_SIZES = [
 
 // Canvas dimensions per social channel. w/h are export pixels.
 const DIMENSIONS = [
-  { id:"ig_square",   label:"IG Square",   sub:"1:1",    w:1080, h:1080 },
-  { id:"ig_portrait", label:"IG Portrait", sub:"4:5",    w:1080, h:1350 },
-  { id:"story",       label:"Story / Reel",sub:"9:16",   w:1080, h:1920 },
-  { id:"twitter",     label:"Twitter / X", sub:"16:9",   w:1600, h:900  },
-  { id:"facebook",    label:"Facebook",    sub:"1.91:1", w:1200, h:630  },
-  { id:"banner",      label:"Banner",      sub:"3:1",    w:1500, h:500  },
+  { id:"ig_square",   label:"IG Square",   sub:"1:1",    w:1080, h:1080, purpose:"feed post" },
+  { id:"ig_portrait", label:"IG Portrait", sub:"4:5",    w:1080, h:1350, purpose:"feed post (tall)" },
+  { id:"story",       label:"Story / Reel",sub:"9:16",   w:1080, h:1920, purpose:"stories & reels" },
+  { id:"twitter",     label:"Twitter / X", sub:"16:9",   w:1600, h:900,  purpose:"post image" },
+  { id:"facebook",    label:"Facebook",    sub:"1.91:1", w:1200, h:630,  purpose:"link/post image" },
+  { id:"banner",      label:"Banner",      sub:"3:1",    w:1500, h:500,  purpose:"website/email banner" },
 ];
 
 // Clamp a normalized focal point (0..1) so a cover-filled image at the given
@@ -1492,7 +1492,7 @@ export default function App() {
               {DIMENSIONS.map(d=>{
                 const on=dimensionId===d.id;
                 return (
-                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.w} × ${d.h}px`}
+                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.purpose} · ${d.w} × ${d.h}px`}
                     style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
                     <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
                     <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
@@ -1585,7 +1585,7 @@ export default function App() {
                   <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                       <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
-                        {dimensionId===MASTER_DIM?"Master (Square)":isOverride?"Custom · "+dim.label:"Auto from Square"}
+                        {dimensionId===MASTER_DIM?"Default layout (Square)":isOverride?"Custom · "+dim.label:"Auto from default"}
                       </span>
                       <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
                         {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}

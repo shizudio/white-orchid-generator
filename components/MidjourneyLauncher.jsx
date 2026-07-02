@@ -72,7 +72,7 @@ export default function MidjourneyLauncher({ variant = 'media' }) {
         onClick={() => setOpen(value => !value)}
       >
         <span aria-hidden="true">✦</span>
-        Generate from MJ
+        AI photo idea
       </button>
 
       {open && (
