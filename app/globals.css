@@ -759,16 +759,23 @@ canvas[role="application"]:focus-visible {
   }
 
   .generator-preview-panel {
-    --generator-preview-height: 34vh;
+    /* Cap the sticky preview so nav + preview never pin more than ~290px
+       of the viewport, leaving room to scroll the controls below it. */
+    --generator-preview-height: min(27vh, 178px);
     order: 1;
     position: sticky;
     top: 64px;
     z-index: 50;
     flex: 0 0 auto !important;
     width: 100%;
-    padding: 10px 16px 14px !important;
+    padding: 8px 16px 10px !important;
     border-bottom: 1px solid var(--line);
     box-shadow: var(--shadow-sm);
+  }
+
+  /* Tighten the "Preview" label above the capped canvas on mobile. */
+  .generator-preview-panel > div:first-child {
+    margin-bottom: 6px !important;
   }
 
   .generator-controls {
