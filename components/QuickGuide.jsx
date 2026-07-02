@@ -3,13 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const STEPS = [
-  ['Upload images', 'Label each image as a Midjourney render or real photo. Only publish real photos marked Cleared.'],
-  ['Check the Library', 'Search and filter your approved images before choosing one.'],
-  ['Create a post', 'Choose Photo + Logo, Quote, Event, Text Post or Photo + Text.'],
-  ['Choose a format', 'Pick the correct size for Instagram, Stories, Twitter/X, Facebook or banners.'],
-  ['Design', 'Add text, position the image, select a logo and optionally apply a branded shape.'],
-  ['Review', 'Check spelling, layout, logo visibility, brand guidance and consent.'],
-  ['Download', 'Export as PNG or JPG. Video can be previewed, but MP4 export is not available yet.'],
+  ['Start', 'On the landing page, just describe the post you want — the Art Director builds a ready-to-edit design. Or open a starter template (or one from “Your templates”).'],
+  ['Make it yours', 'Click anything on the preview to edit it — text, photo or logo. Use the elements rail (or the chips on mobile) for colours, fonts and backgrounds, and the format strip to switch between Instagram, Stories, X, Facebook and banner sizes.'],
+  ['Ask the Art Director', 'Tap the ✦ button any time to change colours or formats, swap the layout, or even generate a photo — “generate a photo of children painting outdoors”.'],
+  ['Check + export', 'Run ✓ AI audit for contrast, sizing and on-brand polish, use ✎ Caption to write a post caption and hashtags, then Download — as PNG/JPG, or “Download all formats” for every size at once.'],
+  ['Save for the team', 'Save template adds your design to the shared “Your templates” library so the whole team can reuse it.'],
 ];
 
 export default function QuickGuide({ variant = 'nav' }) {
