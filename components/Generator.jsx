@@ -3,6 +3,7 @@ import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import AIArtDirector from "./AIArtDirector";
+import { PATCH_OPTIONS } from "@/lib/design-patch";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -1184,6 +1185,10 @@ export default function App() {
   const [showLibPicker, setShowLibPicker] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
   const [preAiState, setPreAiState] = useState(null);
+  // Undo stack for AI design patches (LIFO, capped). Each entry is a full
+  // snapshot of the applyable fields taken *before* a patch was applied, so
+  // undoLastAiChange() can pop and restore. Depth >= 5.
+  const [aiUndoStack, setAiUndoStack] = useState([]);
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -1270,39 +1275,142 @@ export default function App() {
     }, 60);
   };
 
-  const applyCreativePlan = plan => {
-    setPreAiState({ postType, dimensionId, headline, subtext, attribution, dateText, bgColor, textColorId, selectedLogoId, logoPosition, logoSize });
-    setPostType(plan.postType);
-    setDimensionId(plan.dimensionId);
-    setHeadline(plan.headline);
-    setSubtext(plan.subtext);
-    setAttribution(plan.attribution);
-    setDateText(plan.dateText);
-    setBgColor(plan.bgColor);
-    setTextColorId("auto");
-    setSelectedLogoId(plan.logoId);
-    setLogoPosition(plan.logoPosition);
-    setLogoSize(plan.logoSize);
-    setUserLogoTouched(true);   // AI art director explicitly places the logo
-    setMarkTab(plan.logoId.startsWith("s") ? "secondary" : "primary");
+  /* ── UNIFIED AI APPLY PATH ──
+     applyDesignPatch(patch) is the ONE place any AI-driven change touches the
+     design. It validates every field against the live constants (defence in
+     depth even though the API schema already enforces enums), snapshots the
+     prior applyable state onto a capped LIFO undo stack, and applies via the
+     same setters a human click would use — so ownership flags (userLogoTouched,
+     logoByDim) end up exactly as if the user had made the change by hand.
+     Returns the list of change keys actually applied. */
+  const AI_UNDO_DEPTH = 8; // >= 5 required
+  const snapshotApplyableState = () => ({
+    postType, dimensionId, headline, subtext, attribution, dateText,
+    bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
+    userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
+    typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
+    fontSizes: JSON.parse(JSON.stringify(fontSizes)),
+    overlayLayers: JSON.parse(JSON.stringify(overlayLayers)),
+    markTab,
+  });
+  const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
+
+  const applyDesignPatch = (patch) => {
+    if (!patch || typeof patch !== "object") return [];
+    const applied = [];
+
+    // Snapshot BEFORE mutating so undo restores this exact pre-patch state.
+    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    setPreAiState(snapshotApplyableState()); // legacy single-slot mirror (kept in sync)
+
+    if (inList(patch.postType, "postType")) { setPostType(patch.postType); applied.push("postType"); }
+    if (inList(patch.dimensionId, "dimensionId")) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
+    if (typeof patch.headline === "string") { setHeadline(patch.headline); applied.push("headline"); }
+    if (typeof patch.subtext === "string") { setSubtext(patch.subtext); applied.push("subtext"); }
+    if (typeof patch.attribution === "string") { setAttribution(patch.attribution); applied.push("attribution"); }
+    if (typeof patch.dateText === "string") { setDateText(patch.dateText); applied.push("dateText"); }
+    if (inList(patch.bgColor, "bgColor")) { setBgColor(patch.bgColor); applied.push("bgColor"); }
+    if (inList(patch.textColorId, "textColorId")) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
+    if (inList(patch.backdropMode, "backdropMode")) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
+
+    if (inList(patch.logoId, "logoId")) {
+      setSelectedLogoId(patch.logoId);
+      setMarkTab(patch.logoId.startsWith("s") ? "secondary" : "primary");
+      applied.push("logoId");
+    }
+    // A logo placement patch must behave exactly like a human click: pin the
+    // logo globally on the master dim, or write a per-dim override elsewhere.
+    if (inList(patch.logoPosition, "logoPosition") || inList(patch.logoSize, "logoSize")) {
+      const nextPos = inList(patch.logoPosition, "logoPosition") ? patch.logoPosition : logoPosition;
+      const nextSize = inList(patch.logoSize, "logoSize") ? patch.logoSize : logoSize;
+      if (dimensionId === MASTER_DIM) {
+        setUserLogoTouched(true);
+        if (inList(patch.logoPosition, "logoPosition")) setLogoPosition(nextPos);
+        if (inList(patch.logoSize, "logoSize")) setLogoSize(nextSize);
+      } else {
+        setUserLogoTouched(true);
+        setLogoByDim(prev => ({ ...prev, [dimensionId]: { position: nextPos, sizeId: nextSize } }));
+      }
+      if (inList(patch.logoPosition, "logoPosition")) applied.push("logoPosition");
+      if (inList(patch.logoSize, "logoSize")) applied.push("logoSize");
+    }
+
+    if (patch.fontSizes && typeof patch.fontSizes === "object") {
+      const clean = {};
+      for (const role of PATCH_OPTIONS.fontRole) {
+        if (inList(patch.fontSizes[role], "fontStep")) clean[role] = patch.fontSizes[role];
+      }
+      if (Object.keys(clean).length) { setFontSizes(prev => ({ ...prev, ...clean })); applied.push("fontSizes"); }
+    }
+
+    if (patch.removeOverlays === true) { setOverlayLayers([]); setSelOverlay(null); applied.push("removeOverlays"); }
+
+    if (patch.addOverlay && inList(patch.addOverlay.assetId, "overlayAssetId")) {
+      const asset = DEFAULT_OVERLAYS.find(o => o.id === patch.addOverlay.assetId);
+      if (asset) {
+        const mode = inList(patch.addOverlay.mode, "overlayMode") ? patch.addOverlay.mode : "overlay";
+        const t = suggestPlacement(asset.kind, asset.ratio, W, H);
+        const uid = "ol_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        setOverlayLayers(prev => [
+          ...prev.filter(l => l.assetId !== asset.id), // one instance per built-in shape
+          { uid, assetId: asset.id, mode, master: t, byDim: {} },
+        ]);
+        applied.push("addOverlay");
+      }
+    }
+
+    setPhotoSel(false);
+    return applied;
+  };
+
+  // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
+  // chat are only valid in this order — older chips are disabled once a newer
+  // change lands.
+  const undoLastAiChange = () => {
+    setAiUndoStack(prev => {
+      if (!prev.length) return prev;
+      const [snap, ...rest] = prev;
+      restoreSnapshot(snap);
+      setPreAiState(rest[0] || null);
+      return rest;
+    });
+  };
+  const restoreSnapshot = (s) => {
+    if (!s) return;
+    setPostType(s.postType);
+    setDimensionId(s.dimensionId);
+    setHeadline(s.headline);
+    setSubtext(s.subtext);
+    setAttribution(s.attribution);
+    setDateText(s.dateText);
+    setBgColor(s.bgColor);
+    setTextColorId(s.textColorId);
+    setBackdropMode(s.backdropMode);
+    setSelectedLogoId(s.selectedLogoId);
+    setLogoPosition(s.logoPosition);
+    setLogoSize(s.logoSize);
+    setUserLogoTouched(s.userLogoTouched);
+    setLogoByDim(s.logoByDim || {});
+    setTypeLayoutsByDim(s.typeLayoutsByDim || {});
+    setFontSizes(s.fontSizes || freshFontSizes());
+    const layers = (s.overlayLayers || []).map(l => ({ ...l, uid: "ol_" + Math.random().toString(36).slice(2) }));
+    setOverlayLayers(layers);
+    setSelOverlay(null);
+    setMarkTab(s.markTab || ((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary"));
     setPhotoSel(false);
   };
 
-  const undoCreativePlan = () => {
-    if (!preAiState) return;
-    setPostType(preAiState.postType);
-    setDimensionId(preAiState.dimensionId);
-    setHeadline(preAiState.headline);
-    setSubtext(preAiState.subtext);
-    setAttribution(preAiState.attribution);
-    setDateText(preAiState.dateText);
-    setBgColor(preAiState.bgColor);
-    setTextColorId(preAiState.textColorId);
-    setSelectedLogoId(preAiState.selectedLogoId);
-    setLogoPosition(preAiState.logoPosition);
-    setLogoSize(preAiState.logoSize);
-    setPreAiState(null);
+  // Legacy creative-plan (full-field) → route through the single apply path.
+  const applyCreativePlan = plan => {
+    applyDesignPatch({
+      postType: plan.postType, dimensionId: plan.dimensionId,
+      headline: plan.headline, subtext: plan.subtext,
+      attribution: plan.attribution, dateText: plan.dateText,
+      bgColor: plan.bgColor, textColorId: "auto",
+      logoId: plan.logoId, logoPosition: plan.logoPosition, logoSize: plan.logoSize,
+    });
   };
+  const undoCreativePlan = () => undoLastAiChange();
 
   /* ── Load fonts ── */
   useEffect(() => {
