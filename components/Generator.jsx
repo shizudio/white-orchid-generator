@@ -757,6 +757,7 @@ const MASTER_DIM = "ig_square"; // square is the master; other formats cascade f
 
 // Built-in brand overlay shapes (always available in the library)
 const DEFAULT_OVERLAYS = [
+  { id:"orchid-petal", name:"Orchid", src:"/assets/shapes/orchid-petal.svg", kind:"center", ratio:1, category:"overlays", builtin:true },
   { id:"shape-1", name:"Shape 1", src:"/assets/shapes/shape-1.svg", kind:"center", ratio:169/207, category:"overlays", builtin:true },
   { id:"shape-2", name:"Shape 2", src:"/assets/shapes/shape-2.svg", kind:"center", ratio:217/196, category:"overlays", builtin:true },
   { id:"shape-3", name:"Shape 3", src:"/assets/shapes/shape-3.svg", kind:"center", ratio:173/207, category:"overlays", builtin:true },
@@ -837,6 +838,22 @@ const STARTER_TEMPLATES = [
       postType:"photo_logo", dimensionId:"ig_square", bgColor:"whiteSmoke",
       selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"m",
       imageSrc:SAMPLE_IMAGES[1].full,
+    },
+  },
+  {
+    // Signature template: the brand's 5-petal orchid used as a photo FRAME —
+    // the highlight of the design system (Task 2). The photo is clipped into the
+    // orchid silhouette; a small ivory logo sits bottom-right. overlayLayers is
+    // restored verbatim by applyDesignTemplate (fresh uid assigned on apply).
+    id:"st_petal_frame", name:"Petal Frame", purpose:"Frame a photo in the orchid",
+    state:{
+      postType:"photo_logo", dimensionId:"ig_square", bgColor:"burnham",
+      selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"s",
+      imageSrc:SAMPLE_IMAGES[1].full,
+      overlayLayers:[
+        { assetId:"orchid-petal", mode:"frame",
+          master:{ x:0.5, y:0.5, scale:1.0, rotation:0, opacity:1 }, byDim:{} },
+      ],
     },
   },
 ];
@@ -2810,12 +2827,15 @@ function TemplateCard({template,onClick}){
   const pos=(s.logoPosition||"bottom-center");
   const [vy,vx]=[pos.includes("top")?"flex-start":pos.includes("bottom")?"flex-end":"center",
                  pos.includes("left")?"flex-start":pos.includes("right")?"flex-end":"center"];
+  // Signature petal-frame mock: photo clipped into the orchid silhouette (Task 2).
+  const orchidFrame=(s.overlayLayers||[]).find(l=>l.assetId==="orchid-petal"&&(l.mode||"frame")==="frame");
   return (
     <button type="button" onClick={onClick} title={`Use “${template.name}” — ${template.purpose}`}
       style={{textAlign:"left",padding:0,border:"none",background:"none",cursor:"pointer",display:"block",width:"100%"}}>
       <div style={{position:"relative",aspectRatio:"1/1",borderRadius:11,overflow:"hidden",border:`1.5px solid ${B.ash}44`,background:bgHex}}>
-        {s.imageSrc&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />}
-        {s.imageSrc&&<div style={{position:"absolute",inset:0,background:`linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.42))`}} />}
+        {s.imageSrc&&orchidFrame&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:"9%",width:"82%",height:"82%",objectFit:"cover",WebkitMaskImage:"url(/assets/shapes/orchid-petal.svg)",maskImage:"url(/assets/shapes/orchid-petal.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />}
+        {s.imageSrc&&!orchidFrame&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />}
+        {s.imageSrc&&!orchidFrame&&<div style={{position:"absolute",inset:0,background:`linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.42))`}} />}
         {line&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"10px 11px",gap:3}}>
           <div style={{fontFamily:s.postType==="texture_text"?FU.subtitle:F.title,color:s.imageSrc?B.whiteSmoke:ink,fontSize:s.postType==="texture_text"?13:15,fontWeight:s.postType==="texture_text"?800:600,lineHeight:1.1,letterSpacing:s.postType==="texture_text"?1:0,textTransform:s.postType==="texture_text"?"uppercase":"none",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{line}</div>
           {sub&&<div style={{fontFamily:FU.body,color:s.imageSrc?`${B.whiteSmoke}cc`:`${ink}cc`,fontSize:9,letterSpacing:0.3}}>{sub}</div>}
