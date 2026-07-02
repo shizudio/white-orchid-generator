@@ -165,6 +165,93 @@ const TYPE_LAYOUT_DEFAULTS = {
 };
 const freshTypeLayouts=()=>Object.fromEntries(Object.entries(TYPE_LAYOUT_DEFAULTS).map(([key,value])=>[key,{...value}]));
 
+/* ───────── PER-FORMAT COMPOSITION TABLE (design spec §1) ─────────
+   FORMAT_LAYOUTS[dimensionId][postType] encodes the spec's per-format ×
+   per-type composition defaults. Values are canvas-fraction (0..1).
+     textZone {x,y,width,align}  — spec §1 text-zone anchor box (x,y = top-left)
+     fontMult                    — per-format font scale (multiplies fm(role) & S)
+     maxLines                    — spec's max-lines guidance (governs §6 wrapping/drop)
+     logo {position,sizeId}      — spec's default 9-grid position + LOGO_SIZES step
+     safe {t,b,l,r}              — spec safe margins
+     sideBySide (photo types)    — wide-format side-by-side: photo occupies the
+                                    right band, text the left; textFrac = left width.
+   LOGO_SIZES ids: s .12 / m .22 / l .38 / xl .55 of W. The spec expresses logo
+   size as a fraction of min(W,H); we map to the nearest LOGO_SIZES step whose W
+   fraction lands closest to the spec value on a square (where W===H), then the
+   collision guard fine-tunes per dimension. */
+const F_S={t:0.06,b:0.06,l:0.06,r:0.06};
+const FORMAT_LAYOUTS = {
+  ig_square: {
+    photo_logo:{textZone:{x:0.06,y:0.66,width:0.88,align:"left"},fontMult:1.00,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:F_S},
+    quote:{textZone:{x:0.10,y:0.28,width:0.80,align:"center"},fontMult:1.00,maxLines:5,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.10,b:0.10,l:0.10,r:0.10}},
+    event:{textZone:{x:0.07,y:0.44,width:0.86,align:"center"},fontMult:1.00,maxLines:5,logo:{position:"top-center",sizeId:"s"},safe:{t:0.07,b:0.07,l:0.07,r:0.07}},
+    text_post:{textZone:{x:0.08,y:0.22,width:0.84,align:"left"},fontMult:1.00,maxLines:3,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.08,b:0.08,l:0.08,r:0.08}},
+    texture_text:{textZone:{x:0.08,y:0.38,width:0.84,align:"center"},fontMult:1.00,maxLines:2,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.08,b:0.08,l:0.08,r:0.08}},
+  },
+  ig_portrait: {
+    photo_logo:{textZone:{x:0.06,y:0.70,width:0.88,align:"left"},fontMult:0.95,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:F_S},
+    quote:{textZone:{x:0.10,y:0.24,width:0.80,align:"center"},fontMult:0.95,maxLines:6,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.10,b:0.10,l:0.10,r:0.10}},
+    event:{textZone:{x:0.07,y:0.48,width:0.86,align:"center"},fontMult:0.95,maxLines:5,logo:{position:"top-center",sizeId:"s"},safe:{t:0.07,b:0.07,l:0.07,r:0.07}},
+    text_post:{textZone:{x:0.08,y:0.20,width:0.84,align:"left"},fontMult:0.95,maxLines:4,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.08,b:0.08,l:0.08,r:0.08}},
+    texture_text:{textZone:{x:0.08,y:0.42,width:0.84,align:"center"},fontMult:0.95,maxLines:2,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.08,b:0.08,l:0.08,r:0.08}},
+  },
+  story: {
+    photo_logo:{textZone:{x:0.035,y:0.62,width:0.845,align:"left"},fontMult:1.10,maxLines:2,logo:{position:"bottom-left",sizeId:"s"},safe:{t:0.15,b:0.20,l:0.035,r:0.12}},
+    quote:{textZone:{x:0.06,y:0.30,width:0.88,align:"center"},fontMult:1.05,maxLines:6,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.06,b:0.22,l:0.06,r:0.06}},
+    event:{textZone:{x:0.06,y:0.46,width:0.88,align:"center"},fontMult:1.05,maxLines:4,logo:{position:"top-center",sizeId:"s"},safe:{t:0.06,b:0.22,l:0.06,r:0.06}},
+    text_post:{textZone:{x:0.06,y:0.28,width:0.88,align:"left"},fontMult:1.05,maxLines:4,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.06,b:0.22,l:0.06,r:0.06}},
+    texture_text:{textZone:{x:0.06,y:0.44,width:0.88,align:"center"},fontMult:1.15,maxLines:2,logo:{position:"bottom-center",sizeId:"s"},safe:{t:0.06,b:0.22,l:0.06,r:0.06}},
+  },
+  twitter: {
+    photo_logo:{textZone:{x:0.05,y:0.28,width:0.42,align:"left"},fontMult:0.70,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.05,b:0.05,l:0.05,r:0.05},sideBySide:0.55},
+    quote:{textZone:{x:0.10,y:0.18,width:0.80,align:"center"},fontMult:0.75,maxLines:4,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.07,b:0.07,l:0.07,r:0.07}},
+    event:{textZone:{x:0.05,y:0.15,width:0.44,align:"left"},fontMult:0.68,maxLines:4,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.05,b:0.05,l:0.05,r:0.05},sideBySide:0.52},
+    text_post:{textZone:{x:0.06,y:0.30,width:0.88,align:"left"},fontMult:0.60,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.05,b:0.05,l:0.05,r:0.05}},
+    texture_text:{textZone:{x:0.10,y:0.36,width:0.80,align:"center"},fontMult:0.65,maxLines:1,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.05,b:0.05,l:0.05,r:0.05}},
+  },
+  facebook: {
+    photo_logo:{textZone:{x:0.06,y:0.30,width:0.40,align:"left"},fontMult:0.65,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:F_S,sideBySide:0.55},
+    quote:{textZone:{x:0.10,y:0.16,width:0.80,align:"center"},fontMult:0.72,maxLines:4,logo:{position:"bottom-right",sizeId:"s"},safe:{t:0.08,b:0.08,l:0.08,r:0.08}},
+    event:{textZone:{x:0.06,y:0.14,width:0.42,align:"left"},fontMult:0.60,maxLines:3,logo:{position:"bottom-right",sizeId:"s"},safe:F_S,sideBySide:0.55},
+    text_post:{textZone:{x:0.06,y:0.28,width:0.88,align:"left"},fontMult:0.55,maxLines:2,logo:{position:"bottom-right",sizeId:"s"},safe:F_S},
+    texture_text:{textZone:{x:0.10,y:0.36,width:0.80,align:"center"},fontMult:0.60,maxLines:1,logo:{position:"bottom-right",sizeId:"s"},safe:F_S},
+  },
+  banner: {
+    photo_logo:{textZone:{x:0.05,y:0.20,width:0.42,align:"left"},fontMult:0.50,maxLines:1,logo:{position:"mid-right",sizeId:"m"},safe:{t:0.08,b:0.08,l:0.05,r:0.05},sideBySide:0.45},
+    quote:{textZone:{x:0.10,y:0.15,width:0.80,align:"center"},fontMult:0.55,maxLines:2,logo:{position:"mid-right",sizeId:"m"},safe:{t:0.10,b:0.10,l:0.08,r:0.08}},
+    event:{textZone:{x:0.05,y:0.14,width:0.44,align:"left"},fontMult:0.40,maxLines:2,logo:{position:"mid-right",sizeId:"m"},safe:{t:0.08,b:0.08,l:0.05,r:0.05},sideBySide:0.45},
+    text_post:{textZone:{x:0.05,y:0.22,width:0.90,align:"left"},fontMult:0.35,maxLines:1,logo:{position:"mid-right",sizeId:"m"},safe:{t:0.08,b:0.08,l:0.05,r:0.05}},
+    texture_text:{textZone:{x:0.12,y:0.24,width:0.76,align:"center"},fontMult:0.45,maxLines:1,logo:{position:"mid-right",sizeId:"m"},safe:{t:0.08,b:0.08,l:0.05,r:0.05}},
+  },
+};
+// LOGO_POSITIONS uses "mid-right"; spec's "right-center" maps to it. Spec logo
+// pos "bottom-left (above UI)" for story → bottom-left (safe margins already lift it).
+const formatLayoutFor=(dimId,postType)=>(FORMAT_LAYOUTS[dimId]||FORMAT_LAYOUTS.ig_square)[postType]||FORMAT_LAYOUTS.ig_square.text_post;
+
+/* Resolution rule (documented per prompt):
+   For a render dimension D and post type P, the effective text layout is:
+     1. user override typeLayoutsByDim[D][P]  (written only when the user edits
+        layout while a non-master dim D is active) — used verbatim, if present.
+     2. else if D === MASTER_DIM: the user's master edit typeLayouts[P].
+     3. else: the spec's format default for (D,P), MERGED with the user's master
+        RELATIVE tweaks only — scale & align carry over from the master edit
+        (these translate safely across formats); x/y/width come from the spec
+        default (absolute positions do NOT translate and were the core bug).
+   This is the single clean rule: absolute geometry is per-format (spec), while
+   relative typographic intent (scale, alignment) follows the user's master. */
+function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim){
+  const override=typeLayoutsByDim?.[dimId]?.[postType];
+  if(override)return override;
+  const master=typeLayouts?.[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
+  if(dimId===MASTER_DIM)return master;
+  const fmt=formatLayoutFor(dimId,postType),tz=fmt.textZone;
+  return{
+    x:tz.x, y:tz.y, width:tz.width, align:tz.align,
+    scale:master.scale??1,                 // relative tweak carries over
+    lineHeight:master.lineHeight??(TYPE_LAYOUT_DEFAULTS[postType]?.lineHeight||1.16),
+  };
+}
+
 // Per-category font sizing. Each text element has a role; the user picks a size step per role.
 const FONT_SIZE_STEPS=[
   {id:"xs",label:"XS",mult:0.7},
@@ -703,6 +790,12 @@ export default function App() {
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
+  // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
+  // the user adjusts layout while a non-master dimension is active (spec §1 user-edit model).
+  const [typeLayoutsByDim, setTypeLayoutsByDim] = useState({});
+  // True once the user explicitly changes logo placement/size (template & AI applies count).
+  // While false, renderScene uses the per-format spec logo default.
+  const [userLogoTouched, setUserLogoTouched] = useState(false);
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
   const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
   const [textSelected, setTextSelected] = useState(false);
@@ -736,9 +829,26 @@ export default function App() {
   const selectedLogoVariant = LOGO_VARIANTS.find(v => v.id === selectedLogoId);
   const logoPos = LOGO_POSITIONS[logoPosition];
   const logoSizePct = LOGO_SIZES.find(s => s.id === logoSize)?.pct ?? 0.22;
-  const textLayout = typeLayouts[postType] || TYPE_LAYOUT_DEFAULTS.text_post;
-  const updateTextLayout = patch => setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
-  const resetTextLayout = () => setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
+  // Effective layout for the CURRENT dimension (spec resolution rule).
+  const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim);
+  // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
+  const updateTextLayout = patch => {
+    if(dimensionId===MASTER_DIM){
+      setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
+    }else{
+      setTypeLayoutsByDim(prev=>{
+        const base=prev[dimensionId]?.[postType]||resolveTextLayout(dimensionId,postType,typeLayouts,prev);
+        return {...prev,[dimensionId]:{...(prev[dimensionId]||{}),[postType]:{...base,...patch}}};
+      });
+    }
+  };
+  const resetTextLayout = () => {
+    if(dimensionId===MASTER_DIM){
+      setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
+    }else{
+      setTypeLayoutsByDim(prev=>{const nd={...(prev[dimensionId]||{})};delete nd[postType];return {...prev,[dimensionId]:nd};});
+    }
+  };
 
   // Click text on the canvas → open the Content section and focus its primary
   // input so the copy can be edited immediately.
@@ -764,6 +874,7 @@ export default function App() {
     setSelectedLogoId(plan.logoId);
     setLogoPosition(plan.logoPosition);
     setLogoSize(plan.logoSize);
+    setUserLogoTouched(true);   // AI art director explicitly places the logo
     setMarkTab(plan.logoId.startsWith("s") ? "secondary" : "primary");
     setPhotoSel(false);
   };
@@ -903,14 +1014,29 @@ export default function App() {
       logoPosId=textOccupiesBottom?"top-right":"bottom-right";
       setAccessibilityNote("Using accessible template defaults for this background.");
     }
-    if(postType!=="photo_logo")setTypeLayouts(prev=>({...prev,[postType]:chosenLayout}));
+    // Text POSITION is now owned by the per-format composition spec (FORMAT_LAYOUTS),
+    // not this director — so we no longer overwrite typeLayouts here. The director
+    // keeps its real job: choosing an accessible text COLOUR + contrast for the
+    // resolved text zone, and seeding an image-aware logo spot when the user hasn't
+    // explicitly placed the logo (the collision guard then refines per-dimension).
     setTextColorId("auto");setTextSurfaceLuminance(textLum);setSuggestedTextColor(suggestedTextId);setTextMinContrast(minimumTextContrast);
-    setLogoPosition(logoPosId);
+    if(!userLogoTouched)setLogoPosition(logoPosId);
     const logoColor=suggestLogoColor(logoRegionLum);setSuggestedColor(logoColor);
     const current=LOGO_VARIANTS.find(v=>v.id===selectedLogoId);
     const match=current&&LOGO_VARIANTS.find(v=>v.group===current.group&&v.label===current.label&&v.color===logoColor);
     if(match)setSelectedLogoId(match.id);
-  }, [mediaObj, imageObj, videoObj, image, postType, bgColor, bgAlpha, dimensionId, hasFrameLayer, curBg]);
+  }, [mediaObj, imageObj, videoObj, image, postType, bgColor, bgAlpha, dimensionId, hasFrameLayer, curBg, userLogoTouched]);
+
+  // Logo seed: when the user hasn't explicitly placed the logo, seed its
+  // position + size from the per-format spec default (FORMAT_LAYOUTS) whenever the
+  // format or post type changes. The image-aware director + collision guard then
+  // refine this per dimension. A user placement (userLogoTouched) pins it.
+  useEffect(()=>{
+    if(userLogoTouched)return;
+    const fmt=formatLayoutFor(dimensionId,postType);
+    setLogoPosition(fmt.logo.position);
+    setLogoSize(fmt.logo.sizeId);
+  },[dimensionId,postType,userLogoTouched]);
 
   // Clicking anywhere outside the preview clears editing chrome without
   // changing the actual composition.
@@ -983,6 +1109,11 @@ export default function App() {
     const live = opts.live !== false;
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
+    // Per-format spec composition defaults for this dimension + post type.
+    const fmt=formatLayoutFor(dimId,postType);
+    // Logo position/size come from state, which is seeded from the format spec
+    // default (see the logo-seed effect) and refined by the collision guard when
+    // the user hasn't explicitly placed it; a user placement pins state directly.
     const m=w*0.12, lSz=w*logoSizePct;
     const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
     const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
@@ -994,6 +1125,9 @@ export default function App() {
     const endText=()=>{ctx.restore();};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 ${24*S}px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
+    // Draw the background photo. When a wide side-by-side layout is active
+    // (spec §1), clip the photo to the right band so the left stays a clean
+    // brand-colour panel for the text; otherwise cover-fill the whole frame.
 
     // Resolve a layer's transform for the current dimension (master cascade + override)
     const resolveT=(layer)=>{
@@ -1005,13 +1139,32 @@ export default function App() {
     const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
     const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
-    const layout=typeLayouts[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
-    const safe=0.08,bw=Math.min(layout.width||0.76,1-safe*2)*w;
-    const bx=Math.max(safe,Math.min(1-safe-bw/w,layout.x??safe))*w;
-    const by=Math.max(safe,Math.min(0.82,layout.y??0.18))*h;
-    const maxTextH=Math.max(h*0.16,h*(1-safe)-by);
-    const align=layout.align||"left",scale=layout.scale||1,lineRatio=layout.lineHeight||1.16;
+    // Effective text layout: spec resolution rule (user override → master → per-format default + master relative tweaks).
+    const layout=resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim);
+    const sm=fmt.safe||{t:0.08,b:0.08,l:0.08,r:0.08};
+    // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
+    const bw=Math.min(layout.width||0.76,1-sm.l-sm.r)*w;
+    const bx=Math.max(sm.l,Math.min(1-sm.r-bw/w,layout.x??sm.l))*w;
+    const by=Math.max(sm.t,Math.min(1-sm.b,layout.y??0.18))*h;
+    const maxTextH=Math.max(h*0.12,h*(1-sm.b)-by);
+    const align=layout.align||"left",scale=(layout.scale||1)*(fmt.fontMult||1),lineRatio=layout.lineHeight||1.16;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
+    // Wide-format side-by-side (photo types only, spec §1): photo occupies the
+    // right band, text the left. photoBox constrains the photo draw region.
+    const sideFrac=fmt.sideBySide;   // undefined unless a wide photo layout
+    const photoBox=sideFrac?{x:sideFrac*w,y:0,w:(1-sideFrac)*w,h}:null;
+    // Photo draw respecting an optional side-by-side band. The photo is
+    // cover-fitted to the band so the subject fills it (smart-crop lands the
+    // focal point within, added in commit 3).
+    const drawPhoto=()=>{
+      if(!mediaObj)return;
+      if(photoBox){
+        ctx.save();ctx.beginPath();ctx.rect(photoBox.x,photoBox.y,photoBox.w,photoBox.h);ctx.clip();
+        ctx.translate(photoBox.x,photoBox.y);
+        drawPhotoFramed(ctx,mediaObj,photoBox.w,photoBox.h,imgT);
+        ctx.restore();
+      }else drawPhotoFramed(ctx,mediaObj,w,h,imgT);
+    };
     const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
@@ -1021,7 +1174,7 @@ export default function App() {
     }
 
     if(postType==="photo_logo"){
-      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
+      if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       putLogo();
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);
@@ -1039,10 +1192,17 @@ export default function App() {
       endText();
       putLogo();
     }else if(postType==="event"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){
+        if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
+        else{drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
+      }}
       beginText();ctx.fillStyle=tc;let used=0;
       if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
-      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;used+=drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);if(rest){ctx.font=`600 ${36*S*scale*fm("subheading")}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale*fm("subheading"),align);ctx.letterSpacing="0px";}}
+      if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;
+        // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
+        // above its baseline — advance by that so it clears the title above it.
+        used+=df.size*0.72;
+        drawTextLines(ctx,df.lines,bx,by+used,bw,df.lineHeight,align);used+=(df.lines.length-1)*df.lineHeight+df.size*0.28;if(rest){ctx.font=`600 ${36*S*scale*fm("subheading")}px ${F.subtitle}`;ctx.letterSpacing=`${3*S}px`;used+=22*S+drawTextLines(ctx,textLines(ctx,rest.toUpperCase(),bw),bx,by+used+22*S,bw,44*S*scale*fm("subheading"),align);ctx.letterSpacing="0px";}}
       if(subtext){const gap=Math.max(36*S,used?44*S:0),sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,Math.max(72*S,maxTextH-used-gap),1.38,32*S);ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
       setTextBounds(used);
       endText();
@@ -1088,7 +1248,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,fontSizes]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -1113,6 +1273,13 @@ export default function App() {
         const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=W*pct;
         return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{const[cx,cy]=logoCenter(pos,W,H,lSz),box={x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz},region=regionFor(pos),contrast=Math.max(contrastRatio(region.mean,hexLuminance(B.burnham)),contrastRatio(region.mean,hexLuminance(B.whiteSmoke)));return{id,overlap:intersects(expanded,box),score:contrast-region.variance*8-(id==="center"?0.7:0)};}).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
       };
+      // Only relocate when the CURRENT logo box actually collides with the text
+      // exclusion zone — otherwise the format-default (or user) placement stands.
+      const curPct=LOGO_SIZES.find(s=>s.id===logoSize)?.pct||0.12,curSz=W*curPct;
+      const curPos=LOGO_POSITIONS[logoPosition];
+      let collides=false;
+      if(curPos){const[ccx,ccy]=logoCenter(curPos,W,H,curSz);collides=intersects(expanded,{x:ccx-curSz/2,y:ccy-curSz/2,w:curSz,h:curSz});}
+      if(!collides)return;
       let choices=ranked(logoSize),nextSize=logoSize;
       if(!choices.length&&logoSize!=="s"){nextSize="s";choices=ranked("s");}
       if(choices.length){if(nextSize!==logoSize)setLogoSize(nextSize);if(choices[0].id!==logoPosition)setLogoPosition(choices[0].id);}
@@ -1439,7 +1606,7 @@ export default function App() {
     postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize,
-    imgT:clonePlain(imgT), typeLayouts:clonePlain(typeLayouts), fontSizes:clonePlain(fontSizes),
+    imgT:clonePlain(imgT), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
     overlayLayers:clonePlain(overlayLayers),
     imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
   });
@@ -1476,8 +1643,12 @@ export default function App() {
     setSelectedLogoId(s.selectedLogoId || "p3-ivory");
     setLogoPosition(s.logoPosition || "bottom-center");
     setLogoSize(s.logoSize || "m");
+    // A template explicitly specifies logo placement; honour it (spec §1).
+    // (If it didn't, format defaults would apply — starter templates always do.)
+    setUserLogoTouched(true);
     setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
     setTypeLayouts(s.typeLayouts || freshTypeLayouts());
+    setTypeLayoutsByDim(s.typeLayoutsByDim || {});
     setFontSizes(s.fontSizes || freshFontSizes());
     const nextLayers=(s.overlayLayers || []).map(layer => ({ ...layer, uid:"ol_" + Math.random().toString(36).slice(2) }));
     setOverlayLayers(nextLayers);
@@ -1776,7 +1947,7 @@ export default function App() {
                   ].map(pos=>{
                     const on=logoPosition===pos;
                     return(
-                      <button key={pos} aria-pressed={on} onClick={()=>setLogoPosition(pos)} title={pos.replace(/-/g," ")}
+                      <button key={pos} aria-pressed={on} onClick={()=>{setUserLogoTouched(true);setLogoPosition(pos);}} title={pos.replace(/-/g," ")}
                         style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
                         <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
                       </button>
@@ -1786,7 +1957,7 @@ export default function App() {
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
                   <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
                   {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
-                    <Chip key={s.id} on={logoSize===s.id} click={()=>setLogoSize(s.id)} sm>{s.label}</Chip>
+                    <Chip key={s.id} on={logoSize===s.id} click={()=>{setUserLogoTouched(true);setLogoSize(s.id);}} sm>{s.label}</Chip>
                   ))}
                 </div>
               </>
