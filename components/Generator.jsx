@@ -4,6 +4,7 @@ import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
+import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -242,6 +243,38 @@ function analyzeQuietRegion(srcCtx,zone,tc){
     if(quiet&&!passes)return{mode:"reduced",meanL:zoneMeanL,maxV};
     return{mode:"full",meanL:zoneMeanL,maxV};
   }catch(_){return{mode:"full"};}
+}
+// AUDIT ONLY — measure the EFFECTIVE WCAG contrast of the resolved text colour
+// against the ALREADY-RENDERED canvas under a text zone (scrim/band/tint already
+// composited). Mirrors analyzeQuietRegion's sampling but returns the actual
+// contrast ratios so the local audit can classify fail (<3:1) / warn (<4.5:1).
+// zone {x,y,w,h,cw,ch} in canvas px; tc = resolved text colour hex. Returns
+// {min,max,mean} contrast ratios, or null if the zone can't be sampled.
+function measureZoneContrast(srcCtx,zone,tc){
+  try{
+    const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    const zx=Math.max(0,zone.x),zy=Math.max(0,zone.y);
+    const zw=Math.min(zone.cw-zx,zone.w),zh=Math.min(zone.ch-zy,zone.h);
+    if(zw<=0||zh<=0)return null;
+    ctx.drawImage(srcCtx.canvas,zx,zy,zw,zh,0,0,N,N);
+    const d=ctx.getImageData(0,0,N,N).data;
+    const cell=N/6;let meanSum=0,cells=0,minCellL=1,maxCellL=0;
+    for(let r=0;r<6;r++)for(let col=0;col<6;col++){
+      let sum=0,n=0;
+      for(let y=Math.floor(r*cell);y<(r+1)*cell;y++)for(let x=Math.floor(col*cell);x<(col+1)*cell;x++){
+        const i=(y*N+x)*4;if(d[i+3]<16)continue;sum+=getLuminance(d[i],d[i+1],d[i+2]);n++;
+      }
+      if(!n)continue;const mL=sum/n;meanSum+=mL;cells++;if(mL<minCellL)minCellL=mL;if(mL>maxCellL)maxCellL=mL;
+    }
+    if(!cells)return null;
+    const tcL=hexLuminance(tc);
+    return{
+      min:Math.min(contrastRatio(minCellL,tcL),contrastRatio(maxCellL,tcL)),
+      max:Math.max(contrastRatio(minCellL,tcL),contrastRatio(maxCellL,tcL)),
+      mean:contrastRatio(meanSum/cells,tcL),
+    };
+  }catch(_){return null;}
 }
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
@@ -1095,6 +1128,11 @@ export default function App() {
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
   const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
+  // AI-audit signal snapshot for the CURRENT live render — populated by renderScene
+  // so runLocalAudit() reads the engine's OWN deterministic decisions (resolved zone
+  // contrast, per-role floor pins, drops, logo overlap/focal-band, safe-zone violation)
+  // rather than reimplementing them. Blob-free; safe to read after any live draw().
+  const auditRef = useRef(null);
   const initialPreviewRef = useRef(true);
   const [dropHint, setDropHint] = useState(null);   // surfaced non-blocking hint
   const [logoOverlapHint, setLogoOverlapHint] = useState(false); // surfaced non-blocking logo-overlap notice
@@ -1431,6 +1469,8 @@ export default function App() {
     hasImage: !!(imageObj || videoObj),
   });
 
+  const localAuditCacheRef = useRef({ sig: null, findings: null });
+
   // Consume the landing handoff once on mount: apply the starting design and
   // open the chat seeded with the exchange so the conversation continues.
   useEffect(() => {
@@ -1664,6 +1704,9 @@ export default function App() {
     // overflow the safe zone, and record which fields were dropped for a UI hint.
     const dropped=[];
     const fontMeta={};   // resolved font px per role for this render (Task 4)
+    // AUDIT accumulators (live only) — engine decisions surfaced to runLocalAudit().
+    const auditLogo={explicit:false,overlapsText:false,inFocalBand:false};
+    const flooredRoles=[]; // roles whose fitText result landed at its readable floor
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
@@ -1692,6 +1735,18 @@ export default function App() {
       const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
       const[lx,ly]=logoCenter(pos,w,h,lSz);
+      // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
+      // exclusion)? Only meaningful with a photo + a real explicit placement (the
+      // guard already reshuffles non-explicit bases away from the focal band).
+      if(live){
+        auditLogo.explicit=!!logoBase.explicit;
+        auditLogo.overlapsText=!!place.overlapsText;
+        if(logoFocal){
+          const fr=LOGO_FOCAL_RADIUS*Math.min(w,h),fcx=(logoFocal.fx??0.5)*w,fcy=(logoFocal.fy??0.42)*h;
+          const lb={x:lx-lSz/2,y:ly-lSz/2,w:lSz,h:lSz};
+          auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
+        }
+      }
       containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);
     };
     // Per-dimension resolved text colour (spec §3). Assigned after the text box is
@@ -1737,7 +1792,8 @@ export default function App() {
     // raise short-format text to legibility WITHOUT inflating tall formats beyond
     // their designed size. `legacy` = the call's original S-based floor.
     const fmul=fmt.fontMult||1;
-    const mf=(role,start,legacy)=>minFloor(role,h,start/(fmul*Math.max(S,1e-3)),legacy);
+    const floorFor={};   // AUDIT: last effective readable floor px per MIN_FONT_PX role
+    const mf=(role,start,legacy)=>{const f=minFloor(role,h,start/(fmul*Math.max(S,1e-3)),legacy);floorFor[role]=f;return f;};
     // Wide-format side-by-side (photo types only, spec §1): photo occupies the
     // right band, text the left. photoBox constrains the photo draw region.
     const sideFrac=fmt.sideBySide;   // undefined unless a wide photo layout
@@ -1910,6 +1966,45 @@ export default function App() {
     if(live)dropInfoRef.current=dropped.length?{dropped}:null;
     if(live)fontMetaRef.current=fontMeta;   // Task 4 verification hook
 
+    // ── AUDIT snapshot (live only) — the engine's own deterministic decisions ──
+    if(live){
+      // Font-floor pins: a role whose fitted px sits at (or below) its readable
+      // floor is "at the minimum readable size" (spec §1 legibility / §6 step 1).
+      const pinPairs=[["headline","headline","Headline"],["date","date","Date"],["subtext","body","Body text"]];
+      for(const[metaKey,floorKey,label] of pinPairs){
+        const sz=fontMeta[metaKey],fl=floorFor[floorKey];
+        if(sz!=null&&fl!=null&&sz<=fl+1&&!flooredRoles.some(r=>r.label===label))flooredRoles.push({label});
+      }
+      // Effective text contrast in the RESOLVED text zone for THIS dimension,
+      // measured against the resolved text colour on the composited canvas.
+      let contrast=null;
+      const tb=textBoundsRef.current;
+      if(mediaObj&&tb&&tb.w>0&&tb.h>0){
+        contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},zoneTc);
+      }
+      // Safe-zone violation: only meaningful when the user has DRAGGED text into a
+      // per-dim override (typeLayoutsByDim) — a spec-default layout is always inside
+      // its safe margins. Compare the override box against this format's safe box.
+      let safeZoneViolation=false;
+      const ov=typeLayoutsByDim?.[dimId]?.[postType];
+      if(ov){
+        const ox=ov.x??sm.l,oy=ov.y??sm.t,ow=ov.width??0.76;
+        if(ox<sm.l-0.005||oy<sm.t-0.005||ox+ow>1-sm.r+0.005||oy>1-sm.b+0.005)safeZoneViolation=true;
+      }
+      auditRef.current={
+        dimensionId:dimId,
+        hasMedia:!!mediaObj,
+        backdropMode:backdropMode||"auto",
+        textColorId,
+        zoneContrast:contrast,          // {min,max,mean} or null
+        flooredRoles,                   // [{label}]
+        dropped:[...dropped],           // spec §6 drops active this render
+        logo:{...auditLogo},            // {explicit,overlapsText,inFocalBand}
+        safeZoneViolation,
+        hasText:!!(headline||subtext||attribution||dateText),
+      };
+    }
+
     // ── Overlay-mode layers (drawn on top of everything) ──
     const ocv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
     topLayers.forEach(layer => {
@@ -1950,6 +2045,41 @@ export default function App() {
     setLogoOverlapHint(prev=>prev===ov?prev:ov);
     if(typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook
   },[draw,fontsLoaded]);
+
+  /* ── LOCAL DESIGN AUDIT (Commit 1) ──────────────────────────────────────────
+     Free/instant deterministic checks over the CURRENT dimension. Re-renders the
+     live canvas first (so auditRef reflects the very latest state even if a React
+     commit hasn't flushed a draw() yet), then reads the engine's audit snapshot
+     and hands it to the pure lib. Cached on a signature of the render deps so
+     repeated calls in one frame are free; a state change invalidates the cache.
+     Defined AFTER renderScene so the useCallback can close over it. */
+  const auditSignature = () =>
+    JSON.stringify([
+      postType, dimensionId, bgColor, textColorId, backdropMode,
+      headline, subtext, attribution, dateText,
+      selectedLogoId, logoPosition, logoSize, userLogoTouched,
+      JSON.stringify(fontSizes), JSON.stringify(logoByDim), JSON.stringify(typeLayoutsByDim),
+      overlayLayers.map(l => l.assetId + (l.mode || "frame")).join(","),
+      !!(imageObj || videoObj), image,
+    ]);
+  const runLocalAudit = useCallback(() => {
+    const sig = auditSignature();
+    const cache = localAuditCacheRef.current;
+    if (cache.sig === sig && cache.findings) return cache.findings;
+    const c = canvasRef.current;
+    if (c) { try { renderScene(c.getContext("2d"), W, H, { dimensionId, live: true }); } catch { /* keep last snapshot */ } }
+    const findings = computeLocalAudit(auditRef.current);
+    localAuditCacheRef.current = { sig, findings };
+    if (typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };
+    return findings;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderScene, W, H, dimensionId, postType, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
+
+  // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__runWoAudit = () => runLocalAudit();
+  }, [runLocalAudit]);
 
   // NOTE: the former global-state collision guard useEffect was removed. Logo
   // placement (spec §1 default + §4 focal/text collision guard) is now resolved
