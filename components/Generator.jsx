@@ -97,7 +97,24 @@ const SAMPLE_IMAGES = [
 function wrapText(ctx,text,x,y,maxW,lh){const words=text.split(" ");let line="";const lines=[];for(let i=0;i<words.length;i++){const t=line+words[i]+" ";if(ctx.measureText(t).width>maxW&&i>0){lines.push(line.trim());line=words[i]+" ";}else line=t;}lines.push(line.trim());lines.forEach((l,i)=>ctx.fillText(l,x,y+i*lh));return lines.length;}
 function textLines(ctx,text,maxW){const words=String(text||"").trim().split(/\s+/).filter(Boolean),lines=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
 function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fitted=Math.max(size,minSize),lines=[];while(fitted>=minSize){ctx.font=font(fitted);lines=textLines(ctx,text,maxW);if(lines.length*fitted*lineRatio<=maxH)break;fitted-=2;}return{size:fitted,lines,lineHeight:fitted*lineRatio};}
-function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{if(ctx.__woTextOutline)ctx.strokeText(line,tx,y+i*lineHeight);ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
+function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
+// Local gradient scrim: a soft elliptical wash confined to the (padded) text
+// box, darkening behind light text or lightening behind dark text. Reads as
+// editorial framing rather than an outer glow, and degrades gracefully on
+// any photo since it never depends on per-letter edge detection.
+function drawTextScrim(ctx,x,y,w,h,tc,opacity=0.4){
+  const light=hexLuminance(tc)>0.5,rgb=light?"0,0,0":"255,255,255";
+  const padX=w*0.16,padY=h*0.32,cx=x+w/2,cy=y+h/2,rx=w/2+padX,ry=h/2+padY;
+  if(rx<=0||ry<=0)return;
+  ctx.save();
+  ctx.translate(cx,cy);ctx.scale(rx,ry);
+  const g=ctx.createRadialGradient(0,0,0,0,0,1);
+  g.addColorStop(0,`rgba(${rgb},${opacity})`);
+  g.addColorStop(0.65,`rgba(${rgb},${opacity*0.72})`);
+  g.addColorStop(1,`rgba(${rgb},0)`);
+  ctx.fillStyle=g;ctx.fillRect(-1,-1,2,2);
+  ctx.restore();
+}
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
 function imgFrom(d){return new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=d;});}
@@ -969,8 +986,12 @@ export default function App() {
     const m=w*0.12, lSz=w*logoSizePct;
     const [lx,ly]=logoPos?logoCenter(logoPos,w,h,lSz):[w*0.84,h*0.84];
     const putLogo=()=>{if(logoObj)containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);};
-    const beginText=()=>{ctx.save();if(mediaObj){const light=hexLuminance(tc)>0.5,needsEdge=textColorId==="auto"&&textMinContrast<4.5;ctx.shadowColor=light?"rgba(0,0,0,0.58)":"rgba(255,255,255,0.48)";ctx.shadowBlur=(needsEdge?14:10)*S;ctx.shadowOffsetY=2*S;if(needsEdge){ctx.__woTextOutline=true;ctx.strokeStyle=light?"rgba(25,30,28,0.72)":"rgba(245,246,231,0.76)";ctx.lineWidth=4*S;ctx.lineJoin="round";ctx.miterLimit=2;}}};
-    const endText=()=>{ctx.__woTextOutline=false;ctx.restore();};
+    // A tight, low-opacity drop shadow — just enough to separate letterforms
+    // from a busy photo. The heavy lifting for legibility is the background
+    // tint (quote/event/text_post) or the local scrim (texture_text/photo_logo)
+    // drawn ahead of beginText(); this is a safety net, not the primary effect.
+    const beginText=()=>{ctx.save();if(mediaObj){const light=hexLuminance(tc)>0.5;ctx.shadowColor=light?"rgba(0,0,0,0.32)":"rgba(255,255,255,0.28)";ctx.shadowBlur=3.5*S;ctx.shadowOffsetY=1.5*S;}};
+    const endText=()=>{ctx.restore();};
     const pattern=a=>{if(!logoObj)return;containDraw(ctx,logoObj,w*0.16,h*0.16,w*0.28,w*0.28,a*0.5);containDraw(ctx,logoObj,w*0.84,h*0.84,w*0.34,w*0.34,a);containDraw(ctx,logoObj,w*0.82,h*0.14,w*0.15,w*0.15,a*0.35);};
     const blank=msg=>{ctx.fillStyle=B.whiteSmoke;ctx.fillRect(0,0,w,h);ctx.fillStyle=B.burnham;ctx.font=`400 ${24*S}px ${F.body}`;ctx.textAlign="center";ctx.fillText(msg,w/2,h/2);ctx.textAlign="left";};
 
@@ -1002,7 +1023,12 @@ export default function App() {
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
-      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else if(live){textBoundsRef.current=null;}
+      if(headline){
+        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);
+        const preUsed=hf.lines.length*hf.lineHeight;
+        if(mediaObj)drawTextScrim(ctx,bx,by-hf.lineHeight*0.15,bw,preUsed+hf.lineHeight*0.15,tc);
+        beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+      }else if(live){textBoundsRef.current=null;}
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
@@ -1033,7 +1059,12 @@ export default function App() {
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhotoFramed(ctx,mediaObj,w,h,imgT);}else blank("Drop an image or video to begin");}
       putLogo();
-      if(headline){beginText();ctx.fillStyle=tc;const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();}else setTextBounds(h*0.12);
+      if(headline){
+        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);
+        const preUsed=hf.lines.length*hf.lineHeight;
+        if(mediaObj)drawTextScrim(ctx,bx,by-hf.lineHeight*0.15,bw,preUsed+hf.lineHeight*0.15,tc);
+        beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+      }else setTextBounds(h*0.12);
     }
 
     // ── Overlay-mode layers (drawn on top of everything) ──
