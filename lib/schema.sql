@@ -70,6 +70,30 @@ create table if not exists exports (
   metadata        jsonb not null default '{}'::jsonb
 );
 
+-- Design templates (SHARED team library — mirrors localStorage "wo-design-templates")
+-- Same trust model as images: no auth, single shared space keyed by BRAND_ID.
+create table if not exists design_templates (
+  id          uuid primary key default gen_random_uuid(),
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now(),
+  brand_id    uuid default '00000000-0000-0000-0000-000000000001',
+  name        text not null,
+  thumb       text,                          -- small JPEG dataURL (160×160, ~q0.68)
+  state       jsonb not null,                -- currentTemplateState() serialization
+  deleted     boolean default false
+);
+create index if not exists design_templates_brand_idx on design_templates (brand_id, deleted, updated_at desc);
+
+-- Design drafts (cross-device working doc — mirrors localStorage "wo-workdoc")
+-- id is a stable per-design draft key (e.g. "current"); latest-write-wins by updated_at.
+create table if not exists design_drafts (
+  id           text primary key,             -- stable draft key, e.g. "current"
+  brand_id     uuid default '00000000-0000-0000-0000-000000000001',
+  updated_at   timestamptz default now(),
+  state        jsonb not null,               -- { overlayLayers, ... }
+  device_label text
+);
+
 -- ── Seed brand kit (one row) ──────────────────
 insert into brand_kit (id) values ('00000000-0000-0000-0000-000000000001')
 on conflict (id) do nothing;
