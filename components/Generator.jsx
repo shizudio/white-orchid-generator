@@ -98,22 +98,121 @@ function wrapText(ctx,text,x,y,maxW,lh){const words=text.split(" ");let line="";
 function textLines(ctx,text,maxW){const words=String(text||"").trim().split(/\s+/).filter(Boolean),lines=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
 function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fitted=Math.max(size,minSize),lines=[];while(fitted>=minSize){ctx.font=font(fitted);lines=textLines(ctx,text,maxW);if(lines.length*fitted*lineRatio<=maxH)break;fitted-=2;}return{size:fitted,lines,lineHeight:fitted*lineRatio};}
 function drawTextLines(ctx,lines,x,y,maxW,lineHeight,align="left"){ctx.textAlign=align;const tx=align==="center"?x+maxW/2:align==="right"?x+maxW:x;lines.forEach((line,i)=>{ctx.fillText(line,tx,y+i*lineHeight);});return lines.length*lineHeight;}
-// Local gradient scrim: a soft elliptical wash confined to the (padded) text
-// box, darkening behind light text or lightening behind dark text. Reads as
-// editorial framing rather than an outer glow, and degrades gracefully on
-// any photo since it never depends on per-letter edge detection.
-function drawTextScrim(ctx,x,y,w,h,tc,opacity=0.4){
-  const light=hexLuminance(tc)>0.5,rgb=light?"0,0,0":"255,255,255";
-  const padX=w*0.16,padY=h*0.32,cx=x+w/2,cy=y+h/2,rx=w/2+padX,ry=h/2+padY;
-  if(rx<=0||ry<=0)return;
+// ── Backdrop system (spec §2/§3/§5) — replaces the old elliptical scrim ──
+// Brand-tinted scrim colours: Burnham darkened ~15% for the dark variant,
+// ivory for the light variant (spec §2 colour).
+const SCRIM_DARK="23,52,48";   // #173430
+const SCRIM_LIGHT="250,250,247"; // ivory
+// 5-stop ease-out ramp (fraction from dark end 0 → transparent end 1, alpha
+// as a fraction of peak). Spec §2 easing.
+const SCRIM_STOPS=[[0.00,1.00],[0.15,0.933],[0.40,0.667],[0.70,0.267],[1.00,0.00]];
+
+// Full-bleed gradient band behind a text zone (spec §2). Spans the full canvas
+// width edge-to-edge (or full height for side-anchored wide layouts) so there is
+// NO visible shape edge inside the frame — the anti-oval requirement. Direction
+// is derived from the text anchor: lower text darkens toward the bottom edge,
+// upper text toward the top, centred text uses a symmetric vertical ramp.
+// textBox = {x,y,w,h} in px. peak defaults to 0.45 (dark) / 0.55 (light).
+function drawGradientBand(ctx,w,h,textBox,tc,opts={}){
+  const light=hexLuminance(tc)>0.5;               // light text → dark scrim
+  const rgb=light?SCRIM_DARK:SCRIM_LIGHT;
+  const peak=opts.peak??(light?0.45:0.55);
+  const {x:tx,y:ty,w:tw,h:th}=textBox;
+  const side=opts.side||false;                    // horizontal band (wide side layout)
+  if(side){
+    // Full-height vertical ramp spanning the canvas: darkest at the text's
+    // outer horizontal edge, feathering across. Left-anchored text → dark at left.
+    const leftAnchored=(tx+tw/2)<w/2;
+    const pad=tw*0.40, feather=w*0.15;
+    const full=leftAnchored?Math.min(w,tx+tw+pad):Math.max(0,tx-pad);
+    const darkEdge=leftAnchored?0:w;
+    const zeroAt=leftAnchored?Math.min(w,full+feather):Math.max(0,full-feather);
+    const g=ctx.createLinearGradient(darkEdge,0,zeroAt,0);
+    SCRIM_STOPS.forEach(([f,a])=>g.addColorStop(f,`rgba(${rgb},${peak*a})`));
+    ctx.save();ctx.fillStyle=g;ctx.fillRect(0,0,w,h);ctx.restore();
+    return;
+  }
+  // Vertical ramp spanning full width. Determine anchor: lower / upper / center.
+  const cy=ty+th/2, lower=cy>h*0.58, upper=cy<h*0.42;
+  const pad=th*0.40, feather=h*0.15;
   ctx.save();
-  ctx.translate(cx,cy);ctx.scale(rx,ry);
-  const g=ctx.createRadialGradient(0,0,0,0,0,1);
-  g.addColorStop(0,`rgba(${rgb},${opacity})`);
-  g.addColorStop(0.65,`rgba(${rgb},${opacity*0.72})`);
-  g.addColorStop(1,`rgba(${rgb},0)`);
-  ctx.fillStyle=g;ctx.fillRect(-1,-1,2,2);
+  if(lower){
+    const zeroAt=Math.max(0,ty-pad-feather); // dark at bottom edge, transparent above the text
+    // Build a vertical gradient from bottom (dark) upward.
+    const grad=ctx.createLinearGradient(0,h,0,zeroAt);
+    SCRIM_STOPS.forEach(([f,a])=>grad.addColorStop(f,`rgba(${rgb},${peak*a})`));
+    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
+  }else if(upper){
+    const full=Math.max(0,ty-pad), zeroAt=Math.min(h,full+feather);
+    const grad=ctx.createLinearGradient(0,0,0,zeroAt);
+    SCRIM_STOPS.forEach(([f,a])=>grad.addColorStop(f,`rgba(${rgb},${peak*a})`));
+    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
+  }else{
+    // Centred text: symmetric vertical ramp darkest at the band centre,
+    // feathering both ways (matches spec's radial/elliptical intent but as a
+    // full-width horizontal band → no oval edges).
+    const top=Math.max(0,ty-pad), bot=Math.min(h,ty+th+pad);
+    const featT=Math.max(0,top-feather), featB=Math.min(h,bot+feather);
+    const grad=ctx.createLinearGradient(0,featT,0,featB);
+    // ease in to peak at band top, hold, ease out at band bottom
+    const spanTop=(top-featT)/Math.max(1,featB-featT), spanBot=(bot-featT)/Math.max(1,featB-featT);
+    grad.addColorStop(0,`rgba(${rgb},0)`);
+    grad.addColorStop(Math.min(0.49,spanTop),`rgba(${rgb},${peak})`);
+    grad.addColorStop(Math.max(0.51,spanBot),`rgba(${rgb},${peak})`);
+    grad.addColorStop(1,`rgba(${rgb},0)`);
+    ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
+  }
   ctx.restore();
+}
+
+// Solid full-width brand band behind the text zone (spec §5 band mode).
+function drawSolidBand(ctx,w,h,textBox,color,opacity=0.92){
+  const {y:ty,h:th}=textBox;
+  const padY=h*0.12;
+  const y0=Math.max(0,ty-padY), y1=Math.min(h,ty+th+padY);
+  ctx.save();ctx.globalAlpha=opacity;ctx.fillStyle=color;ctx.fillRect(0,y0,w,y1-y0);ctx.restore();
+}
+
+// Quiet-region check under a text zone (spec §3). Samples a 6×6 luminance/variance
+// grid over the zone (+10% margin). Returns whether the region is quiet+legible
+// for the given resolved text colour, plus the recommended backdrop treatment.
+// mode: "skip" (no scrim, shadow only) | "reduced" (0.20 peak) | "full" (0.45/0.55).
+function analyzeQuietRegion(source,zone,tc){
+  const light=hexLuminance(tc)>0.5;   // light text
+  try{
+    const N=48,c=document.createElement("canvas");c.width=N;c.height=N;
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    const {iw,ih}=srcDims(source);if(!iw||!ih)return{mode:"full"};
+    // Map the zone (canvas-fraction) onto the source cover-fit region.
+    const cw=zone.cw,ch=zone.ch;// canvas dims
+    const s=Math.max(cw/iw,ch/ih);const dw=iw*s,dh=ih*s;const ox=(cw-dw)/2,oy=(ch-dh)/2;
+    // zone in canvas px, +10% margin
+    const mx=zone.w*0.10,my=zone.h*0.10;
+    const zx=zone.x-mx,zy=zone.y-my,zw=zone.w+mx*2,zh=zone.h+my*2;
+    // → source px
+    const sx=(zx-ox)/s,sy=(zy-oy)/s,sw=zw/s,sh=zh/s;
+    ctx.drawImage(source,sx,sy,sw,sh,0,0,N,N);
+    const d=ctx.getImageData(0,0,N,N).data;
+    const cell=N/6;let meanSum=0,cells=0,maxV=0,minCellL=1,maxCellL=0;
+    for(let r=0;r<6;r++)for(let col=0;col<6;col++){
+      let sum=0,sq=0,n=0;
+      for(let y=Math.floor(r*cell);y<(r+1)*cell;y++)for(let x=Math.floor(col*cell);x<(col+1)*cell;x++){
+        const i=(y*N+x)*4;if(d[i+3]<16)continue;const l=getLuminance(d[i],d[i+1],d[i+2]);sum+=l;sq+=l*l;n++;
+      }
+      if(!n)continue;const mL=sum/n,v=Math.max(0,sq/n-mL*mL);
+      meanSum+=mL;cells++;if(v>maxV)maxV=v;if(mL<minCellL)minCellL=mL;if(mL>maxCellL)maxCellL=mL;
+    }
+    if(!cells)return{mode:"full"};
+    const zoneMeanL=meanSum/cells;
+    const quiet=maxV<0.015;
+    // WCAG contrast at both extremes vs the resolved text colour.
+    const tcL=hexLuminance(tc);
+    const cMin=contrastRatio(minCellL,tcL),cMax=contrastRatio(maxCellL,tcL);
+    const passes=cMin>=4.5&&cMax>=4.5;
+    if(quiet&&passes)return{mode:"skip",meanL:zoneMeanL,maxV};
+    if(quiet&&!passes)return{mode:"reduced",meanL:zoneMeanL,maxV};
+    return{mode:"full",meanL:zoneMeanL,maxV};
+  }catch(_){return{mode:"full"};}
 }
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
@@ -789,6 +888,8 @@ export default function App() {
   const [subtext, setSubtext] = useState("");
   const [attribution, setAttribution] = useState("");
   const [dateText, setDateText] = useState("");
+  // Text backdrop treatment for text-over-photo (spec §5): auto | gradient | band | none.
+  const [backdropMode, setBackdropMode] = useState("auto");
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
   // the user adjusts layout while a non-master dimension is active (spec §1 user-edit model).
@@ -1165,6 +1266,33 @@ export default function App() {
         ctx.restore();
       }else drawPhotoFramed(ctx,mediaObj,w,h,imgT);
     };
+    // Backdrop treatment behind a text zone on a photo (spec §2/§3/§5). box in px.
+    // Returns the resolved text color id override when auto quiet-region flips it
+    // (dark region + light text stays; bright quiet region → dark text). We keep
+    // it simple: honour the resolved `tc` and only choose scrim strength here.
+    // tintedType=true for quote/event/text_post: the full-photo brand tint already
+    // guarantees WCAG legibility everywhere, so Auto & None resolve to tint-only
+    // (no extra scrim) — the backdrop control only adds an explicit gradient/band
+    // for these (spec §5: "if the whole-photo tint already guarantees legibility,
+    // Auto may resolve to none"). texture_text/photo_logo have no tint → full auto.
+    const drawBackdrop=(box,anchorSide,tintedType)=>{
+      if(!mediaObj)return;
+      const mode=backdropMode||"auto";
+      if(mode==="none")return;                 // shadow-only (beginText adds it)
+      if(tintedType&&mode==="auto")return;     // tint is the backdrop
+      if(mode==="band"){
+        // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
+        const light=hexLuminance(tc)>0.5;
+        drawSolidBand(ctx,w,h,box,light?B.burnham:B.whiteSmoke,0.92);
+        return;
+      }
+      if(mode==="gradient"){drawGradientBand(ctx,w,h,box,tc,{side:anchorSide});return;}
+      // auto: quiet-region check under the zone.
+      const q=analyzeQuietRegion(mediaObj,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},tc);
+      if(q.mode==="skip")return;               // legible as-is → shadow only
+      if(q.mode==="reduced"){drawGradientBand(ctx,w,h,box,tc,{side:anchorSide,peak:0.20});return;}
+      drawGradientBand(ctx,w,h,box,tc,{side:anchorSide});
+    };
     const setTextBounds=used=>{if(live)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
     if(hasFrame){
@@ -1179,11 +1307,13 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,40*S);
         const preUsed=hf.lines.length*hf.lineHeight;
-        if(mediaObj)drawTextScrim(ctx,bx,by-hf.lineHeight*0.15,bw,preUsed+hf.lineHeight*0.15,tc);
+        // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
+        if(mediaObj&&!photoBox)drawBackdrop({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
         beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
       }else if(live){textBoundsRef.current=null;}
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
       ctx.fillStyle=tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,52*S);
       ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
@@ -1196,6 +1326,7 @@ export default function App() {
         if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
         else{drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
       }}
+      if(mediaObj&&!hasFrame&&!photoBox)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
       if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,32*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
       if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,120*S);ctx.font=`300 ${df.size}px ${F.title}`;
@@ -1209,6 +1340,7 @@ export default function App() {
       putLogo();
     }else if(postType==="text_post"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhotoFramed(ctx,mediaObj,w,h,imgT);ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
+      if(mediaObj&&!hasFrame)drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,true);
       beginText();ctx.fillStyle=tc;let used=0;
       if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,36*S);ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
       if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,52*S);ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}
@@ -1222,7 +1354,7 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,52*S);
         const preUsed=hf.lines.length*hf.lineHeight;
-        if(mediaObj)drawTextScrim(ctx,bx,by-hf.lineHeight*0.15,bw,preUsed+hf.lineHeight*0.15,tc);
+        if(mediaObj)drawBackdrop({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
         beginText();ctx.fillStyle=tc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
       }else setTextBounds(h*0.12);
     }
@@ -1248,7 +1380,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPos,logoSizePct,curBg,tc,textColorId,textMinContrast,imgT,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -1603,7 +1735,7 @@ export default function App() {
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
-    postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat,
+    postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize,
     imgT:clonePlain(imgT), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
@@ -1636,6 +1768,7 @@ export default function App() {
     setBgAlpha(s.bgAlpha ?? 1);
     setTextColorId(s.textColorId || "auto");
     setExportFormat(s.exportFormat || "png");
+    setBackdropMode(s.backdropMode || "auto");
     setHeadline(s.headline || "");
     setSubtext(s.subtext || "");
     setAttribution(s.attribution || "");
@@ -1899,6 +2032,14 @@ export default function App() {
                 {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
                   style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
               </div>
+              <EditorSubhead label="Text backdrop" summary={{auto:"Auto",gradient:"Gradient",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
+              <div style={{display:"flex",gap:6}}>
+                {[{id:"auto",l:"Auto"},{id:"gradient",l:"Gradient"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
+                  <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Detect quiet regions; add a full-bleed gradient only where needed":o.id==="gradient"?"Always a full-bleed brand gradient behind text":o.id==="band"?"Solid brand strip behind text":"No scrim — drop shadow only"}
+                    style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
+                );})}
+              </div>
+              <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto adds a soft full-bleed gradient only where the photo is too busy.</div>
               <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
               <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
                 {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}
