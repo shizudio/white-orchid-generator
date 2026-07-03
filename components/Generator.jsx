@@ -133,13 +133,17 @@ function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fit
 // hint) takes over so we never microscopically shrink instead. Roles:
 //   headline/title (primary)   : max(0.068*h, 38*S)  → banner ≈34px
 //   date (largest element)     : max(0.100*h, 60*S)  → banner ≈50px
-//   intro/subheading (secondary): max(0.055*h, 34*S) → banner ≈27px
-//   body/subtext/details/credit : max(0.048*h, 24*S) → banner ≈24px
+//   intro/subheading (secondary): max(0.062*h, 34*S) → banner ≈31px
+//   body/subtext/details/credit : max(0.062*h, 32*S) → banner ≈31px
+//   (rev: calibration r1) captions read universally too small on board v3 (tiles
+//   2,4,7,9,10,11,12). Raised the body/caption floor ~+30% (0.048→0.062*h,
+//   24→32px@1080 → 67px@1080) and lifted intro to match so support copy is legible
+//   at a glance. See spec §2 "(rev: calibration r1)".
 const MIN_FONT_PX={
   headline:h=>Math.max(0.068*h,38*(h/1080)),
   date:    h=>Math.max(0.100*h,60*(h/1080)),
-  intro:   h=>Math.max(0.055*h,34*(h/1080)),
-  body:    h=>Math.max(0.048*h,24*(h/1080)),
+  intro:   h=>Math.max(0.062*h,34*(h/1080)),
+  body:    h=>Math.max(0.062*h,32*(h/1080)),
   // The event date's SMALL secondary label ("JULY" under the big "18"). It sits
   // between body (0.048*h) and intro (0.055*h): it must read as a caption, never
   // microscopically (P3 — it rendered tiny on banner/facebook where fontMult is
@@ -434,6 +438,14 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.18,
+    // (T1) text-only tile read empty on v3 → 3 furniture tells: an underline under the
+    // eyebrow, an index token top-right (counterweighting the top-left hero), and a
+    // bottom-left counterweight url line balancing the caption side.
+    furniture:[
+      {type:"underline", x:0.06, y:0.135, w:0.10},
+      {type:"index", text:"01", x:0.94, y:0.135, size:0.028, align:"right"},
+      {type:"counterweight", x:0.06, y:0.90},
+    ],
     perDim:{ story:{hero:{x:0.06,y:0.16,w:0.88,h:0.40}}, banner:{hero:{x:0.05,y:0.14,w:0.60,h:0.62},support:{x:0.05,y:0.78,w:0.50,h:0.14}} },
   },
   { // §2.2 Asymmetric Editorial Split
@@ -456,6 +468,8 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
+    // (T1) photo archetype → ≤1 tell: a hairline rule dividing hero from the detail tier.
+    furniture:[ {type:"rule", x:0.08, y:0.575, w:0.30} ],
     perDim:{ story:{photo:{x:0,y:0.58,w:1,h:0.42},hero:{x:0.08,y:0.10,w:0.84,h:0.28},support:{x:0.08,y:0.40,w:0.84,h:0.14}} },
   },
   { // §2.3 Big Number / Date
@@ -476,6 +490,14 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["event"], frequencyCap:0.12, usesDateAsHero:true,
+    // (T1) v3 tile 3 scored 1/5 "too plain, not centralized for no reason". Anchor the
+    // numeral with an underline under the label, a small index top-left, and a bottom
+    // counterweight so the thirds placement reads deliberate.
+    furniture:[
+      {type:"underline", x:0.33, y:0.175, w:0.09},
+      {type:"index", text:"— No. 18", x:0.10, y:0.16, size:0.024, align:"left"},
+      {type:"counterweight", x:0.33, y:0.90},
+    ],
     perDim:{ banner:{hero:{x:0.06,y:0.14,w:0.40,h:0.62},microLabel:{x:0.06,y:0.10,w:0.40,h:0.10},support:{x:0.50,y:0.30,w:0.44,h:0.40}} },
   },
   { // §2.4 Full-Bleed Duotone + Whisper Caption
@@ -534,6 +556,13 @@ const ARCHETYPES = [
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["quote"], frequencyCap:0.14,
+    // (T1) v3 tile 6 "plain but composition slightly better" → 2 tells on the green
+    // field: a short hairline rule above the quote (a quote-mark surrogate) and a
+    // bottom counterweight opposite the attribution.
+    furniture:[
+      {type:"rule", x:0.10, y:0.22, w:0.12, alpha:0.5},
+      {type:"index", text:"On Play", x:0.90, y:0.235, size:0.024, align:"right"},
+    ],
     perDim:{ banner:{hero:{x:0.10,y:0.14,w:0.80,h:0.50}} },
   },
   { // §2.7 Text-Only Manifesto
@@ -554,6 +583,13 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35,
+    // (T1) v3 tile 7 "plain, content small" → an index+underline at the top anchor and
+    // a bottom counterweight give the manifesto page-feel structure.
+    furniture:[
+      {type:"index", text:"— The White Orchid", x:0.12, y:0.19, size:0.024, align:"left"},
+      {type:"underline", x:0.12, y:0.205, w:0.11},
+      {type:"counterweight", x:0.12, y:0.90},
+    ],
     perDim:{ banner:{hero:{x:0.06,y:0.18,w:0.88,h:0.56}} },
   },
   { // §2.8 Documentary Photo Moment
@@ -594,6 +630,13 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
+    // (T1) v3 tile 9 read empty. The underline under the eyebrow is this archetype's
+    // signature tell (kicker+rule+headline); plus an index and a bottom counterweight.
+    furniture:[
+      {type:"underline", x:0.08, y:0.335, w:0.12},
+      {type:"index", text:"09", x:0.92, y:0.335, size:0.028, align:"right"},
+      {type:"counterweight", x:0.08, y:0.90},
+    ],
     perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
   },
   { // §2.10 Side-by-Side Portrait + Credential (wide-leaning)
@@ -730,6 +773,7 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
     photoFrame,
     split: arch.split||null, sideFrac: arch.split||null,
     motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:V.motifPastels||arch.motifPastels||["sage","butter"]}:null,
+    furniture: Array.isArray(arch.furniture)?arch.furniture:null,   // (T1) anchoring tells
     fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
     heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
     leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
@@ -1199,8 +1243,10 @@ function heroFont(register, size, italic){
 // Measure hero words at a given size, wrapping to maxW with alternating
 // roman/italic fonts so inter-word spacing is correct. Returns {lines:[[word]],
 // lineCount}. Each line is an array of word tokens.
-function measureHeroLines(ctx, words, register, size, maxW){
-  const lines=[]; let line=[]; let lineW=0;
+// Greedy wrap of hero words to `maxW` at `size`. Returns {lines,lineCount} plus the
+// per-line widths so the balance pass (below) can reason about orphan lines.
+function greedyHeroWrap(ctx, words, register, size, maxW){
+  const lines=[]; let line=[]; let lineW=0; const widths=[];
   const spaceW=(italic)=>{ ctx.font=heroFont(register,size,italic); return ctx.measureText(" ").width; };
   for(let i=0;i<words.length;i++){
     const wtok=words[i];
@@ -1208,13 +1254,34 @@ function measureHeroLines(ctx, words, register, size, maxW){
     const ww=ctx.measureText(wtok.text).width;
     const addW=(line.length?spaceW(wtok.italic):0)+ww;
     if(line.length && lineW+addW>maxW){
-      lines.push(line); line=[wtok]; lineW=ww;
+      lines.push(line); widths.push(lineW); line=[wtok]; lineW=ww;
     }else{
       line.push(wtok); lineW+=addW;
     }
   }
-  if(line.length) lines.push(line);
-  return {lines, lineCount:lines.length};
+  if(line.length){ lines.push(line); widths.push(lineW); }
+  return {lines, widths, lineCount:lines.length};
+}
+function measureHeroLines(ctx, words, register, size, maxW){
+  let best=greedyHeroWrap(ctx,words,register,size,maxW);
+  // (rev: calibration r1) BALANCED LINE WRAP — kill orphan short last lines like
+  // "Freedom / to / explore" (board v3 tile 5). If the last line is much narrower
+  // than the widest line (<35%) and doesn't shorten the whole block, progressively
+  // tighten the effective wrap width and re-wrap; keep the candidate whose last line
+  // is the least orphaned WITHOUT adding lines. Word-atomic (canvas can't split a
+  // word), so a genuinely unbreakable long word is left alone.
+  const orphanFrac=(r)=>{ const wmax=Math.max(...r.widths,1); return r.widths[r.widths.length-1]/wmax; };
+  if(best.lineCount>=2 && words.length>best.lineCount){
+    const baseLines=best.lineCount;
+    let bestScore=orphanFrac(best);
+    for(let f=0.96; f>=0.72 && bestScore<0.35; f-=0.04){
+      const cand=greedyHeroWrap(ctx,words,register,size,maxW*f);
+      if(cand.lineCount!==baseLines) continue; // never add/remove lines
+      const s=orphanFrac(cand);
+      if(s>bestScore){ best=cand; bestScore=s; }
+    }
+  }
+  return {lines:best.lines, lineCount:best.lineCount};
 }
 
 // Draw hero text: shrink-to-fit within (x,y,maxW,maxH), honouring a MIN floor,
@@ -1288,6 +1355,76 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
   ctx.letterSpacing="0px";
   ctx.restore();
   return wpx;
+}
+
+/* ═══ ANCHORING FURNITURE (calibration r1 / T1) ══════════════════════════════════
+   Board v3's text-only tiles (1,3,6,7,9) read EMPTY and their off-centre placement
+   read arbitrary — the client's top note. This painter draws the small "designed,
+   not templated" tells the spec §0/§2 name (hairline rules, a short underline under
+   the micro-label, a small numeral/index label, and a COUNTERWEIGHT micro-element in
+   the opposing region) so asymmetry reads deliberate. Encoded as per-archetype data
+   (`furniture:[{type,...}]`) — text-only archetypes carry 2–3 pieces, photo ≤1 — and
+   rendered here from fractions. Respects the one-warmth-device + anti-clutter rules:
+   these are hairline INK tells at low alpha, not a warmth device.
+   Item types (all positions are canvas fractions):
+     {type:"rule", x,y,w, alpha?}            – horizontal hairline (0.5–1px burnham)
+     {type:"underline", x,y,w, alpha?}       – short rule (drawn under a micro-label)
+     {type:"index", text, x,y, size?, align?}– small numeral/index token (e.g. "01")
+     {type:"counterweight", text?, x,y, size?, align?} – url/context line in the
+        opposing region; defaults to a short brand line to balance the hero mass.
+   `ink` is the resolved field ink; `avoid` is a list of px boxes the furniture must
+   not overprint (hero/support/label/photo) — any item intersecting is skipped so we
+   never clutter or collide (anti-pattern #15/#16). */
+function drawFurniture(ctx, items, w, h, sm, ink, avoid){
+  if(!Array.isArray(items)||!items.length) return;
+  const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
+  const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009)); // 0.5–1px @ common sizes
+  const boxOf=(it)=>{
+    const px=(fx)=>fx*w, py=(fy)=>fy*h;
+    if(it.type==="rule"||it.type==="underline"){
+      return {x:px(it.x),y:py(it.y)-hair,w:(it.w||0.1)*w,h:hair*2+2};
+    }
+    const s=(it.size||0.026)*h;
+    const tw=Math.max(20,(it.text||"").length*s*0.62);
+    const ax=it.align==="right"?px(it.x)-tw:it.align==="center"?px(it.x)-tw/2:px(it.x);
+    return {x:ax,y:py(it.y)-s,w:tw,h:s*1.3};
+  };
+  const intersects=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+  const clash=(bx)=> (avoid||[]).some(a=>intersects(bx,a));
+  ctx.save();
+  for(const it of items){
+    if(!it) continue;
+    const bx=boxOf(it);
+    // Keep everything inside the safe rect and off the text/photo it would clutter.
+    if(bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2) continue;
+    if(clash(bx)) continue;
+    if(it.type==="rule"||it.type==="underline"){
+      ctx.globalAlpha=it.alpha==null?(it.type==="underline"?0.55:0.32):it.alpha;
+      ctx.fillStyle=ink;
+      ctx.fillRect(it.x*w, it.y*h, (it.w||0.1)*w, hair);
+    }else if(it.type==="index"){
+      ctx.globalAlpha=it.alpha==null?0.7:it.alpha;
+      ctx.fillStyle=ink;
+      const s=(it.size||0.030)*h;
+      ctx.font=`600 ${s}px ${F.subtitle}`;
+      ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
+      ctx.letterSpacing=`${0.10*s}px`;
+      const tx=it.align==="right"?it.x*w:it.align==="center"?it.x*w:it.x*w;
+      ctx.fillText(String(it.text==null?"01":it.text).toUpperCase(), tx, it.y*h);
+      ctx.letterSpacing="0px";
+    }else if(it.type==="counterweight"){
+      ctx.globalAlpha=it.alpha==null?0.6:it.alpha;
+      ctx.fillStyle=ink;
+      const s=(it.size||0.024)*h;
+      ctx.font=`500 ${s}px ${F.subtitle}`;
+      ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
+      ctx.letterSpacing=`${0.06*s}px`;
+      const tx=it.x*w;
+      ctx.fillText(String(it.text==null?"thewhiteorchid.co":it.text), tx, it.y*h);
+      ctx.letterSpacing="0px";
+    }
+  }
+  ctx.restore();
 }
 
 /* ═══ REFLOW + COLLISION ENGINE (Commit 3) ══════════════════════════════════════
@@ -1400,7 +1537,13 @@ function reflowEditorial(ctx, a){
     if(heroLineH>0 && heroUsedH>heroBox.h){ const maxLines=Math.max(1,Math.floor(heroBox.h/heroLineH)); heroUsedH=maxLines*heroLineH; }
   }
   const heroBottom = heroBox ? heroBox.y+Math.max(heroUsedH,0) : safeTop;
-  const gap = Math.max(h*0.03, heroPx*0.4);
+  // (rev: calibration r1) ONE consistent hero↔support rhythm gap. Board v3 tile 4
+  // (full_bleed) sat title+caption too close; tile 9 (label_headline) left too small
+  // a gap. Rule: gap = clamp(0.35×heroLineHeight, min 24px@1080). Applied whenever
+  // support sits below the hero — not only on a hard collision — so the vertical
+  // rhythm is uniform across archetypes.
+  const rhythmGap = Math.max(0.35*(heroLineH||heroPx*1.02), 24*(h/1080));
+  const gap = rhythmGap;
   // ── microLabel (eyebrow): must sit clear of the hero. If it overlaps the hero,
   //    move it ABOVE the hero (its own height above heroBox.y); if no room, drop it. ──
   let labelSize = labelBox ? Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h) : 0;
@@ -1415,9 +1558,26 @@ function reflowEditorial(ctx, a){
   }
   // ── support: reflow below the hero's REAL bottom if it overlaps the hero. Then
   //    clamp to the bottom safe margin; shrink target size to fit; floor + audit. ──
-  let supStart=Math.max(0.02*h,(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8));
+  // (rev: calibration r1) Caption SIZE FLOOR. The support target used to be purely
+  // heroPx/heroToSupport, which rendered captions microscopically on board v3 (client:
+  // "content too small" on tiles 2,4,7,9,10,11,12). Start the caption at the LARGER of
+  // that ratio target and the raised body floor (~62px@1080) so short captions like
+  // "Every child" fill out to a legible size instead of shrinking to the ratio. The
+  // 8–10× hierarchy still holds because the hero itself is far larger.
+  const supTarget=(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8);
+  const supFloor=MIN_FONT_PX.body(h);
+  let supStart=Math.max(0.02*h,supTarget,supFloor);
   let supMin=minFloor("body",h,supStart,24*S);
   if(supBox){
+    // (rev: calibration r1) Normalise the hero↔support rhythm: whenever the support
+    // box sits BELOW the hero (its authored top is past the hero's top) and the
+    // measured gap is off by >25% from the target rhythm gap, snap it to
+    // heroBottom+gap. This fixes tile 4's too-tight and tile 9's too-small gaps at
+    // the engine level (skipped when support sits ABOVE/beside the hero, e.g. splits).
+    if(heroBox && supBox.y>=heroBox.y-0.01*h && heroBottom>heroBox.y){
+      const curGap=supBox.y-heroBottom;
+      if(curGap<gap*0.75 || curGap>gap*1.6){ supBox={...supBox,y:clampY(heroBottom+gap)}; }
+    }
     // If support overlaps the hero (their authored boxes collide), push it below.
     if(heroBox && intersects(supBox,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
       supBox={...supBox,y:clampY(heroBottom+gap)};
@@ -3155,7 +3315,7 @@ export default function App() {
         photoTreatment:om.photoTreatment, photoFrame:frame, fullBleed:om.fullBleed, thinBorder:om.thinBorder,
         heroCapFrac:om.heroCapFrac, heroToSupport:om.heroToSupport, leading:om.leading, leadingBody:om.leadingBody,
         palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
-        motif:om.motif,
+        motif:om.motif, furniture:om.furniture,
       };
     }else{
       // Live materialized state. `editorial` is true when the design carries role
@@ -3177,7 +3337,7 @@ export default function App() {
         heroCapFrac: specNums?.heroCapFrac||0.3, heroToSupport: specNums?.heroToSupport||8,
         leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
         palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
-        gridAnchor: specNums?.gridAnchor||"edge", motif:null,
+        gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
       };
     }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
@@ -3604,6 +3764,20 @@ export default function App() {
         drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,mat.roles?.support?.align||"left");
         fontMeta.subtext=sf.size;
         endText();
+      }
+      // (T1) ANCHORING FURNITURE — hairline rules / underline / index / counterweight.
+      // Drawn after text so the avoid-list uses each role's ACTUAL drawn box; any
+      // furniture item that would overprint hero/support/label/photo is skipped inside
+      // drawFurniture (never clutters, never collides — anti-pattern #15/#16).
+      if(mat.furniture && mat.furniture.length){
+        const avoid=[
+          heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
+          (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.4)*1.4}:null,
+          (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
+          cardBox, maskBox,
+          (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
+        ].filter(Boolean);
+        drawFurniture(ctx, mat.furniture, w, h, sm, heroInk, avoid);
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
