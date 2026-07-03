@@ -1349,79 +1349,86 @@ const DEFAULT_OVERLAYS = [
    Overlay layers use the built-in shape/accessory ids with an explicit `mode`
    and a `master` transform from suggestPlacement(); applyDesignTemplate assigns
    fresh uids on apply. */
+// Starter templates are each built on an editorial ARCHETYPE (Commit 2 / spec §2):
+// archetypeId + an archetype-consistent palette (bgColor) + treatment are set in
+// state so applying the card lands the exact composition the archetype renders.
+// The archetype seeds its own field/ink, so bgColor here matches the archetype's
+// palette.bg to keep the picker chip + the render consistent.
 const STARTER_TEMPLATES = [
   {
+    // Open House → §2.3 Big Number / Date (the date IS the hero).
     id:"st_open_house", name:"Open House", purpose:"Invite families to visit",
     state:{
-      postType:"event", dimensionId:"ig_square", bgColor:"burnham",
+      postType:"event", archetypeId:"big_number", dimensionId:"ig_square", bgColor:"whiteSmoke",
       headline:"Open House", dateText:"18 July",
-      subtext:"Join us for a morning of play and discovery — RSVP at thewhiteorchid.sg",
-      selectedLogoId:"p3-ivory", logoPosition:"bottom-center", logoSize:"m",
+      subtext:"A morning of play & discovery — RSVP at thewhiteorchid.sg",
+      selectedLogoId:"p3-green", logoPosition:"bottom-left", logoSize:"s",
       fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
-      imageSrc:SAMPLE_IMAGES[0].full,
     },
   },
   {
+    // Quote of the Week → §2.6 Quote with Generous Margin.
     id:"st_quote", name:"Quote of the Week", purpose:"Share an early-years quote",
     state:{
-      postType:"quote", dimensionId:"ig_square", bgColor:"celadon",
-      headline:"Play is the highest form of research.", attribution:"Albert Einstein",
-      selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
-      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
-    },
-  },
-  {
-    id:"st_term_dates", name:"Term Dates", purpose:"Announce a new term",
-    state:{
-      postType:"text_post", dimensionId:"ig_square", bgColor:"wisteria",
-      subtext:"Term 3 begins", headline:"Monday 14 July",
-      attribution:"Doors open 8:30am · The White Orchid",
-      selectedLogoId:"p3-green", logoPosition:"bottom-center", logoSize:"s",
-      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
-    },
-  },
-  {
-    id:"st_hiring", name:"We're Hiring", purpose:"Post an open role",
-    state:{
-      postType:"text_post", dimensionId:"ig_square", bgColor:"burnham",
-      subtext:"Join our team", headline:"Early Childhood Educators",
-      attribution:"Apply at hello@thewhiteorchid.sg",
+      postType:"quote", archetypeId:"quote_margin", dimensionId:"ig_square", bgColor:"burnham",
+      headline:"Play is the highest form of *research*.", attribution:"Albert Einstein",
       selectedLogoId:"p3-ivory", logoPosition:"bottom-center", logoSize:"s",
       fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
     },
   },
   {
+    // Term Dates → §2.9 Two-Tier Label + Headline (eyebrow → headline).
+    id:"st_term_dates", name:"Term Dates", purpose:"Announce a new term",
+    state:{
+      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      subtext:"Term 3 begins", headline:"Monday 14 *July*",
+      attribution:"Doors open 8:30am · The White Orchid",
+      selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+    },
+  },
+  {
+    // We're Hiring → §2.9 Label + Headline (no photo needed → label register).
+    id:"st_hiring", name:"We're Hiring", purpose:"Post an open role",
+    state:{
+      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      subtext:"Join our team", headline:"Early Childhood *Educators*",
+      attribution:"Apply at hello@thewhiteorchid.sg",
+      selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
+    },
+  },
+  {
+    // Now Enrolling → §2.4 Full-Bleed Duotone + whisper caption over a photo.
     id:"st_enrolling", name:"Now Enrolling", purpose:"Open enrolment shout-out",
     state:{
-      postType:"texture_text", dimensionId:"ig_square", bgColor:"burnham",
-      headline:"NOW ENROLLING",
-      selectedLogoId:"p3-ivory", logoPosition:"top-center", logoSize:"m",
+      postType:"texture_text", archetypeId:"full_bleed_duotone", dimensionId:"ig_square", bgColor:"burnham",
+      headline:"Now *Enrolling*", subtext:"Term 3 places open",
+      selectedLogoId:"p3-ivory", logoPosition:"top-right", logoSize:"s",
       fontSizes:{ heading:"m", subheading:"m", content:"m", highlight:"xl" },
       imageSrc:SAMPLE_IMAGES[2].full,
     },
   },
   {
+    // Photo Moment → §2.8 Documentary Photo Moment (single clean candid).
     id:"st_photo_moment", name:"Photo Moment", purpose:"Share a photo, on-brand",
     state:{
-      postType:"photo_logo", dimensionId:"ig_square", bgColor:"whiteSmoke",
-      selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"m",
+      postType:"photo_logo", archetypeId:"documentary", dimensionId:"ig_square", bgColor:"burnham",
+      selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"s",
       imageSrc:SAMPLE_IMAGES[1].full,
     },
   },
   {
-    // Signature template: the brand's 5-petal orchid used as a photo FRAME —
-    // the highlight of the design system (Task 2). The photo is clipped into the
-    // orchid silhouette; a small ivory logo sits bottom-right. overlayLayers is
-    // restored verbatim by applyDesignTemplate (fresh uid assigned on apply).
+    // Signature template → §2.12 Petal / Organic-Shape Photo Window. The archetype
+    // renders the orchid mask natively (duotone photo inside a solid field), so no
+    // overlay layer is needed — the archetype path composes the window itself.
     id:"st_petal_frame", name:"Petal Frame", purpose:"Frame a photo in the orchid",
     state:{
-      postType:"photo_logo", dimensionId:"ig_square", bgColor:"burnham",
-      selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"s",
+      postType:"photo_logo", archetypeId:"petal_window", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      headline:"Feeling *secure*", subtext:"Every child, every day",
+      selectedLogoId:"p3-green", logoPosition:"bottom-left", logoSize:"s",
+      fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
       imageSrc:SAMPLE_IMAGES[1].full,
-      overlayLayers:[
-        { assetId:"orchid-petal", mode:"frame",
-          master:{ x:0.5, y:0.5, scale:1.0, rotation:0, opacity:1 }, byDim:{} },
-      ],
     },
   },
 ];
@@ -4649,39 +4656,76 @@ function Chip({on,click,children,sm}){return<button aria-pressed={on} onClick={c
 // A cheap, predictable live-ish preview of a starter template: brand bg colour,
 // optional photo, a representative headline in the brand display face, and the
 // logo. It does NOT touch live editor state (no offscreen renderScene).
+// Each starter is built on an editorial ARCHETYPE (Commit 2), so the mock composes
+// the ARCHETYPE'S shape (big numeral, quote block, eyebrow+headline, full-bleed
+// duotone, clean documentary photo, or the orchid-mask window) rather than one
+// generic centered stack. Cheap DIVs only. Emphasis *markers* stripped for display.
 function TemplateCard({template,onClick}){
   const s=template.state||{};
+  const arch=s.archetypeId||null;
   const bg=BG_OPTIONS.find(o=>o.id===s.bgColor)||BG_OPTIONS[0];
   const bgHex=bg.color, lightText=bg.light; // bg.light === dark surface needing light text
-  const ink=lightText?B.whiteSmoke:B.jet;
+  const ink=lightText?B.whiteSmoke:B.burnham;
   const logo=LOGO_VARIANTS.find(v=>v.id===s.selectedLogoId);
-  // Representative preview line per post type.
-  const line=s.postType==="quote"?`“${s.headline||""}”`
-    :s.postType==="event"?(s.headline||"")
-    :s.postType==="texture_text"?(s.headline||"")
-    :s.postType==="text_post"?(s.headline||s.subtext||"")
-    :"";
-  const sub=s.postType==="event"?(s.dateText||"")
-    :s.postType==="quote"?(s.attribution?`— ${s.attribution}`:"")
-    :s.postType==="text_post"?(s.subtext||""):"";
+  const sm=str=>String(str||"").replace(/\*([^*]+)\*/g,"$1");
+  const headline=sm(s.headline);
   const pos=(s.logoPosition||"bottom-center");
   const [vy,vx]=[pos.includes("top")?"flex-start":pos.includes("bottom")?"flex-end":"center",
                  pos.includes("left")?"flex-start":pos.includes("right")?"flex-end":"center"];
-  // Signature petal-frame mock: photo clipped into the orchid silhouette (Task 2).
-  const orchidFrame=(s.overlayLayers||[]).find(l=>l.assetId==="orchid-petal"&&(l.mode||"frame")==="frame");
+  const serif=F.title, sans=FU.subtitle;
+  // ── Per-archetype composition mock ────────────────────────────────────────
+  let inner;
+  if(arch==="big_number"){
+    inner=<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"flex-start",padding:"0 13%",gap:5}}>
+      <div style={{fontFamily:sans,fontSize:8,letterSpacing:1.2,textTransform:"uppercase",color:`${ink}bb`}}>{headline||"Open House"}</div>
+      <div style={{fontFamily:serif,fontSize:40,fontWeight:600,lineHeight:0.92,color:ink}}>{sm(s.dateText)||"18 July"}</div>
+      <div style={{fontFamily:FU.body,fontSize:7.5,color:`${ink}cc`,maxWidth:"92%",lineHeight:1.3}}>{sm(s.subtext)}</div>
+    </div>;
+  }else if(arch==="quote_margin"){
+    inner=<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"12% 13%"}}>
+      <div style={{fontFamily:serif,fontSize:17,fontWeight:500,lineHeight:1.14,color:ink}}>&ldquo;{headline}&rdquo;</div>
+      {s.attribution&&<div style={{fontFamily:FU.body,fontSize:8.5,color:`${ink}cc`,marginTop:9}}>&mdash; {s.attribution}</div>}
+    </div>;
+  }else if(arch==="label_headline"){
+    inner=<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"0 12%"}}>
+      <div style={{fontFamily:sans,fontSize:8,letterSpacing:1.4,textTransform:"uppercase",color:SOFT_TANGERINE,marginBottom:6}}>{sm(s.subtext)||"Notice"}</div>
+      <div style={{fontFamily:serif,fontSize:21,fontWeight:600,lineHeight:1.03,color:ink}}>{headline}</div>
+      {s.attribution&&<div style={{fontFamily:FU.body,fontSize:8,color:`${ink}bb`,marginTop:9}}>{s.attribution}</div>}
+    </div>;
+  }else if(arch==="full_bleed_duotone"){
+    inner=<>
+      <img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />
+      <div style={{position:"absolute",inset:0,background:"rgba(37,78,72,0.42)",mixBlendMode:"color"}} />
+      <div style={{position:"absolute",inset:0,background:"rgba(37,78,72,0.30)"}} />
+      <div style={{position:"absolute",left:"7%",bottom:"14%",right:"7%"}}>
+        <div style={{fontFamily:serif,fontSize:19,fontWeight:600,color:B.whiteSmoke,lineHeight:1.0}}>{headline}</div>
+        {s.subtext&&<div style={{fontFamily:FU.body,fontSize:8,color:`${B.whiteSmoke}cc`,marginTop:4}}>{sm(s.subtext)}</div>}
+      </div></>;
+  }else if(arch==="documentary"){
+    inner=<div style={{position:"absolute",inset:"3%",borderRadius:3,overflow:"hidden",border:`1px solid ${B.whiteSmoke}99`}}>
+      <img src={s.imageSrc} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} /></div>;
+  }else if(arch==="petal_window"){
+    inner=<>
+      <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:"url(/assets/shapes/orchid-petal.svg)",maskImage:"url(/assets/shapes/orchid-petal.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
+      <div style={{position:"absolute",left:"8%",top:"30%",width:"48%"}}>
+        <div style={{fontFamily:serif,fontSize:18,fontWeight:600,color:ink,lineHeight:1.02}}>{headline}</div>
+        {s.subtext&&<div style={{fontFamily:FU.body,fontSize:8,color:`${ink}bb`,marginTop:6}}>{sm(s.subtext)}</div>}
+      </div></>;
+  }else{
+    const line=s.postType==="quote"?`“${headline}”`:headline;
+    inner=<>{s.imageSrc&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />}
+      {s.imageSrc&&<div style={{position:"absolute",inset:0,background:"linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.42))"}} />}
+      {line&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"10px 11px"}}>
+        <div style={{fontFamily:serif,color:s.imageSrc?B.whiteSmoke:ink,fontSize:15,fontWeight:600,lineHeight:1.1}}>{line}</div>
+      </div>}</>;
+  }
   return (
     <button type="button" onClick={onClick} title={`Use “${template.name}” — ${template.purpose}`}
       style={{textAlign:"left",padding:0,border:"none",background:"none",cursor:"pointer",display:"block",width:"100%"}}>
       <div style={{position:"relative",aspectRatio:"1/1",borderRadius:11,overflow:"hidden",border:`1.5px solid ${B.ash}44`,background:bgHex}}>
-        {s.imageSrc&&orchidFrame&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:"9%",width:"82%",height:"82%",objectFit:"cover",WebkitMaskImage:"url(/assets/shapes/orchid-petal.svg)",maskImage:"url(/assets/shapes/orchid-petal.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />}
-        {s.imageSrc&&!orchidFrame&&<img src={s.imageSrc} alt="" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}} />}
-        {s.imageSrc&&!orchidFrame&&<div style={{position:"absolute",inset:0,background:`linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.42))`}} />}
-        {line&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"10px 11px",gap:3}}>
-          <div style={{fontFamily:s.postType==="texture_text"?FU.subtitle:F.title,color:s.imageSrc?B.whiteSmoke:ink,fontSize:s.postType==="texture_text"?13:15,fontWeight:s.postType==="texture_text"?800:600,lineHeight:1.1,letterSpacing:s.postType==="texture_text"?1:0,textTransform:s.postType==="texture_text"?"uppercase":"none",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{line}</div>
-          {sub&&<div style={{fontFamily:FU.body,color:s.imageSrc?`${B.whiteSmoke}cc`:`${ink}cc`,fontSize:9,letterSpacing:0.3}}>{sub}</div>}
-        </div>}
+        {inner}
         {logo&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:vy,justifyContent:vx,padding:8,pointerEvents:"none"}}>
-          <img src={logo.src} alt="" style={{width:s.logoSize==="l"?46:s.logoSize==="s"?26:34,height:"auto",maxHeight:"38%",objectFit:"contain",opacity:0.95}} />
+          <img src={logo.src} alt="" style={{width:s.logoSize==="l"?46:s.logoSize==="s"?24:32,height:"auto",maxHeight:"34%",objectFit:"contain",opacity:0.95}} />
         </div>}
       </div>
       <div style={{fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:B.jet,letterSpacing:0.2,marginTop:6}}>{template.name}</div>
