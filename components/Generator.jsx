@@ -1734,6 +1734,11 @@ export default function App() {
 
   // TWO Logo system
   const [selectedLogoId, setSelectedLogoId] = useState("p3-ivory");
+  // True once the user (or an AI patch) has EXPLICITLY chosen a logo colour variant.
+  // While false, the render path is free to auto-pick the contrast-correct variant
+  // (green on light fields, ivory on dark) — the archetype logo-contrast fix (Commit
+  // 3). The auto-director's own variant swap also leaves this false.
+  const [logoVariantTouched, setLogoVariantTouched] = useState(false);
   const [logoPosition, setLogoPosition] = useState("bottom-center");
   const [logoSize, setLogoSize] = useState("m");
   const [logoObj, setLogoObj] = useState(null);
@@ -1934,6 +1939,9 @@ export default function App() {
     setTextColorId("auto");
     // Backdrop stays auto (harmonizer/contrast still guarantees legibility).
     setBackdropMode("auto");
+    // Let the archetype logo-contrast fix (Commit 3) pick the readable variant for
+    // the archetype's field (green on light, ivory on dark) — the user hasn't chosen.
+    setLogoVariantTouched(false);
   };
 
   const applyDesignPatch = (patch, opts = {}) => {
@@ -1978,6 +1986,7 @@ export default function App() {
 
     if (inList(patch.logoId, "logoId") && patch.logoId !== selectedLogoId) {
       setSelectedLogoId(patch.logoId);
+      setLogoVariantTouched(true); // an explicit AI logo choice pins the variant
       setMarkTab(patch.logoId.startsWith("s") ? "secondary" : "primary");
       applied.push("logoId");
     }
@@ -2292,6 +2301,35 @@ export default function App() {
     imgFrom(selectedLogoVariant.src).then(img => setLogoObj(img));
   }, [selectedLogoId, selectedLogoVariant]);
 
+  /* ── Logo-variant image cache (Commit 3, archetype logo-contrast) ──
+     Cache every LOGO_VARIANTS image by id so the archetype render path can blit the
+     contrast-correct colour variant of the active logo family (green on a light
+     field, ivory on a dark field) at draw time — without a state round-trip. Loaded
+     lazily; the render simply skips the swap until the counterpart image is ready. */
+  const logoVariantImgs = useRef({});
+  useEffect(() => {
+    if (!selectedLogoVariant) return;
+    // Load the OTHER colour variants in this logo's family (same group+label).
+    const family = LOGO_VARIANTS.filter(v => v.group === selectedLogoVariant.group && v.label === selectedLogoVariant.label);
+    let cancelled = false;
+    Promise.all(family.filter(v => !logoVariantImgs.current[v.id]).map(v =>
+      imgFrom(v.src).then(img => { if (img) logoVariantImgs.current[v.id] = img; })
+    )).then(() => { if (!cancelled && archetypeId) draw(); });
+    return () => { cancelled = true; };
+  }, [selectedLogoId, selectedLogoVariant, archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Resolve the readable logo variant for a field of luminance `fieldLum`: green on
+  // light fields, ivory on dark (spec §3 / the known ivory-on-ivory nit). Returns
+  // {img, inkLum} using the cached family images, or null to keep the current logo.
+  const readableLogoForField = (fieldLum) => {
+    if (!selectedLogoVariant) return null;
+    const wantColor = suggestLogoColor(fieldLum); // "green" | "ivory"
+    if (wantColor === selectedLogoVariant.color) return null; // already correct
+    const match = LOGO_VARIANTS.find(v => v.group === selectedLogoVariant.group && v.label === selectedLogoVariant.label && v.color === wantColor);
+    const img = match && logoVariantImgs.current[match.id];
+    if (!img) return null; // not loaded yet → no swap this frame
+    return { img, inkLum: wantColor === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64) };
+  };
+
   /* ── Reset reframe when a new photo/video loads ── */
   useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setImgTByDim({}); setPhotoSel(false); }, [imageObj, videoObj]);
 
@@ -2478,12 +2516,16 @@ export default function App() {
     // ivory mark over white clothing scores low and gets relocated; green over the
     // same spot would stay. Derived from the selected variant's colour.
     const logoInkLum=selectedLogoVariant?.color==="ivory"?getLuminance(245,240,232):getLuminance(43,80,64);
-    const putLogo=(textBox)=>{
-      if(!logoObj)return;
+    // opts.logoImg / opts.inkLum let the archetype path draw a contrast-swapped logo
+    // variant (green on light fields, ivory on dark) without a state round-trip.
+    const putLogo=(textBox,logoOpts={})=>{
+      const drawObj=logoOpts.logoImg||logoObj;
+      const drawInkLum=logoOpts.inkLum!=null?logoOpts.inkLum:logoInkLum;
+      if(!drawObj)return;
       // Sample regions from the CURRENT canvas (photo already drawn) so the guard
       // reads the real per-dimension crop.
       const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
-      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,logoInkLum,frameBox);
+      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,drawInkLum,frameBox);
       if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
       const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
@@ -2500,7 +2542,7 @@ export default function App() {
           auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
         }
       }
-      containDraw(ctx,logoObj,lx,ly,lSz,lSz,1);
+      containDraw(ctx,drawObj,lx,ly,lSz,lSz,1);
     };
     // Per-dimension resolved text colour (spec §3). Assigned after the text box is
     // known (see zoneTc computation below); until then it defaults to the global tc.
@@ -2910,19 +2952,64 @@ export default function App() {
         fontMeta.subtext=sf.size;
         endText();
       }
-      // logo (same guard as legacy — avoids text + focal band).
-      const logoSlot=el.logo||arch.elements.logo;
-      putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null);
+      // logo (same guard as legacy — avoids text + focal band). CONTRAST-AWARE
+      // VARIANT (Commit 3): on a SOLID archetype field, auto-pick the readable logo
+      // colour (green on a light ivory/pastel field, ivory on a dark green field) so
+      // the wordmark never vanishes ivory-on-ivory — unless the user chose a variant.
+      // Photo-bleed archetypes keep the existing photo-region contrast handling.
+      let logoOpts={};
+      if(!logoVariantTouched && !arch.fullBleed){
+        const swap=readableLogoForField(hexLuminance(fieldColor));
+        if(swap) logoOpts={logoImg:swap.img,inkLum:swap.inkLum};
+      }
+      putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
       // audit + drop info (reuse the same accumulators the legacy path fills).
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
         let contrast=null; const tb=textBoundsRef.current;
         if(tb&&tb.w>0&&tb.h>0) contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},heroInk);
+        // ── ARCHETYPE-DRIFT SIGNAL (Commit 3) ──────────────────────────────────
+        // Measured deviations from THIS archetype's spec targets, surfaced to
+        // runLocalAudit so it can advise (advice-first) when a design drifts. All
+        // values are what the render actually produced (fontMeta, boxes), plus the
+        // archetype's documented floors, so the audit reimplements no layout maths.
+        const heroPx=fontMeta.headline||0, supPx=fontMeta.subtext||0;
+        const heroSupportRatio=(heroPx&&supPx)?heroPx/supPx:null;
+        // Hero centroid as canvas fractions (from the resolved hero box).
+        const heroCentroid=heroBox?{x:(heroBox.x+heroBox.w/2)/w,y:(heroBox.y+heroBox.h/2)/h}:null;
+        // Whitespace estimate: fraction of canvas NOT covered by text/photo/card/
+        // mask role boxes (a coarse proxy — role boxes are the "occupied" area).
+        const occ=[heroBox,supBox,labelBox,
+          arch.special==="floatedCard"?clampBox(el.card):null,
+          arch.special==="petalWindow"?clampBox(el.mask):null,
+          (arch.fullBleed||el.photo)?(arch.fullBleed?{x:0,y:0,w,h}:clampBox(el.photo)):null,
+        ].filter(Boolean);
+        const occArea=occ.reduce((a,b)=>a+(b.w*b.h),0);
+        const whitespaceFrac=Math.max(0,Math.min(1,1-occArea/(w*h)));
+        // Warmth-device count (spec §0 / anti-pattern #20): the archetype's own
+        // special composite is 1 device; any user-added frame/overlay/script layer
+        // stacks on top. Multicolor logotype is exempt (not counted here).
+        const specialDevice=(arch.special==="floatedCard"||arch.special==="motifField"||arch.special==="petalWindow")?1:0;
+        const extraLayerDevices=topLayers.filter(l=>["frame","overlay","lineart","outline"].includes(l.mode||"frame")).length;
+        const warmthDevices=specialDevice+extraLayerDevices;
+        // Palette adjacency (spec §3 / anti-pattern #13): flag two SATURATED pastels
+        // adjacent (bg field + accent). Our pastel ids are ARCHETYPE_COLORS keys.
+        const palAccent=arch.palette?.accent, palBg=arch.palette?.bg;
+        const bgIsPastel=PASTEL_IDS.includes(palBg);
+        const accentIsPastel=PASTEL_IDS.includes(palAccent);
+        const pastelClash=bgIsPastel&&accentIsPastel&&palAccent!==palBg;
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           zoneContrast:contrast,flooredRoles:[],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
+          archetypeDrift:{
+            heroSupportRatio, heroWords:(stripHeroMarkers(heroFinal||"").trim().split(/\s+/).filter(Boolean).length),
+            supportFloor:(arch.scaleRatio?.heroToSupport||8),
+            heroCentroid, centerExclude:!!arch.centerExclude,
+            whitespaceFrac, whitespaceTarget:(typeof arch.whitespace==="number"?arch.whitespace:null), fullBleed:!!arch.fullBleed,
+            warmthDevices, pastelClash,
+          },
         };
       }
       // top overlay layers still draw (unlikely on archetype designs, but keep it
@@ -3675,6 +3762,9 @@ export default function App() {
     setAttribution(s.attribution || "");
     setDateText(s.dateText || "");
     setSelectedLogoId(s.selectedLogoId || "p3-ivory");
+    // A starter template is a starting point — let the render guarantee logo/field
+    // contrast (Commit 3) rather than pinning the template's stored variant.
+    setLogoVariantTouched(false);
     setLogoPosition(s.logoPosition || "bottom-center");
     setLogoSize(s.logoSize || "m");
     // A template explicitly specifies logo placement; honour it (spec §1). The pin
@@ -3960,7 +4050,7 @@ export default function App() {
           const isSel = selectedLogoId===v.id;
           const isAuto = suggestedColor===v.color && !isSel && imageObj;
           return (
-            <button key={v.id} aria-pressed={isSel} onClick={()=>setSelectedLogoId(v.id)}
+            <button key={v.id} aria-pressed={isSel} onClick={()=>{setSelectedLogoId(v.id);setLogoVariantTouched(true);}}
               title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
               style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
               <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
