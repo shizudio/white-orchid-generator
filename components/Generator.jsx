@@ -602,9 +602,9 @@ const ARCHETYPES = [
     id:"documentary", name:"Documentary Photo Moment",
     elements:{
       photo:{x:0.03,y:0.03,w:0.94,h:0.94},        // 94–96% bleed w/ thin border
-      // (T5) widened + lifted so the whole caps line fits without mid-phrase clipping
-      // ("FREEDOM TO" was cut on v3 tile 8). Wider box + T2 floor keeps it legible.
-      hero:{x:0.06,y:0.82,w:0.86,h:0.10},          // metadata / whisper line
+      // (T5/P4) widened + lifted so the whole caps micro-label sits clear of the bottom
+      // edge (the "IN BLOOM" descenders were grazing the frame). y0.82→0.80, h eased.
+      hero:{x:0.06,y:0.80,w:0.86,h:0.09},          // metadata / whisper line
       logo:{position:"bottom-right",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.04,heroToSupport:6},
@@ -623,9 +623,11 @@ const ARCHETYPES = [
   { // §2.9 Two-Tier Label + Headline
     id:"label_headline", name:"Label + Headline",
     elements:{
-      microLabel:{x:0.08,y:0.28,w:0.84,h:0.05},
-      hero:{x:0.08,y:0.34,w:0.84,h:0.30},
-      support:{x:0.08,y:0.66,w:0.60,h:0.06},
+      // (§7) eyebrow lifted to the top-left, statement below — the reference's calm
+      // "OUR BELIEF / Every child is capable…" placement, airy above and below.
+      microLabel:{x:0.08,y:0.13,w:0.84,h:0.05},
+      hero:{x:0.08,y:0.22,w:0.84,h:0.34},
+      support:{x:0.08,y:0.62,w:0.60,h:0.06},
       logo:{position:"bottom-right",sizeId:"s"},
     },
     // (WP-P §7) STATEMENT-TILE CALM — retune to the reference's quiet statement voice:
@@ -643,15 +645,12 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
-    // (T1) v3 tile 9 read empty. The underline under the eyebrow is this archetype's
-    // signature tell (kicker+rule+headline); plus an index and a bottom counterweight.
+    // (WP-P §7) STATEMENT CALM — the reference statement tiles carry NOTHING but the
+    // eyebrow + the serif statement. The r2 pill/index/counterweight are retired here
+    // (the pill is now the CTA card's job); a single hairline under the eyebrow stays as
+    // the one restrained tell. Positioned just under the eyebrow (y0.28), clear of the hero.
     furniture:[
-      {type:"underline", x:0.08, y:0.335, w:0.12},
-      {type:"index", text:"09", x:0.92, y:0.335, size:0.028, align:"right"},
-      // (R2a) ACCENT BADGE for the announcement register (shows on accent variants only).
-      // Top-left band, above the kicker — the archetype's empty upper zone.
-      {type:"badge", text:"NOW ENROLLING", x:0.08, y:0.155, size:0.022, align:"left"},
-      {type:"counterweight", x:0.08, y:0.90},
+      {type:"underline", x:0.08, y:0.115, w:0.10, alpha:0.4},
     ],
     perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
   },
@@ -760,9 +759,9 @@ const ARCHETYPES = [
   { // §2.14 Stat Tile — a giant serif number/ratio on a pastel field
     id:"stat_tile", name:"Stat Tile",
     elements:{
-      microLabel:{x:0.10,y:0.16,w:0.60,h:0.05},     // eyebrow "OUR RATIO" / "IN NUMBERS"
-      hero:{x:0.09,y:0.30,w:0.82,h:0.34},           // the stat "1 : 6" / "40"
-      support:{x:0.10,y:0.72,w:0.62,h:0.14},        // light caption, may be multi-line poetic
+      microLabel:{x:0.10,y:0.15,w:0.60,h:0.05},     // eyebrow "OUR RATIO" / "IN NUMBERS"
+      hero:{x:0.09,y:0.28,w:0.82,h:0.30},           // the stat "1 : 6" / "40"
+      support:{x:0.10,y:0.66,w:0.72,h:0.18},        // light caption, may be multi-line poetic
       logo:{position:"bottom-right",sizeId:"s"},
     },
     // Big but not oversized (§7): the stat is a hero, caption calm below. cap 0.34, 6×.
@@ -1621,7 +1620,8 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
       // accent; on CTA/closing cards (§2.14/§2.15 dark or ivory field, no emphasis accent)
       // an explicit it.color pins the tangerine pill — the pill IS the canonical accent
       // (feed-grammar §4 / §7). Skips silently only when neither is available.
-      const pillFill = it.color || accent;
+      // it.color may be a palette KEY ("softTangerine") or a hex; resolve keys to hex.
+      const pillFill = (it.color ? (ARCHETYPE_COLORS[it.color] || it.color) : null) || accent;
       if(!pillFill) continue;
       const bs=(it.size||0.024)*h;
       const padX=bs*0.9, padY=bs*0.55;
@@ -2546,6 +2546,7 @@ export default function App() {
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
   const mediaObj = videoObj || imageObj;   // active canvas background (video wins)
+  const mediaObjLive = mediaObj;           // (P4) alias for renderScene's per-tile override shadow
   const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
   const tc = textColorId === "auto" ? B[suggestedTextColor] : (B[textColorId] || B.jet);
   const textContrast = contrastRatio(textSurfaceLuminance,hexLuminance(tc));
@@ -3438,6 +3439,11 @@ export default function App() {
     if(!ctx) return;
     const dimId = opts.dimensionId || MASTER_DIM;
     const live = opts.live !== false;
+    // (P4 FEED BOARD) A non-live render may inject a per-tile background photo via
+    // opts.imageOverride (an already-decoded HTMLImageElement) — this SHADOWS the live
+    // mediaObj for the whole render so the feed simulation can place real Higgsfield
+    // photos per tile without mutating React state. Live renders ignore it.
+    const mediaObj = (!live && opts.imageOverride) ? opts.imageOverride : mediaObjLive;
     // Content degradation tracking (spec §6). fitText already shrinks type to a
     // floor; here we DROP tertiary/secondary copy that still won't fit rather than
     // overflow the safe zone, and record which fields were dropped for a UI hint.
@@ -3548,7 +3554,11 @@ export default function App() {
       const cc=opts.calibrationContent||null;
       const attrCC=cc&&cc.attribution!=null?cc.attribution:attribution;
       const subCC=cc&&cc.subtext!=null?cc.subtext:subtext;
-      const shortAttr=om.roles.microLabel&&attrCC&&attrCC.length<=28&&subCC;
+      // (P4) The eyebrow populates whenever the archetype HAS a microLabel role and the
+      // attribution is short — NOT gated on a subtext being present (statement/stat/cta
+      // tiles carry an eyebrow with no caption). Downstream, supportText excludes the
+      // attribution once it's the eyebrow so it never also renders below the hero.
+      const shortAttr=om.roles.microLabel&&attrCC&&attrCC.length<=28;
       let frame=om.photoFrame||{type:"none"};
       if(frame.type==="card") frame={...frame,rotationDeg:0};  // (T4) de-tilt everywhere
       mat={
@@ -4499,7 +4509,8 @@ export default function App() {
       // calibration copy (the v1 board content) so every tile shows real type.
       content = content || { headline: "Freedom to *explore*", subtext: "Every child", attribution: "Ms Chen", dateText: "18 July" };
       const CELL = 360;               // per-archetype tile (ig_square, downscaled)
-      const cols = 3, rows = 4, pad = 18, labelH = 26;
+      const cols = 3, pad = 18, labelH = 26;
+      const rows = Math.ceil(ARCHETYPE_IDS.length / cols); // (P4) show ALL archetypes (now 17)
       const boardW = cols * CELL + (cols + 1) * pad;
       const boardH = rows * (CELL + labelH) + (rows + 1) * pad + 40;
       const board = document.createElement("canvas");
@@ -4540,6 +4551,79 @@ export default function App() {
       return dataURL;
     };
     return () => { try { delete window.__woCalibrationBoard; } catch {} };
+  }, [renderScene]);
+
+  /* ── FEED SIMULATION BOARD (WP-P P4, dev-only) ───────────────────────────────
+     window.__woFeedBoard(photos?) renders a FIXED 12-post demo campaign AS A FEED —
+     a real 3×4 Instagram grid in the reference's rhythm (feed-grammar §1), each tile
+     a DIFFERENT archetype + content (belief statement, stat 1:6, enrolment CTA, photo
+     moments with micro-labels, manifesto, brand card, closing card…). `photos` is an
+     optional map { slotKey: HTMLImageElement } of real Higgsfield photos injected per
+     photo tile via renderScene's opts.imageOverride; text tiles ignore it. The old
+     per-archetype board stays callable as __woCalibrationBoard(content, variant). */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // The demo campaign. Each entry drives ONE tile: archetype id, palette variant,
+    // per-cell copy (headline/subtext/attribution/dateText), and an optional photo slot.
+    // Sequenced in grid #1's row map (dark brand · photo · ivory statement // photo ·
+    // wisteria manifesto · photo // dark statement · photo · ivory CTA // photo · celadon
+    // stat · dark closing) with grid #2's brighter warmth. attribution = the eyebrow.
+    const FEED = [
+      // ── Row 1 ── (documentary tiles put the micro-label in HEADLINE — that archetype's
+      // hero IS the caps metadata line bottom-left; it has no separate eyebrow role.)
+      { arch:"brand_card",  v:0, c:{ headline:"THE WHITE ORCHID", subtext:"a school led by children" } },
+      { arch:"documentary", v:0, photo:"bloom", c:{ headline:"In bloom", subtext:"" } },
+      { arch:"label_headline", v:0, c:{ attribution:"OUR BELIEF", headline:"Every child is capable of leading their own day." } },
+      // ── Row 2 ──
+      { arch:"documentary", v:0, photo:"play", c:{ headline:"At play", subtext:"" } },
+      { arch:"manifesto",   v:1, c:{ attribution:"HOW WE WORK", headline:"Real ownership. Real decisions. Real consequences." } },
+      { arch:"documentary", v:0, photo:"beside", c:{ headline:"Beside them", subtext:"" } },
+      // ── Row 3 ──
+      { arch:"serif_word",  v:3, c:{ attribution:"ON PLAY", headline:"Play is the work of childhood." } },
+      { arch:"documentary", v:0, photo:"studio", c:{ headline:"The studio", subtext:"" } },
+      { arch:"cta_card",    v:0, c:{ attribution:"ENROLMENT", headline:"Now *enrolling*", subtext:"Term 3, 2026 | Ages four to twelve | Afterschool care, Singapore" } },
+      // ── Row 4 ──
+      { arch:"schedule_tile", v:0, c:{ attribution:"A DAY HERE", subtext:"2.30 School pick-up | 3.30 Free play | 4.00 Tea together | 5.00 Gardens and making | 6.30 Stories | 7.00 Home" } },
+      { arch:"stat_tile",   v:0, c:{ attribution:"OUR RATIO", dateText:"1 : 6", subtext:"one guide, six children — a room that stays quiet" } },
+      { arch:"closing_card",v:0, c:{ headline:"Come and *see for yourself*", subtext:"thewhiteorchid.sg" } },
+    ];
+    window.__woFeedBoard = (photos) => {
+      const P = photos || {};
+      const CELL = 360, cols = 3, rows = 4, pad = 6;
+      const boardW = cols * CELL + (cols + 1) * pad;
+      const boardH = rows * CELL + (rows + 1) * pad + 44;
+      const board = document.createElement("canvas");
+      board.width = boardW; board.height = boardH;
+      const bctx = board.getContext("2d");
+      bctx.fillStyle = "#EDECE4"; bctx.fillRect(0, 0, boardW, boardH);
+      bctx.fillStyle = "#254E48"; bctx.font = "700 20px " + (FU.subtitle || "sans-serif");
+      bctx.textBaseline = "alphabetic";
+      bctx.fillText("White Orchid — Feed Simulation (12-post campaign)", pad + 6, 30);
+      const cell = document.createElement("canvas"); cell.width = 1080; cell.height = 1080;
+      const cctx = cell.getContext("2d");
+      FEED.forEach((tile, i) => {
+        const col = i % cols, row = (i / cols) | 0;
+        const x = pad + col * (CELL + pad);
+        const y = 44 + pad + row * (CELL + pad);
+        try {
+          renderScene(cctx, 1080, 1080, {
+            dimensionId: "ig_square", live: false,
+            archOverride: tile.arch, archVariant: tile.v || 0,
+            calibrationContent: tile.c || null,
+            imageOverride: tile.photo && P[tile.photo] ? P[tile.photo] : null,
+          });
+        } catch (_) { cctx.clearRect(0, 0, 1080, 1080); }
+        bctx.drawImage(cell, x, y, CELL, CELL);
+      });
+      const dataURL = board.toDataURL("image/png");
+      try {
+        const a = document.createElement("a");
+        a.href = dataURL; a.download = "wo-feed-board.png";
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (_) { /* headless */ }
+      return dataURL;
+    };
+    return () => { try { delete window.__woFeedBoard; } catch {} };
   }, [renderScene]);
 
   /* ── STRESS SWEEP (Commit 3 verification, dev-only) ──────────────────────────
