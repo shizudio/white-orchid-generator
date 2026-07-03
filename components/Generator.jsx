@@ -2669,7 +2669,52 @@ export default function App() {
     window.__woArchFontMeta = () => fontMetaRef.current;
     window.__woArchTextBounds = () => textBoundsRef.current;
     window.__woArchetypeIds = ARCHETYPE_IDS;
-    return () => { try { delete window.__woSetArchetype; } catch {} };
+
+    // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
+    // window.__woBuildLibrary(n) generates up to n diverse, archetype-primed brand
+    // photos SEQUENTIALLY via /api/brand-library (Higgsfield-first, gpt-image-1
+    // fallback), saving each straight to the Supabase Library. Small delay between
+    // jobs to respect rate limits. Resumable (pass startIndex) and cancellable via
+    // window.__woBuildLibraryStop(). Logs progress to the console.
+    window.__woBuildLibraryStop = () => { window.__woBuildLibraryStopFlag = true; };
+    window.__woBuildLibrary = async (n, startIndex = 0) => {
+      window.__woBuildLibraryStopFlag = false;
+      // Discover the plan size so a bare call builds the whole set.
+      let total = 8;
+      try { const p = await (await fetch('/api/brand-library')).json(); total = p.total || total; } catch {}
+      const count = Number.isInteger(n) && n > 0 ? Math.min(n, total - startIndex) : (total - startIndex);
+      const results = [];
+      console.log(`[brand-library] building ${count} photos (index ${startIndex}…${startIndex + count - 1} of ${total})`);
+      for (let k = 0; k < count; k++) {
+        if (window.__woBuildLibraryStopFlag) { console.log('[brand-library] stopped by request'); break; }
+        const index = startIndex + k;
+        try {
+          const res = await fetch('/api/brand-library', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data.ok) console.log(`[brand-library] ${k + 1}/${count} ✓ index ${index} via ${data.provider} — ${String(data.scene || '').slice(0, 48)}…`);
+          else console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index}:`, data.error || res.status);
+          results.push({ index, ...data });
+        } catch (err) {
+          console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index} threw:`, err?.message || err);
+          results.push({ index, ok: false, error: String(err?.message || err) });
+        }
+        // Rate-limit courtesy delay between jobs (skip after the last).
+        if (k < count - 1) await new Promise(r => setTimeout(r, 1500));
+      }
+      const ok = results.filter(r => r.ok).length;
+      console.log(`[brand-library] done — ${ok}/${results.length} saved to the Library. Refresh /library to view.`);
+      return results;
+    };
+
+    return () => {
+      try {
+        delete window.__woSetArchetype;
+        delete window.__woBuildLibrary;
+        delete window.__woBuildLibraryStop;
+      } catch {}
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brand Kit is the source of truth for canvas colours, typography and checks.
