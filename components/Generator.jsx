@@ -4220,6 +4220,52 @@ export default function App() {
             )}
           </Sec>
 
+          {/* ── ARCHETYPES: calibration surface (Commit 4). Applies an archetype
+                 as a STARTING POINT (+ its palette/treatment); "None (free)"
+                 returns to the legacy layout. Frequency caps are DATA-ONLY for
+                 now — enforcement arrives with AI selection in the next package. */}
+          <Sec label="Archetypes" summary={archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.name||"Custom"):"None (free)"}>
+            <div style={{fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.45,marginBottom:10}}>
+              Start from one of the 12 editorial compositions. It restyles the canvas across every format; you can still edit any text, photo, or logo.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+              <button onClick={()=>applyArchetype(null)} aria-pressed={archetypeId===null} title="Free layout (no archetype)"
+                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${archetypeId===null?B.burnham:B.ash+"44"}`,background:archetypeId===null?`${B.celadon}33`:"#fff",cursor:"pointer"}}>
+                <span style={{width:"100%",aspectRatio:"1/1",borderRadius:6,border:`1px dashed ${B.ash}88`,display:"grid",placeItems:"center",color:B.ash,fontSize:18}}>∅</span>
+                <span style={{fontSize:9,fontWeight:700,fontFamily:FU.subtitle,letterSpacing:0.2,color:archetypeId===null?B.burnham:B.jet,textAlign:"center",lineHeight:1.2}}>None (free)</span>
+              </button>
+              {ARCHETYPES.map(a=>{
+                const on=archetypeId===a.id;
+                const el=a.elements||{};
+                const box=(b,fill,op=1)=>b?<rect x={(b.x*40).toFixed(1)} y={(b.y*40).toFixed(1)} width={(Math.min(b.w,1-b.x)*40).toFixed(1)} height={(Math.min(b.h,1-b.y)*40).toFixed(1)} rx="1.5" fill={fill} opacity={op}/>:null;
+                const fieldC=(BG_OPTIONS.find(o=>o.id===a.palette?.bg)?.color)||B.whiteSmoke;
+                const inkC=(BG_OPTIONS.find(o=>o.id===a.palette?.ink)?.color)||B.burnham;
+                return (
+                  <button key={a.id} onClick={()=>applyArchetype(a.id)} aria-pressed={on} title={`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
+                    style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?`${B.celadon}33`:"#fff",cursor:"pointer"}}>
+                    <svg viewBox="0 0 40 40" style={{width:"100%",aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
+                      <rect x="0" y="0" width="40" height="40" rx="3" fill={fieldC} stroke={`${B.ash}55`} strokeWidth="0.6"/>
+                      {a.fullBleed&&el.photo?box(el.photo,B.celadonDeep,0.85):null}
+                      {a.special==="floatedCard"&&el.card?box(el.card,B.celadonDeep,0.9):null}
+                      {a.special==="petalWindow"&&el.mask?<ellipse cx={((el.mask.x+el.mask.w/2)*40).toFixed(1)} cy={((el.mask.y+el.mask.h/2)*40).toFixed(1)} rx={(el.mask.w*20).toFixed(1)} ry={(el.mask.h*20).toFixed(1)} fill={B.celadonDeep} opacity="0.9"/>:null}
+                      {(!a.fullBleed&&!a.special&&el.photo)?box(el.photo,B.celadonDeep,0.85):null}
+                      {a.special==="motifField"?<><circle cx="6" cy="6" r="2" fill={ARCHETYPE_COLORS.sage}/><circle cx="34" cy="7" r="2" fill={ARCHETYPE_COLORS.butter}/><circle cx="35" cy="33" r="1.6" fill={ARCHETYPE_COLORS.sage}/></>:null}
+                      {el.microLabel?box(el.microLabel,inkC,0.5):null}
+                      {el.hero?box(el.hero,inkC,0.85):null}
+                      {el.support?box(el.support,inkC,0.4):null}
+                    </svg>
+                    <span style={{fontSize:8.5,fontWeight:700,fontFamily:FU.subtitle,letterSpacing:0.1,color:on?B.burnham:B.jet,textAlign:"center",lineHeight:1.15}}>{a.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {archetypeId&&(
+              <div style={{marginTop:10,fontSize:10,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>
+                Suits: {(ARCHETYPES_BY_ID[archetypeId]?.suitedPostTypes||[]).join(", ")}. If the current post type is unsuited, the layout falls back gracefully.
+              </div>
+            )}
+          </Sec>
+
           <Sec label="Format" summary={dim.label}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
               {DIMENSIONS.map(d=>{
