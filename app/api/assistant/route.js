@@ -1,5 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
+import { generatePhoto } from '@/lib/higgsfield';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -53,6 +54,39 @@ async function generateBrandImage(apiKey, scene, dimensionId) {
   }
   const b64 = json?.data?.[0]?.b64_json || null;
   return { imageB64: b64, refused: !b64 };
+}
+
+// ── ARCHETYPE PHOTO NEGATIVE-SPACE DIRECTIVES ────────────────────────────────
+// Each editorial archetype (ARCHETYPES in components/Generator.jsx) places its
+// hero text / logo in a known region, so a generated photo should keep the
+// COMPLEMENTARY region calm — an even, low-detail area the studio's own type +
+// logo lockup can sit over. These one-line directives are derived from each
+// archetype's photo/hero geometry and passed to Higgsfield as its negativeSpace
+// hint (falls back to a neutral directive when the archetype is unknown/absent).
+const ARCHETYPE_PHOTO_DIRECTIVES = {
+  // photo fills the right ~40%; text block sits left → keep the RIGHT side calm.
+  editorial_split: 'keep the right side an even, low-detail area with soft light for a text block.',
+  // full-bleed photo under a whisper caption low-left → keep the LOWER portion calm.
+  full_bleed_duotone: 'keep the lower third calm, soft and uncluttered for a small caption.',
+  // near-full-bleed candid, only a thin metadata line → gentle, unbusy edges.
+  documentary: 'a single clean candid moment; keep the bottom edge calm for a thin caption line.',
+  // portrait fills the right ~48%; name/credential sits left → keep the LEFT calm.
+  portrait_credential: 'a single subject toward the right; keep the left side an even, calm background.',
+  // photo revealed through the petal window on the right → subject sits RIGHT.
+  petal_window: 'compose the main subject slightly right of centre with calm negative space around it.',
+  // text-forward layouts (hero text over/near a supporting photo) → calm TOP.
+  serif_word: 'keep the upper third calm negative space for a large headline.',
+  big_number: 'keep the centre and upper area calm for a large date or number.',
+  quote_margin: 'generous calm margins around a quiet central area for a quote.',
+  manifesto: 'a calm, even field with generous quiet space for a short paragraph.',
+  label_headline: 'keep the middle band calm for an eyebrow label and headline.',
+  motif_field: 'a soft, even pastel-leaning field with calm central negative space.',
+  floated_card: 'a calm, evenly lit scene suitable behind a small floated photo card.',
+};
+const DEFAULT_PHOTO_DIRECTIVE = 'keep the upper third calm negative space for a headline and logo.';
+
+function photoDirectiveForArchetype(archetypeId) {
+  return ARCHETYPE_PHOTO_DIRECTIVES[archetypeId] || DEFAULT_PHOTO_DIRECTIVE;
 }
 
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
@@ -674,17 +708,40 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   if ('imagePrompt' in patch) delete patch.imagePrompt;
 
   if (imagePrompt) {
-    const { imageB64, refused } = await generateBrandImage(apiKey, imagePrompt, designState.dimensionId);
-    if (imageB64) {
-      return Response.json({ reply, patch, imageB64 });
+    // Derive a negative-space directive from the design's archetype (the patch's
+    // new archetype if the model just set one, else the current design's). This
+    // steers the photo to keep a calm region for the studio's own type/logo lockup.
+    const activeArchetype = (typeof patch.archetypeId === 'string' && patch.archetypeId !== 'none')
+      ? patch.archetypeId
+      : designState.archetypeId;
+    const negativeSpace = photoDirectiveForArchetype(activeArchetype);
+
+    // PRIMARY: Higgsfield editorial-photo provider. It never throws — on refusal,
+    // timeout, or missing keys it returns { refused / unconfigured }, and we fall
+    // back to gpt-image-1 (the existing OpenAI path) transparently.
+    let imageProvider = 'higgsfield';
+    let { imageB64 } = await generatePhoto({
+      scene: imagePrompt,
+      dimensionId: designState.dimensionId,
+      negativeSpace,
+    });
+
+    if (!imageB64) {
+      // FALLBACK: gpt-image-1.
+      imageProvider = 'openai';
+      ({ imageB64 } = await generateBrandImage(apiKey, imagePrompt, designState.dimensionId));
     }
-    // Graceful refusal / moderation / error — never a 500. Keep any design patch the
-    // model also produced, but explain the image couldn't be made and suggest a tweak.
+
+    if (imageB64) {
+      return Response.json({ reply, patch, imageB64, imageProvider });
+    }
+    // Both providers declined — never a 500. Keep any design patch the model also
+    // produced, but explain the image couldn't be made and suggest a tweak.
     return Response.json({
       reply: "I couldn't generate that one — it may have been outside what I can create. Try describing a simple, everyday scene (for example “children reading together in a bright classroom”), or upload a photo instead.",
       patch,
       imageB64: null,
-      imageRefused: !!refused,
+      imageRefused: true,
     });
   }
 

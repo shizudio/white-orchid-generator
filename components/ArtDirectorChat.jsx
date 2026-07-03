@@ -163,12 +163,18 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       if (changeKeys.length) summaryParts.push(summarizeKeys(changeKeys));
       if (photoLanded) summaryParts.push('photo');
       const didChange = changeKeys.length > 0 || photoLanded;
+      // Which provider made the photo (Higgsfield primary, gpt-image-1 fallback).
+      // Shown subtly under the thumbnail so it's clear where an image came from.
+      const providerLabel = photoLanded
+        ? (data.imageProvider === 'higgsfield' ? 'Higgsfield' : data.imageProvider === 'openai' ? 'gpt-image-1' : null)
+        : null;
       // Only attach an undo chip when a real change actually landed.
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: data.reply || 'Done.',
         summary: summaryParts.join(', '),
         thumb,
+        providerLabel,
         undoIndex: didChange ? Date.now() : null,
       }]);
     } catch {
@@ -236,6 +242,11 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
                 <div className="ad-bubble">{m.content}</div>
                 {m.role === 'assistant' && m.thumb && (
                   <img className="ad-thumb" src={m.thumb} alt="Generated image applied to the design" />
+                )}
+                {m.role === 'assistant' && m.providerLabel && (
+                  <div className="ad-provider" style={{ fontSize: 10, opacity: 0.5, marginTop: 2, letterSpacing: '0.02em' }}>
+                    photo · {m.providerLabel}
+                  </div>
                 )}
                 {m.role === 'assistant' && m.summary && (
                   <div className="ad-changed">changed: {m.summary}</div>
