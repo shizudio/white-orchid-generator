@@ -559,6 +559,291 @@ function hexToRgb(hex){
   const full=h.length===3?h.split("").map(x=>x+x).join(""):h.padEnd(6,"0").slice(0,6);
   return {r:parseInt(full.slice(0,2),16)||0,g:parseInt(full.slice(2,4),16)||0,b:parseInt(full.slice(4,6),16)||0};
 }
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARCHETYPE ENGINE PRIMITIVES (Commit 2) — spec docs/visual-language-spec.md
+   Pure, lib-level helpers. NO layout change here: these are the typography +
+   photo-treatment building blocks the archetype render path (Commit 3) composes.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+// ── Softened tangerine + curated pastel family (spec §3 colour discipline) ──
+// Client ruling §5.2: the tangerine accent is kept but DESATURATED ~10% toward
+// ivory in compositions. B.tangerine #F6644E lifted ~10% toward B.whiteSmoke
+// #F5F6E7 → a warmer, less shouty coral. The curated pastels are the set-B
+// family (dusty pink / butter / sky / sage / terracotta / lilac); hexes chosen
+// to sit harmoniously beside the B palette (burnham #254E48 ink, ivory field):
+// each is a low-chroma, mid-high-value tint that reads "premium nursery", never
+// candy. terracotta is the one warm/saturated member (the die-cut field, §2.12).
+function mixHex(a, b, t){
+  const A=hexToRgb(a), Bc=hexToRgb(b), k=Math.max(0,Math.min(1,t));
+  const r=Math.round(A.r+(Bc.r-A.r)*k), g=Math.round(A.g+(Bc.g-A.g)*k), bl=Math.round(A.b+(Bc.b-A.b)*k);
+  return "#"+[r,g,bl].map(v=>v.toString(16).padStart(2,"0")).join("");
+}
+const SOFT_TANGERINE = mixHex("#F6644E", "#F5F6E7", 0.10); // ≈ #F6705B
+const ARCHETYPE_COLORS = {
+  softTangerine: SOFT_TANGERINE, // the codified accent (spec §3 / §5.2)
+  // Curated pastel family — one family per post (spec §3). Values are hand-tuned
+  // tints, not machine-mixed, to stay harmonious with burnham + ivory.
+  dustyPink:  "#E7C9CC",
+  butter:     "#F2E2A8",
+  sky:        "#C4D8E2",
+  sage:       "#C3D2BC",
+  terracotta: "#D08C6E", // the warm die-cut field (§2.12) — the saturated member
+  lilac:      "#D6C8E0",
+};
+const PASTEL_IDS = ["dustyPink","butter","sky","sage","terracotta","lilac"];
+
+// ── Photo treatments (spec §3/§4 recipes) — pure functions over a ctx region ──
+// Each composites over the ALREADY-DRAWN photo pixels inside (x,y,w,h) only,
+// using the spec's exact blend modes + alpha ranges. They save/restore ctx and
+// clip to the region so nothing bleeds outside the photo. `strength` (0..1)
+// lerps within the spec's stated alpha band (default = band midpoint).
+
+// (§3.1) Brand duotone — luminance-preserving deep-green wash. 'color' blend at
+// 0.35–0.45 pulls hue to green while KEEPING photo contrast (not a flat veil).
+function applyDuotone(ctx, x, y, w, h, opts={}){
+  const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
+  const alpha=0.35+(0.45-0.35)*s;
+  const color=opts.color||"#254E48"; // burnham
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  ctx.globalCompositeOperation="color";
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle=color;
+  ctx.fillRect(x,y,w,h);
+  // Contrast-preservation pass: a light multiply of the same hue in shadows only
+  // would muddy; instead re-assert a hair of contrast via a very light overlay of
+  // the ink so the green reads as duotone not tint. (Bounded, ≤0.06.)
+  ctx.globalCompositeOperation="overlay";
+  ctx.globalAlpha=0.06;
+  ctx.fillStyle=color;
+  ctx.fillRect(x,y,w,h);
+  ctx.restore();
+}
+
+// (§3.2) Ivory soft-light lift — the warm paper glow, restrained. soft-light
+// ivory at 0.12–0.18. Composes AFTER a duotone (spec: "after (1)").
+function applySoftLift(ctx, x, y, w, h, opts={}){
+  const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
+  const alpha=0.12+(0.18-0.12)*s;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  ctx.globalCompositeOperation="soft-light";
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle=opts.color||"#F5F6E7"; // ivory
+  ctx.fillRect(x,y,w,h);
+  ctx.restore();
+}
+
+// (§3.6/§3.8) Film grain — near-full-color default (set B). overlay ≤0.10, with
+// an optional light desaturation 0–15%. The noise is a DETERMINISTIC seeded
+// pattern cached offscreen (NOT per-frame random), so exports are reproducible.
+const _grainCache = new Map(); // key: `${tile}:${seed}` → offscreen canvas
+function _grainTile(tile, seed){
+  const key=tile+":"+seed;
+  const hit=_grainCache.get(key);
+  if(hit) return hit;
+  const c=document.createElement("canvas"); c.width=tile; c.height=tile;
+  const g=c.getContext("2d");
+  const img=g.createImageData(tile,tile);
+  const d=img.data;
+  // xorshift32 seeded PRNG — deterministic monochrome noise.
+  let st=(seed>>>0)||1;
+  const rnd=()=>{st^=st<<13;st^=st>>>17;st^=st<<5;return ((st>>>0)/4294967295);};
+  for(let i=0;i<d.length;i+=4){
+    const v=Math.floor(rnd()*256);
+    d[i]=d[i+1]=d[i+2]=v; d[i+3]=255;
+  }
+  g.putImageData(img,0,0);
+  _grainCache.set(key,c);
+  return c;
+}
+function applyFilmGrain(ctx, x, y, w, h, opts={}){
+  const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
+  const alpha=Math.min(0.10, 0.04+(0.08-0.04)*s); // 0.04–0.08, hard-capped ≤0.10
+  const desat=opts.desat==null?0.08:Math.max(0,Math.min(0.15,opts.desat)); // 0–15%
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  // Optional light desaturation via a grey 'saturation' pass toward neutral.
+  if(desat>0){
+    ctx.globalCompositeOperation="saturation";
+    ctx.globalAlpha=desat;
+    ctx.fillStyle="#808080";
+    ctx.fillRect(x,y,w,h);
+  }
+  // Tile the cached deterministic grain across the region under 'overlay'.
+  const tile=_grainTile(64, opts.seed==null?1337:(opts.seed>>>0));
+  ctx.globalCompositeOperation="overlay";
+  ctx.globalAlpha=alpha;
+  const pat=ctx.createPattern(tile,"repeat");
+  if(pat){ ctx.fillStyle=pat; ctx.fillRect(x,y,w,h); }
+  ctx.restore();
+}
+
+// (§3.4-adjacent) Accent wash — a masked tangerine multiply, 0.08–0.12. Used
+// sparingly to warm a corner of a treated photo. `mask` optional (fn drawing a
+// clip path); default is the whole region.
+function applyAccentWash(ctx, x, y, w, h, opts={}){
+  const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
+  const alpha=0.08+(0.12-0.08)*s;
+  ctx.save();
+  ctx.beginPath();
+  if(typeof opts.mask==="function") opts.mask(ctx); else ctx.rect(x,y,w,h);
+  ctx.clip();
+  ctx.globalCompositeOperation="multiply";
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle=opts.color||SOFT_TANGERINE;
+  ctx.fillRect(x,y,w,h);
+  ctx.restore();
+}
+
+// Named photo-treatment recipes referenced by archetype specs (Commit 3). Each
+// composes the pure fns above over a photo region. `id` values are stable and
+// used as ARCHETYPES[].photoTreatment.
+const PHOTO_TREATMENTS = {
+  // §2.4 primary: luminance-preserving green duotone.
+  duotone:       (ctx,x,y,w,h)=>{ applyDuotone(ctx,x,y,w,h,{strength:0.5}); },
+  // Duotone + ivory lift (~40% of treated photos, spec §3.2).
+  duotoneLift:   (ctx,x,y,w,h)=>{ applyDuotone(ctx,x,y,w,h,{strength:0.5}); applySoftLift(ctx,x,y,w,h,{strength:0.5}); },
+  // §3.8 childcare default: near-full-color film grain, light desat.
+  filmGrain:     (ctx,x,y,w,h)=>{ applyFilmGrain(ctx,x,y,w,h,{strength:0.5,desat:0.10}); },
+  // §2.12 petal window: strong-ish duotone inside the mask.
+  duotoneStrong: (ctx,x,y,w,h)=>{ applyDuotone(ctx,x,y,w,h,{strength:1}); },
+  // §2.5 floated card / already-art-directed: near-full color, faint grain only.
+  cleanGrain:    (ctx,x,y,w,h)=>{ applyFilmGrain(ctx,x,y,w,h,{strength:0.2,desat:0.05}); },
+  // No treatment (documentary clean).
+  none:          ()=>{},
+};
+
+// ── Editorial hero typography (spec §2 / §3 type scale) ──
+// Mixed-register hero text with roman + ITALIC emphasis. Emphasis is authored
+// with *asterisk* markers in the headline string ("Freedom to *explore*"); the
+// marked word renders italic in the hero. stripHeroMarkers() removes the markers
+// for every OTHER surface (captions, exports of text, plain measurements).
+function stripHeroMarkers(str){ return String(str||"").replace(/\*([^*]+)\*/g, "$1"); }
+
+// Parse a headline into tokens: [{text, italic}], splitting on *emphasis*
+// markers while preserving spaces between words. Whitespace is carried on the
+// tokens so re-measurement with alternating fonts stays correct.
+function parseHeroTokens(str){
+  const out=[]; const s=String(str||"");
+  const re=/\*([^*]+)\*/g; let last=0, m;
+  const pushPlain=(txt)=>{ if(txt) out.push({text:txt, italic:false}); };
+  while((m=re.exec(s))){
+    pushPlain(s.slice(last,m.index));
+    out.push({text:m[1], italic:true});
+    last=m.index+m[0].length;
+  }
+  pushPlain(s.slice(last));
+  return out;
+}
+
+// Split hero tokens into WORD tokens (each carries italic + a trailing space
+// flag) so wrapping can measure per-word with the correct (roman|italic) font.
+function heroWords(str){
+  const words=[];
+  for(const tok of parseHeroTokens(str)){
+    const parts=tok.text.split(/(\s+)/); // keep the separators
+    for(const p of parts){
+      if(p==="") continue;
+      if(/^\s+$/.test(p)){ if(words.length) words[words.length-1].space=true; continue; }
+      words.push({text:p, italic:tok.italic, space:false});
+    }
+  }
+  return words;
+}
+
+// Build a CSS font string for a hero register. register ∈ {serif, heavySans}.
+// caps handled by the caller (uppercasing the string). weight for heavySans
+// clamped ≥700 (spec §1.1 — a heavy display sans hero must be ≥700).
+function heroFont(register, size, italic){
+  if(register==="heavySans"){
+    return `800 ${size}px ${F.subtitle}`; // Syne heavy (≥700)
+  }
+  // serif display (Romie); roman by default, italic for emphasis words.
+  return `${italic?"italic ":""}500 ${size}px ${F.title}`;
+}
+
+// Measure hero words at a given size, wrapping to maxW with alternating
+// roman/italic fonts so inter-word spacing is correct. Returns {lines:[[word]],
+// lineCount}. Each line is an array of word tokens.
+function measureHeroLines(ctx, words, register, size, maxW){
+  const lines=[]; let line=[]; let lineW=0;
+  const spaceW=(italic)=>{ ctx.font=heroFont(register,size,italic); return ctx.measureText(" ").width; };
+  for(let i=0;i<words.length;i++){
+    const wtok=words[i];
+    ctx.font=heroFont(register,size,wtok.italic);
+    const ww=ctx.measureText(wtok.text).width;
+    const addW=(line.length?spaceW(wtok.italic):0)+ww;
+    if(line.length && lineW+addW>maxW){
+      lines.push(line); line=[wtok]; lineW=ww;
+    }else{
+      line.push(wtok); lineW+=addW;
+    }
+  }
+  if(line.length) lines.push(line);
+  return {lines, lineCount:lines.length};
+}
+
+// Draw hero text: shrink-to-fit within (x,y,maxW,maxH), honouring a MIN floor,
+// mixed roman+italic per-word, display leading per spec (0.95–1.10). Returns
+// {size, lineHeight, lines, usedH}. align ∈ {left,center,right}. Caller sets
+// fillStyle + shadow before calling. register ∈ {serif, heavySans}.
+function drawHeroText(ctx, str, opts){
+  const {x, y, maxW, maxH, align="left", register="serif", caps=false,
+         start=120, minSize=28, leading=1.02} = opts;
+  const src=caps? stripHeroMarkers(str).toUpperCase() : str;
+  const words= caps
+    ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
+    : heroWords(str);
+  const lr=Math.max(0.95,Math.min(1.10,leading));
+  let size=Math.max(start,minSize), fit=null;
+  while(size>=minSize){
+    fit=measureHeroLines(ctx,words,register,size,maxW);
+    if(fit.lineCount*size*lr<=maxH) break;
+    size-=2;
+  }
+  const lineHeight=size*lr;
+  // Draw.
+  ctx.textBaseline="alphabetic";
+  fit.lines.forEach((lineWords,li)=>{
+    // Compute line width for center/right alignment.
+    let lineW=0;
+    lineWords.forEach((wtok,wi)=>{
+      ctx.font=heroFont(register,size,wtok.italic);
+      lineW+=ctx.measureText(wtok.text).width;
+      if(wi<lineWords.length-1){ ctx.font=heroFont(register,size,wtok.italic); lineW+=ctx.measureText(" ").width; }
+    });
+    let cx= align==="center"? x+(maxW-lineW)/2 : align==="right"? x+maxW-lineW : x;
+    const baseY=y+li*lineHeight+size;
+    ctx.textAlign="left";
+    lineWords.forEach((wtok,wi)=>{
+      ctx.font=heroFont(register,size,wtok.italic);
+      ctx.fillText(wtok.text,cx,baseY);
+      cx+=ctx.measureText(wtok.text).width;
+      if(wi<lineWords.length-1) cx+=ctx.measureText(" ").width;
+    });
+  });
+  return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount};
+}
+
+// All-caps micro-label with +0.05–0.12em letterspacing (spec §3). Returns the
+// used width. Draws a single line; caller handles fit. tracking in em.
+function drawMicroLabel(ctx, str, x, y, size, opts={}){
+  const tracking=Math.max(0.05,Math.min(0.12,opts.tracking==null?0.08:opts.tracking));
+  const txt=stripHeroMarkers(str).toUpperCase();
+  ctx.save();
+  ctx.font=`600 ${size}px ${F.subtitle}`;
+  ctx.letterSpacing=`${tracking*size}px`;
+  ctx.textAlign=opts.align||"left";
+  ctx.textBaseline="alphabetic";
+  const tx=opts.align==="center"?x:opts.align==="right"?x:x;
+  ctx.fillText(txt,tx,y+size);
+  const wpx=ctx.measureText(txt).width+tracking*size*Math.max(0,txt.length-1);
+  ctx.letterSpacing="0px";
+  ctx.restore();
+  return wpx;
+}
+
 function sampleOverallLuminance(source){
   const size=64,c=document.createElement("canvas");c.width=size;c.height=size;
   const ctx=c.getContext("2d");ctx.drawImage(source,0,0,size,size);
