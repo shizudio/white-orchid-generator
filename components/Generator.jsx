@@ -439,7 +439,7 @@ const ARCHETYPES = [
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
-    suitedPostTypes:["text_post","quote"], frequencyCap:0.18, logoUse:"none", // (P1) statement tile: no logo
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.18, logoUse:"mark", // (r3 fix #2) solid statement tile → subtle corner orchid mark
     // (T1) text-only tile read empty on v3 → 3 furniture tells: an underline under the
     // eyebrow, an index token top-right (counterweighting the top-left hero), and a
     // bottom-left counterweight url line balancing the caption side.
@@ -588,7 +588,7 @@ const ARCHETYPES = [
       {bg:"butter",    ink:"burnham",accentUse:"softTangerine",klass:"light"},
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
-    suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35, logoUse:"none", // (P1) manifesto: url line via furniture, no lockup
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35, logoUse:"mark", // (r3 fix #2) manifesto → subtle corner orchid mark
     // (T1) v3 tile 7 "plain, content small" → an index+underline at the top anchor and
     // a bottom counterweight give the manifesto page-feel structure.
     furniture:[
@@ -601,14 +601,18 @@ const ARCHETYPES = [
   { // §2.8 Documentary Photo Moment
     id:"documentary", name:"Documentary Photo Moment",
     elements:{
-      photo:{x:0.03,y:0.03,w:0.94,h:0.94},        // 94–96% bleed w/ thin border
-      // (T5/P4) widened + lifted so the whole caps micro-label sits clear of the bottom
-      // edge (the "IN BLOOM" descenders were grazing the frame). y0.82→0.80, h eased.
-      hero:{x:0.06,y:0.80,w:0.86,h:0.09},          // metadata / whisper line
+      // (calibration r3 fix #1) TRUE FULL-BLEED — the client's reference photo tiles bleed
+      // edge-to-edge; the old 3% inset + thinBorder framed the photo on the dark tile and
+      // CLIPPED the caps micro-label ("IN BLOOM"/"AT PLAY"/"BESIDE THEM"/"THE STUDIO")
+      // against the frame edge (three 1/5 scores). Photo now covers the whole canvas.
+      photo:{x:0,y:0,w:1,h:1},
+      // Micro-label bottom-left INSIDE safe margins with a faint gradient scrim beneath
+      // (drawn in the render). x/y lifted so caps + descenders sit clear of the edge.
+      hero:{x:0.06,y:0.855,w:0.88,h:0.08},          // metadata / whisper line, bottom-left
       logo:{position:"bottom-right",sizeId:"s"},
     },
-    scaleRatio:{heroCapFrac:0.04,heroToSupport:6},
-    whitespace:0.05, gridAnchor:"thirds", centerExclude:true, fullBleed:true, thinBorder:true,
+    scaleRatio:{heroCapFrac:0.038,heroToSupport:6},
+    whitespace:0.05, gridAnchor:"thirds", centerExclude:true, fullBleed:true, thinBorder:false,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
     // Documentary is a full-bleed photo; the field only shows through the whisper line.
     variants:[
@@ -643,7 +647,7 @@ const ARCHETYPES = [
       {bg:"dustyPink", ink:"burnham",accentUse:"softTangerine",klass:"light"},
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
-    photoTreatment:"none", heroRegister:"serif", caps:false,
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) statement tile → corner mark ("OUR BELIEF" tile scored "no logo?")
     suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
     // (WP-P §7) STATEMENT CALM — the reference statement tiles carry NOTHING but the
     // eyebrow + the serif statement. The r2 pill/index/counterweight are retired here
@@ -738,23 +742,26 @@ const ARCHETYPES = [
   { // §2.13 Brand Card — the campaign opener (mark + wordmark lockup + italic tagline)
     id:"brand_card", name:"Brand Card",
     elements:{
-      // wordmark hero, tagline below; the flower mark draws above via logoUse:"mark".
-      hero:{x:0.12,y:0.40,w:0.76,h:0.20},          // "THE WHITE ORCHID" wordmark
-      support:{x:0.12,y:0.62,w:0.66,h:0.08},        // italic serif tagline
-      logo:{position:"top-left",sizeId:"m"},
+      // (r3 fix #2) CENTRED LOCKUP — client scored the opener "nicer if logo centred".
+      // Reference brand card: centred mark glyph ABOVE a centred wordmark + centred italic
+      // tagline. So the mark draws top-centre (logoUse:"mark") and the wordmark hero +
+      // tagline are centre-aligned below it — one clean vertical lockup.
+      hero:{x:0.10,y:0.42,w:0.80,h:0.18, align:"center"},   // "THE WHITE ORCHID" wordmark
+      support:{x:0.10,y:0.62,w:0.80,h:0.08, align:"center"}, // italic serif tagline
+      logo:{position:"top-center",sizeId:"m"},
     },
     scaleRatio:{heroCapFrac:0.11,heroToSupport:3}, // calm wordmark, tagline ~1/3 of it
-    whitespace:0.62, gridAnchor:"edge", centerExclude:false, wordmarkHero:true,
+    whitespace:0.62, gridAnchor:"center-column", centerExclude:false, wordmarkHero:true,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
     // Two brand fields: the dark opener (grid #1) and the butter/sand opener (grid #2 §6).
     variants:[
-      {bg:"burnham",   ink:"whiteSmoke",accentUse:"field",klass:"dark", logoUse:"lockup"},
-      {bg:"butter",    ink:"burnham",   accentUse:"field",klass:"light",logoUse:"lockup"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"field",klass:"dark", logoUse:"mark"},
+      {bg:"butter",    ink:"burnham",   accentUse:"field",klass:"light",logoUse:"mark"},
     ],
-    photoTreatment:"none", heroRegister:"serif", caps:true, logoUse:"lockup",
+    photoTreatment:"none", heroRegister:"serif", caps:true, logoUse:"mark",
     supportRegister:"serifItalic", // italic serif tagline (feed-grammar §2 brand card)
     suitedPostTypes:["text_post"], frequencyCap:0.08,
-    perDim:{ story:{hero:{x:0.12,y:0.44,w:0.76,h:0.18},support:{x:0.12,y:0.64,w:0.70,h:0.08}} },
+    perDim:{ story:{hero:{x:0.10,y:0.46,w:0.80,h:0.16,align:"center"},support:{x:0.10,y:0.64,w:0.80,h:0.08,align:"center"}} },
   },
   { // §2.14 Stat Tile — a giant serif number/ratio on a pastel field
     id:"stat_tile", name:"Stat Tile",
@@ -773,7 +780,7 @@ const ARCHETYPES = [
       {bg:"celadon",   ink:"burnham",accentUse:"field",klass:"light"},
       {bg:"sage",      ink:"burnham",accentUse:"field",klass:"light"},
     ],
-    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) stat tile → corner mark
     suitedPostTypes:["event","text_post"], frequencyCap:0.08,
     furniture:[ {type:"underline", x:0.10, y:0.205, w:0.08, alpha:0.4} ],
     perDim:{ story:{hero:{x:0.09,y:0.34,w:0.82,h:0.30},support:{x:0.10,y:0.72,w:0.80,h:0.12}} },
@@ -793,7 +800,7 @@ const ARCHETYPES = [
     variants:[
       {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
     ],
-    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) cta card → corner mark
     suitedPostTypes:["event","text_post"], frequencyCap:0.08,
     // The TANGERINE PILL is the canonical accent (feed-grammar §4). it.color pins it even
     // though the hero carries no emphasis accent (§7 ink discipline).
@@ -807,7 +814,11 @@ const ARCHETYPES = [
       support:{x:0.10,y:0.90,w:0.80,h:0.05, align:"center"}, // url line
       logo:{position:"top-center",sizeId:"s"},
     },
-    scaleRatio:{heroCapFrac:0.14,heroToSupport:4},
+    // (r3 fix #3) heroCapFrac eased 0.14→0.125 so the serif sits a touch smaller and the
+    // two lines ("Come and see for / yourself") carry a hair more line-gap inside the SAME
+    // box — the "font gap a bit tight" nit — without a leading change that re-wrapped or
+    // clamped the second line (reflow sizes to the box; a smaller cap = airier two lines).
+    scaleRatio:{heroCapFrac:0.125,heroToSupport:4},
     whitespace:0.60, gridAnchor:"center-column", centerExclude:false,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"softTangerine"},
     variants:[
@@ -834,7 +845,7 @@ const ARCHETYPES = [
     variants:[
       {bg:"whiteSmoke",ink:"burnham",accentUse:"field",klass:"light"},
     ],
-    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) schedule tile → corner mark
     suitedPostTypes:["event","text_post"], frequencyCap:0.06,
     special:"scheduleRows",
     perDim:{ story:{hero:{x:0.10,y:0.22,w:0.80,h:0.66}} },
@@ -908,6 +919,8 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
     fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
     heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
     leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
+    heroLeading: arch.heroLeading||null, heroTracking: arch.heroTracking||null, // (r3 fix #3) closing card
+    logoSizeId: arch.elements?.logo?.sizeId||null, logoPos: arch.elements?.logo?.position||null,
     whitespace: typeof arch.whitespace==="number"?arch.whitespace:null,
     centerExclude: !!arch.centerExclude, gridAnchor: arch.gridAnchor||"edge",
     // Palette resolved through the chosen VARIANT (bg/ink). accent = one emphasis ink
@@ -1462,12 +1475,14 @@ function measureHeroLines(ctx, words, register, size, maxW){
 function drawHeroText(ctx, str, opts){
   const {x, y, maxW, maxH, align="left", register="serif", caps=false,
          start=120, minSize=28, leading=1.02, exactSize=null,
-         accentInk=null, baseInk=null} = opts;
+         accentInk=null, baseInk=null, tracking=0} = opts;
   const src=caps? stripHeroMarkers(str).toUpperCase() : str;
   const words= caps
     ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
     : heroWords(str);
-  const lr=Math.max(0.95,Math.min(1.10,leading));
+  // (r3 fix #3) ceiling raised to 1.28 so the closing-card serif can breathe with a
+  // looser line-gap (client: "font gap a bit tight"); default heroes are unaffected.
+  const lr=Math.max(0.95,Math.min(1.28,leading));
   let size, fit;
   if(exactSize!=null){
     // The reflow engine already computed the fitting size (incl. word-width floor);
@@ -1481,6 +1496,8 @@ function drawHeroText(ctx, str, opts){
       size-=2;
     }
   }
+  // (r3 fix #3) apply optional hero tracking now that the size is known (em → px).
+  if(tracking) ctx.letterSpacing=`${tracking*size}px`;
   const lineHeight=size*lr;
   // Clamp to the box height: never draw a line below maxH (controlled truncation, not
   // an edge crop). The reflow engine sizes the box inside the safe margins.
@@ -1513,6 +1530,7 @@ function drawHeroText(ctx, str, opts){
     });
     if(baseInk) ctx.fillStyle=baseInk;
   });
+  if(tracking) ctx.letterSpacing="0px"; // reset so later draws are unaffected
   return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount};
 }
 
@@ -3571,6 +3589,7 @@ export default function App() {
         palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
         motif:om.motif, furniture:om.furniture, cropDrama:om.cropDrama, logoUse:om.logoUse,
         supportRegister:om.supportRegister, special:om.special,
+        heroLeading:om.heroLeading, heroTracking:om.heroTracking,
       };
     }else{
       // Live materialized state. `editorial` is true when the design carries role
@@ -3595,6 +3614,7 @@ export default function App() {
         gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
         cropDrama: specNums?.cropDrama||null, logoUse: specNums?.logoUse||null,
         supportRegister: specNums?.supportRegister||null, special: specNums?.special||null,
+        heroLeading: specNums?.heroLeading||null, heroTracking: specNums?.heroTracking||null,
       };
     }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
@@ -4001,7 +4021,9 @@ export default function App() {
         photoRegion: (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         heroText: heroFinal, supportText, eyebrow,
         heroCapFrac: mat.heroCapFrac, heroToSupport: mat.heroToSupport,
-        leading: register==="serif"?1.02:1.05, leadingBody: mat.leadingBody||1.32,
+        // (r3 fix #3) reflow must measure at the SAME hero leading the draw uses, else a
+        // looser-than-default leading (closing card) overflows the box and clamps line 2.
+        leading: mat.heroLeading || (register==="serif"?1.02:1.05), leadingBody: mat.leadingBody||1.32,
         motifLayers: overlayLayers.filter(l=>l.motif),
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
@@ -4028,7 +4050,7 @@ export default function App() {
           const zx=heroBox.x, zw=heroBox.w, zy=heroBox.y, zh=heroBox.h;
           const rowH=zh/rows.length;
           const timeSz=Math.min(rowH*0.42, zw*0.11);
-          const actSz=Math.min(rowH*0.26, zw*0.05);
+          const actSz=Math.min(rowH*0.30, zw*0.058); // (r3 fix #4) slightly larger activity text
           const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009));
           const timeX=zx, actX=zx+zw*0.38;
           ctx.save();
@@ -4039,7 +4061,9 @@ export default function App() {
             ctx.globalAlpha=1; ctx.textBaseline="middle"; ctx.textAlign="left";
             ctx.fillStyle=heroInk; ctx.font=`400 ${timeSz}px ${F.title}`;
             ctx.fillText(r.t, timeX, cy);
-            ctx.font=`300 ${actSz}px ${F.body}`; ctx.letterSpacing=`${0.01*actSz}px`;
+            // (r3 fix #4) activity text a touch heavier (400 not 300) so it reads darker
+            // and clearer against the ivory field, matching the reference schedule tile.
+            ctx.font=`400 ${actSz}px ${F.body}`; ctx.letterSpacing=`${0.008*actSz}px`;
             ctx.fillText(r.a, actX, cy);
             ctx.letterSpacing="0px";
           });
@@ -4057,10 +4081,33 @@ export default function App() {
       // backdropMode ("band"/"none") is honoured. Solid-field tiles (no mediaObj / not
       // full-bleed) are unaffected — drawBackdrop no-ops without a photo.
       if(mat.fullBleed && mediaObj){
-        if(heroFinal && heroBox){ resolveZoneTc(heroBox); drawBackdrop(heroBox,"bottom",false); }
-        if(supportText && supBox){ resolveZoneTc(supBox); drawBackdrop(supBox,"bottom",false); }
-        // Re-resolve the hero ink against the (now backdropped) zone so ink + band agree.
-        if(heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc(heroBox); heroInk=zoneTc; }
+        // (calibration r3 fix #1) LABEL-ONLY PHOTO TILE (documentary) — a SHORT caps
+        // micro-label bottom-left, no caption. The reference uses a faint bottom
+        // gradient scrim (never a hard band) so the white label reads on any photo while
+        // the image still bleeds. Detect it: caps hero, short text, no support.
+        const isPhotoLabel = mat.caps && heroFinal && heroFinal.length<=22 && !supportText;
+        if(isPhotoLabel && heroBox){
+          // Bottom scrim: transparent → burnham, covering the lower ~28% of the tile so
+          // the label + descenders always sit on a dark wash. Forces the label ink white.
+          const scrimTop=Math.min(heroBox.y-0.06, 0.72)*h, scrimH=h-scrimTop;
+          const g=ctx.createLinearGradient(0,scrimTop,0,h);
+          g.addColorStop(0,"rgba(21,44,40,0)");
+          g.addColorStop(0.55,"rgba(21,44,40,0.42)");
+          g.addColorStop(1,"rgba(21,44,40,0.72)");
+          ctx.save(); ctx.fillStyle=g; ctx.fillRect(0,scrimTop,w,scrimH); ctx.restore();
+          heroInk=B.whiteSmoke;   // label always ivory on the scrim
+        }else{
+          // Text-over-photo (Now Enrolling etc.) → the Bug-B backdrop ladder (band).
+          if(heroFinal && heroBox){ resolveZoneTc(heroBox); drawBackdrop(heroBox,"bottom",false); }
+          if(supportText && supBox){ resolveZoneTc(supBox); drawBackdrop(supBox,"bottom",false); }
+          if(heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc(heroBox); heroInk=zoneTc; }
+        }
+        // (fix #1 ASSERTION) the micro-label box MUST sit fully on-canvas inside safe
+        // margins — the original crop bug. Clamp + record a drift flag if it ever escapes.
+        if(heroBox && (live||opts.captureAudit)){
+          const offCanvas = heroBox.x<0 || heroBox.y<0 || heroBox.x+heroBox.w>w || heroBox.y+heroBox.h>h;
+          if(offCanvas && auditRef.current?.archetypeDrift) auditRef.current.archetypeDrift.labelOffCanvas=true;
+        }
       }
       // hero
       if(!isSchedule && heroFinal && heroBox){
@@ -4070,7 +4117,8 @@ export default function App() {
           align:(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left",
           register, caps:mat.caps||isBigNum, start:reflow.heroStart, minSize:reflow.heroMin,
           exactSize:reflow.heroPx,
-          leading: register==="serif"?1.02:1.05,
+          leading: mat.heroLeading || (register==="serif"?1.02:1.05),
+          tracking: mat.heroTracking || 0,   // (r3 fix #3) closing-card serif tracking
           // (WP-P §7 INK DISCIPLINE) The accent-coloured emphasis word is RETIRED — the
           // accent now lives ONLY in the pill/CTA. The italic emphasis word still reads
           // as italic, but in the SAME hero ink (never a second colour at the hero level).
@@ -4093,6 +4141,18 @@ export default function App() {
           ctx.font=`italic 400 ${sf.size}px ${F.title}`;
           drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
           fontMeta.subtext=sf.size;
+        }else if(/\n/.test(supportText)){
+          // (r3 fix #4) STACKED DETAIL LINES — the enrolment CTA details ("Term 3, 2026 /
+          // Ages four to twelve / Afterschool care") are authored with newlines and render
+          // as discrete stacked lines (no " | " run-on). Size to fit all lines in the box.
+          const rawLines=supportText.split(/\n+/).map(l=>l.trim()).filter(Boolean).slice(0,4);
+          const widest=rawLines.reduce((a,l)=>Math.max(a,l.length),1);
+          let ssz=Math.min(supBox.h/(rawLines.length*1.5), supBox.w/(widest*0.56));
+          ssz=Math.max(reflow.supMin||supBox.h*0.12, Math.min(ssz, reflow.supStart||supBox.h*0.3));
+          ctx.font=`300 ${ssz}px ${F.body}`; ctx.letterSpacing=`${0.01*ssz}px`;
+          drawTextLines(ctx,rawLines,supBox.x,supBox.y+ssz,supBox.w,ssz*1.5,supAlign);
+          ctx.letterSpacing="0px";
+          fontMeta.subtext=ssz;
         }else{
           // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
           // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
@@ -4126,14 +4186,43 @@ export default function App() {
       // nothing. Honour an explicit user logo placement (userLogoTouched); otherwise the
       // archetype/variant `logoUse` policy governs: none|url → no lockup, mark|lockup → draw.
       const logoUse = mat.logoUse || "url";
-      const drawLockup = userLogoTouched || logoUse==="lockup" || logoUse==="mark";
+      // (calibration r3 fix #2) LOGO PRESENCE — the client OVERRIDES the reference's
+      // restraint: solid tiles (statement/manifesto/cta/schedule/stat) now carry a small
+      // orchid MARK in a subtle corner; brand_card = centred lockup; closing_card = centred
+      // mark. Photo tiles stay logo-free (logoUse:"none"). The mark is the orchid-petal
+      // glyph tinted to the field's readable ink — small, quiet, corner-anchored.
+      const markPos = provArch?.elements?.logo?.position || "bottom-right";
+      const wantMark = logoUse==="mark" && !userLogoTouched;
+      const drawLockup = userLogoTouched || logoUse==="lockup";
       let logoOpts={};
-      if(logoUse==="mark" && !userLogoTouched) logoOpts.sizeId="s"; // mark = small
       if(!logoVariantTouched && !mat.fullBleed){
         const swap=readableLogoForField(hexLuminance(fieldColor));
         if(swap) logoOpts={...logoOpts,logoImg:swap.img,inkLum:swap.inkLum};
       }
-      if(drawLockup) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
+      if(wantMark){
+        // Small tinted orchid mark, corner-anchored (or centred for closing_card via its
+        // logo.position). Readable ink: ivory on dark fields, deep green on light.
+        const orchid=archAssetImgs.current["orchid-petal"];
+        if(orchid){
+          const fieldLight=hexLuminance(fieldColor)>0.5;
+          const markColor=fieldLight?B.burnham:B.whiteSmoke;
+          const tinted=tintedAccessory(orchid,markColor);
+          if(tinted){
+            // Size from the archetype's logo sizeId: brand card lockup ("m") reads larger
+            // and centred; solid-tile corner marks stay small ("s") and quiet.
+            const markSizeId=provArch?.elements?.logo?.sizeId||"s";
+            const mSz=w*(markSizeId==="m"?0.13:markSizeId==="l"?0.16:0.072);
+            const isCentered=/center/.test(markPos);
+            const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
+            const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
+            containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
+          }
+        }
+      } else if(drawLockup) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
+      else if(logoUse==="lockup"){ /* archetype lockup w/o user touch handled below */ }
+      // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
+      // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
+      if(logoUse==="lockup" && !userLogoTouched) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,{...logoOpts});
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
@@ -4595,7 +4684,7 @@ export default function App() {
       // ── Row 3 ──
       { arch:"serif_word",  v:3, c:{ attribution:"ON PLAY", headline:"Play is the work of childhood." } },
       { arch:"documentary", v:0, photo:"studio", c:{ headline:"The studio", subtext:"" } },
-      { arch:"cta_card",    v:0, c:{ attribution:"ENROLMENT", headline:"Now *enrolling*", subtext:"Term 3, 2026 | Ages four to twelve | Afterschool care, Singapore" } },
+      { arch:"cta_card",    v:0, c:{ attribution:"ENROLMENT", headline:"Now *enrolling*", subtext:"Term 3, 2026\nAges four to twelve\nAfterschool care, Singapore" } },
       // ── Row 4 ──
       { arch:"schedule_tile", v:0, c:{ attribution:"A DAY HERE", subtext:"2.30 School pick-up | 3.30 Free play | 4.00 Tea together | 5.00 Gardens and making | 6.30 Stories | 7.00 Home" } },
       { arch:"stat_tile",   v:0, c:{ attribution:"OUR RATIO", dateText:"1 : 6", subtext:"one guide, six children — a room that stays quiet" } },
