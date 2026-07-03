@@ -77,28 +77,115 @@ function wantsDecoration(text) {
   return DECOR_INTENT.test(String(text || ''));
 }
 
-// ── LANDING VARIETY INJECTION (P1) ───────────────────────────────────────────
-// The landing handoff felt repetitive (same square + same background). We rotate a
-// SOFT style-direction hint into the system prompt per request. It's a suggestion the
-// model may override when the user's intent is specific; it just breaks the model out
-// of its single most-likely default. Stateless rotation keyed on the current minute
-// keeps successive requests landing on different combos without any shared state.
-const LANDING_DIRECTIONS = [
-  'lean minimal: solid burnham background, "text_post" layout, no overlay, generous negative space',
-  'warm photographic: a "photo_logo" or "texture_text" layout leading with imagery',
-  'soft pastel: a wisteria or celadon background with a "quote" layout',
-  'bold statement: jet background, large headline, "text_post" layout',
-  'fresh & airy: whiteSmoke background, "quote" or "text_post" layout, green logo',
-  'dated happening: an "event" layout (headline as the title, date only if given)',
-  'premium calm: burnham background, "quote" layout, ivory logo, restrained composition',
-  'friendly notice: celadon or whiteSmoke background, "text_post" layout, clear single message',
-];
+// ── EDITOR LAYOUT-INTENT GATE (Commit 1) ─────────────────────────────────────
+// In the editor, an archetype (layout) change should happen ONLY when the user
+// asks for a layout/style change. The model sometimes swaps the archetype on a
+// plain copy/colour tweak; this matches the vocabulary of a genuine layout request
+// so we can strip an unsolicited archetype swap server-side (keeping the layout put).
+const LAYOUT_INTENT = /\b(layout|poster|compos\w*|archetype|redesign|re-?design|template|big number|big date|date card|quote card|manifesto|photo card|floated card|documentary|full[- ]?bleed|duotone|portrait|credential|different look|another look|different style|switch (it|the) (up|layout)|make it a|turn (it|this) into)\b/i;
+function wantsLayoutChange(text) {
+  return LAYOUT_INTENT.test(String(text || ''));
+}
 
-function pickLandingDirection() {
-  // Cheap stateless rotation: minute bucket + a small random jitter so identical
-  // prompts fired seconds apart still tend to diverge across runs.
-  const idx = (Math.floor(Date.now() / 60_000) + Math.floor(Math.random() * LANDING_DIRECTIONS.length)) % LANDING_DIRECTIONS.length;
-  return LANDING_DIRECTIONS[idx];
+// ── LANDING ARCHETYPE SELECTION (Commit 1) ───────────────────────────────────
+// The landing handoff must now pick an EDITORIAL ARCHETYPE (docs/visual-language-
+// spec.md §2) for every plan, chosen by the user's intent. This compact catalog
+// mirrors ARCHETYPES in components/Generator.jsx (kept in sync by hand — the data
+// model lives in a client component and isn't importable here). Each carries:
+//   id            the archetype id (a valid PATCH_OPTIONS.archetypeId value)
+//   desc          one line the model reasons from
+//   suits         which post intents it fits (used for silent cap-override fallback)
+//   klass         "light" | "dark" — feeds the 25–30% dark-share cap (spec §3)
+//   cap           max fraction of a landing run this archetype may occupy (spec
+//                 frequency caps: petal_window ≤1-in-8 ≈0.12, motif_field ≈0.14…)
+//   palette       the palette-class hint surfaced in the rotation nudge
+const LANDING_ARCHETYPES = [
+  { id:'serif_word',        desc:'oversized serif hero word/phrase on a solid field — announcements, brand statements', suits:['text_post','quote','announcement'], klass:'light', cap:0.18, palette:'ivory field, burnham ink, one coral accent' },
+  { id:'editorial_split',   desc:'photo block + solid text block, seam off-center — dated events, hiring, photo moments', suits:['event','photo_logo','text_post'], klass:'light', cap:0.14, palette:'ivory text block beside a duotone photo' },
+  { id:'big_number',        desc:'a date or number at poster scale is the hero — open house, term start, deadlines', suits:['event'], klass:'light', cap:0.12, palette:'ivory field, big burnham numeral' },
+  { id:'full_bleed_duotone',desc:'photo full-bleed under a green duotone + one whisper caption — mood / seasonal photo moments', suits:['photo_logo','texture_text'], klass:'dark', cap:0.12, palette:'deep-green duotone photo, ivory whisper line' },
+  { id:'floated_card',      desc:'a small framed photo card floated on a solid field — friendly announcements, photo moments, events', suits:['photo_logo','event','texture_text'], klass:'light', cap:0.20, palette:'ivory field, one rounded photo card, coral accent' },
+  { id:'quote_margin',      desc:'an attributed quote with generous margin — quotes, testimonials, values', suits:['quote'], klass:'dark', cap:0.14, palette:'deep-green field, ivory quote' },
+  { id:'manifesto',         desc:'a short text-only paragraph, page-feel not billboard — mission, values, manifestos', suits:['text_post','quote'], klass:'light', cap:0.12, palette:'ivory field, serif body, one emphasis word' },
+  { id:'documentary',       desc:'a single clean candid photo, minimal overlay — behind-the-scenes, photo moments', suits:['photo_logo','texture_text'], klass:'dark', cap:0.10, palette:'near-full-color candid, thin brand border' },
+  { id:'label_headline',    desc:'a small all-caps eyebrow above a large serif headline — hiring, events, announcements', suits:['event','text_post','photo_logo'], klass:'light', cap:0.14, palette:'ivory field, tracked eyebrow + serif headline' },
+  { id:'portrait_credential',desc:'a portrait beside a name/title/credential — staff spotlight, new-teacher, testimonial', suits:['photo_logo','event','quote'], klass:'light', cap:0.10, palette:'ivory field, portrait photo + credential stack' },
+  { id:'motif_field',       desc:'a solid pastel field warmed by a few flat botanical/geometric motifs — playful values, enrollment', suits:['text_post','quote','event'], klass:'light', cap:0.14, palette:'soft pastel field, 2–3 flat motifs' },
+  { id:'petal_window',      desc:'a photo revealed through the orchid/petal mask on a solid field — SIGNATURE, only when the user names the petal/orchid/shape', suits:['photo_logo','texture_text','quote'], klass:'light', cap:0.12, palette:'ivory field, one orchid-mask photo window' },
+];
+const LANDING_ARCH_BY_ID = Object.fromEntries(LANDING_ARCHETYPES.map(a => [a.id, a]));
+// petal_window is doubly gated: the DECOR intent gate (below) AND its ≤1-in-8 cap.
+// It is never suggested in the rotation and never a cap-override fallback target.
+const CAP_SELECTABLE = LANDING_ARCHETYPES.filter(a => a.id !== 'petal_window');
+
+// Recent landing picks (last ~12) — a small in-memory ring so frequency caps are
+// enforced DETERMINISTICALLY server-side. Stateless clients can't be trusted to
+// vary; this shared ring across requests keeps petal ≤1-in-8, motif per spec, and
+// the combined dark share at 25–30%. Bounded so it never grows unboundedly.
+const RECENT_PICKS = [];
+const RECENT_MAX = 12;
+function recordPick(id) {
+  RECENT_PICKS.push(id);
+  if (RECENT_PICKS.length > RECENT_MAX) RECENT_PICKS.shift();
+}
+// Would adding `id` to the recent ring exceed its per-archetype cap OR the combined
+// dark-class share cap (spec §3: 25–30% dark, hard "never 3+ dark in a row")?
+function exceedsCap(id) {
+  const arch = LANDING_ARCH_BY_ID[id];
+  if (!arch) return false;
+  const window = [...RECENT_PICKS, id];
+  const n = window.length;
+  // Per-archetype cap: its share of the window must not exceed cap (with a small
+  // floor so early requests aren't blocked by a tiny denominator).
+  const own = window.filter(x => x === id).length;
+  if (n >= 4 && own / n > arch.cap + 1e-6) return true;
+  // Dark-class share cap: 30% ceiling, and never 3 dark in a row.
+  if (arch.klass === 'dark') {
+    const darkTail = RECENT_PICKS.slice(-2).every(x => LANDING_ARCH_BY_ID[x]?.klass === 'dark');
+    if (RECENT_PICKS.length >= 2 && darkTail) return true; // this would be the 3rd dark in a row
+    const darkShare = window.filter(x => LANDING_ARCH_BY_ID[x]?.klass === 'dark').length / n;
+    if (n >= 4 && darkShare > 0.32) return true;
+  }
+  return false;
+}
+// Deterministically resolve the FINAL archetype for a landing plan, honouring caps.
+// `picked` is the model's choice; `intent` is a suits[] tag guessed from the user's
+// message. If the pick busts a cap, silently override to the next suited archetype
+// that doesn't (preferring one matching the same intent), then the first that fits.
+function resolveLandingArchetype(picked, intent) {
+  const valid = picked && LANDING_ARCH_BY_ID[picked] ? picked : null;
+  // petal_window is only allowed when explicitly named (handled by the caller's
+  // DECOR gate); if it reached here it's already been vetted, so respect its cap too.
+  if (valid && !exceedsCap(valid)) return valid;
+  // Override: prefer a same-intent, cap-clear archetype; else any cap-clear one.
+  const bySuit = CAP_SELECTABLE.filter(a => a.id !== picked && (!intent || a.suits.includes(intent)) && !exceedsCap(a.id));
+  const any = CAP_SELECTABLE.filter(a => a.id !== picked && !exceedsCap(a.id));
+  return (bySuit[0] || any[0] || CAP_SELECTABLE[0]).id;
+}
+// Guess a coarse intent tag from the user's landing message, to route the cap
+// override toward a sensible fallback. Mirrors the model's own routing hints.
+function guessIntent(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\b(quote|saying|proverb|“|"|said)\b/.test(t)) return 'quote';
+  if (/\b(hiring|hire|join our team|vacancy|role|educator|teacher wanted|apply)\b/.test(t)) return 'text_post';
+  if (/\b(open house|term|enrol|enroll|sports day|date|deadline|\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/.test(t)) return 'event';
+  if (/\b(photo|picture|image|moment|snapshot|candid)\b/.test(t)) return 'photo_logo';
+  return 'text_post';
+}
+// Suggested archetype + palette-class hint for THIS request. Rotates over the
+// cap-clear, non-petal set (minute bucket + jitter) so successive requests diverge.
+function pickLandingArchetypeHint() {
+  const pool = CAP_SELECTABLE.filter(a => !exceedsCap(a.id));
+  const list = pool.length ? pool : CAP_SELECTABLE;
+  const idx = (Math.floor(Date.now() / 60_000) + Math.floor(Math.random() * list.length)) % list.length;
+  const a = list[idx];
+  return `${a.id} (${a.desc}) — palette: ${a.palette}`;
+}
+// Compact catalog block for the system prompt (id · desc · suits · class).
+function landingArchetypeCatalog() {
+  return LANDING_ARCHETYPES
+    .map(a => `- ${a.id} [${a.klass}] — ${a.desc}. Suits: ${a.suits.join(', ')}.`)
+    .join('\n');
 }
 
 // ── CAPTION WRITER (context:"caption") ───────────────────────────────────────
@@ -265,7 +352,7 @@ function isRateLimited(request) {
 function compactDesignState(raw) {
   if (!raw || typeof raw !== 'object') return {};
   const {
-    postType, dimensionId, bgColor, textColorId, backdropMode,
+    postType, archetypeId, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, fontSizes,
   } = raw;
@@ -273,7 +360,7 @@ function compactDesignState(raw) {
     ? raw.overlayLayers.map(l => ({ assetId: l.assetId, mode: l.mode || 'frame' }))
     : [];
   return {
-    postType, dimensionId, bgColor, textColorId, backdropMode,
+    postType, archetypeId: archetypeId ?? null, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
     logoId: selectedLogoId, logoPosition, logoSize,
     fontSizes: fontSizes || undefined,
@@ -358,19 +445,30 @@ export async function POST(request) {
     `overlay mode: ${PATCH_OPTIONS.overlayMode.join(', ')}`,
   ].join('\n');
 
-  const landingDirection = pickLandingDirection();
+  const landingArchetypeHint = pickLandingArchetypeHint();
   const contextRule = context === 'landing'
-    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
+    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set an ARCHETYPE (archetypeId), postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
 
-STYLE DIRECTION for THIS request (a soft suggestion — follow it unless the user's request clearly calls for something else): ${landingDirection}.
+ARCHETYPE — REQUIRED. You MUST set patch.archetypeId to one of these editorial compositions, chosen by the request's INTENT:
+${landingArchetypeCatalog()}
+Routing hints (choose the best fit, not always the same one):
+- a quote / saying / proverb → quote_margin or serif_word
+- a dated event (open house, term start, sports day, deadline) → big_number or editorial_split
+- hiring / a role → label_headline or portrait_credential
+- a photo moment → documentary, floated_card, or full_bleed_duotone
+- an announcement / brand statement → serif_word or motif_field
+- values / mission / manifesto copy → manifesto
+- petal_window ONLY when the user explicitly names the petal / orchid / shape / frame — otherwise NEVER pick it.
+SUGGESTED for THIS request (a soft nudge for variety — override only if intent clearly points elsewhere): ${landingArchetypeHint}.
 
 VARIETY (important — the studio has felt repetitive):
-- CHOOSE the postType, bgColor and dimensionId that best fit the REQUEST'S INTENT, and vary them meaningfully between different requests. Not everything is an Instagram square on the same background.
-  - A quote / saying → "quote" type. A hiring / announcement / reminder → "text_post" or "event". A dated happening (open house, sports day, term dates) → "event". A photo-led moment → "photo_logo" or "texture_text".
-  - Pick a background that suits the mood: burnham (calm, premium), whiteSmoke (light, airy), wisteria (soft, warm), celadon (fresh), jet (bold). Do not default to the same one every time.
+- CHOOSE the postType, bgColor and dimensionId that best fit the REQUEST'S INTENT, and vary them meaningfully between requests. Not everything is an Instagram square on the same background. Let the archetype's palette guide the bgColor (an archetype seeds its own field colour, so you can leave bgColor null to accept it, or set one that suits).
+  - A quote / saying → "quote" type. A hiring / announcement / reminder → "text_post" or "event". A dated happening → "event". A photo-led moment → "photo_logo" or "texture_text".
 - OVERLAYS / FRAMES: NEVER add an overlay (addOverlay) unless the user explicitly names the treatment — "frame", "petal", "orchid shape", "cut-out", "overlay". An invite, open house, celebration or festive post is NOT a reason to add one. Default is always NO overlay.
-- AESTHETIC: default to CLEAN and HIGH-CONTRAST. Prefer solid brand backgrounds with strongly contrasting text (ivory on burnham/jet, jet/burnham on whiteSmoke/celadon/wisteria). Generous breathing room: short copy, no more fields filled than the request needs. Avoid busy combinations (photo + overlay + long copy together). One focal idea per design.`
-    : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).`;
+- AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.`
+    : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).
+
+ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.`;
 
   const systemPrompt = `You are the Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
 
@@ -474,6 +572,41 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // request still lands its overlay on the cleared canvas.
   if (context === 'landing') {
     patch.removeOverlays = true;
+
+    // ── DETERMINISTIC ARCHETYPE + FREQUENCY CAPS (Commit 1) ──────────────────
+    // Every landing plan must carry an archetype. Resolve the model's pick against
+    // the server-side recent-picks ring so petal_window stays ≤1-in-8, motif_field
+    // per spec, and the dark-class share sits at 25–30% (never 3 dark in a row).
+    // petal_window survives ONLY if the user explicitly named the treatment (the
+    // same DECOR intent that gates overlays); otherwise it's overridden silently.
+    const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    const intent = guessIntent(lastUserText);
+    let picked = LANDING_ARCH_BY_ID[patch.archetypeId] ? patch.archetypeId : null;
+    if (picked === 'petal_window' && !wantsDecoration(lastUserText)) picked = null; // petal only when named
+    if (!picked) picked = resolveLandingArchetype(null, intent); // model omitted / invalid → pick suited
+    const finalArchetype = resolveLandingArchetype(picked, intent);
+    patch.archetypeId = finalArchetype;
+    recordPick(finalArchetype);
+  } else if (patch && patch.archetypeId != null && patch.archetypeId !== 'none') {
+    // ── EDITOR LAYOUT-CHANGE GUARD (Commit 1) ────────────────────────────────
+    const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    if (!wantsLayoutChange(lastUserText)) {
+      // No layout/style intent in the user's words → keep the layout put (strip the
+      // unsolicited archetype swap the model sometimes adds to a plain copy tweak).
+      delete patch.archetypeId;
+    } else if (LANDING_ARCH_BY_ID[patch.archetypeId]) {
+      // A genuine layout request: if the model echoed the CURRENT archetype, flip to
+      // a different suited one so the user visibly gets a new layout.
+      const cur = designState.archetypeId;
+      if (patch.archetypeId === cur) {
+        const intent = guessIntent(designState.postType || '');
+        const alt = CAP_SELECTABLE.find(a => a.id !== cur && a.suits.includes(intent))
+          || CAP_SELECTABLE.find(a => a.id !== cur);
+        if (alt) patch.archetypeId = alt.id;
+      }
+      // petal_window still requires an explicit naming, even under a layout request.
+      if (patch.archetypeId === 'petal_window' && !wantsDecoration(lastUserText)) patch.archetypeId = null;
+    }
   }
 
   // ── In-chat image generation (P4) ──
