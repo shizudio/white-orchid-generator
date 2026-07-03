@@ -3285,7 +3285,17 @@ export default function App() {
           drawPhotoFramed(octx,mediaObj,m.w,m.h,effImgTFor(m.w,m.h,true)); octx.restore();
           octx.globalCompositeOperation="source-over";
           octx.restore();
+          // Duotone the masked photo, then RE-MASK: applyDuotone's blend passes paint the
+          // whole rect (incl. the transparent area OUTSIDE the flower) at low alpha, leaving
+          // a faint tinted rectangle. Knock everything outside the flower back out with a
+          // destination-in pass of the orchid silhouette, so only the flower survives.
+          // (Fixes the sage-green rectangle regression behind the petal window.)
           applyDuotone(octx,m.x,m.y,m.w,m.h,{strength:1});
+          octx.save();
+          octx.globalCompositeOperation="destination-in";
+          octx.translate(m.x+m.w/2,m.y+m.h/2);
+          for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
+          octx.restore();
           ctx.drawImage(oc,0,0);
         }else if(m && orchid){
           const tinted=tintedAccessory(orchid,ARCHETYPE_COLORS.terracotta);
@@ -3300,7 +3310,14 @@ export default function App() {
       // 3. Text roles — positioned. hero via drawHeroText; support = caption; label =
       //    eyebrow. The REFLOW ENGINE (Commit 3) adjusts these measured boxes to
       //    de-collide before the final draw.
-      let heroBox=clampBox(mat.roles?.hero);
+      // The HERO box tracks the live text-layout x/y/width so DRAGGING the text (which
+      // writes typeLayouts[postType].{x,y,width} via updateTextLayout) moves the hero on
+      // a materialized design — the manual drag tool works by construction. The
+      // calibration override has no live layout, so it uses the materialized role box.
+      const heroSrc = overrideArch ? mat.roles?.hero
+        : { x:layout.x??mat.roles?.hero?.x, y:layout.y??mat.roles?.hero?.y,
+            w:layout.width??mat.roles?.hero?.w, h:mat.roles?.hero?.h, align:mat.roles?.hero?.align };
+      let heroBox=clampBox(heroSrc);
       let supBox=clampBox(mat.roles?.support);
       let labelBox=clampBox(mat.roles?.microLabel);
       const isBigNum=mat.usesDateAsHero;
@@ -3347,7 +3364,7 @@ export default function App() {
         beginText(); ctx.fillStyle=heroInk;
         const hr=drawHeroText(ctx,heroFinal,{
           x:heroBox.x,y:heroBox.y,maxW:heroBox.w,maxH:heroBox.h,
-          align:mat.roles?.hero?.align||"left",
+          align:(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left",
           register, caps:mat.caps||isBigNum, start:reflow.heroStart, minSize:reflow.heroMin,
           exactSize:reflow.heroPx,
           leading: register==="serif"?1.02:1.05,
@@ -3784,6 +3801,32 @@ export default function App() {
     };
     return () => { try { delete window.__woArchStress; } catch {} };
   }, [renderScene]);
+
+  /* ── CLIENT-REPRO HARNESS (Commit 4 verification, dev-only) ──────────────────
+     window.__woReproStep(step, arg?) drives ONE step of the client's exact repro
+     through the REAL state handlers (the same ones the UI buttons call), so the
+     walkthrough proves the two-systems defect is gone: apply archetype → change
+     text colour (applies) → add overlay (layout does NOT jump) → drag text (moves).
+     Returns a compact snapshot read back from the live audit after the next render. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__woReproStep = (step, arg) => {
+      if (step === "archetype") materializeArchetype(arg || "petal_window", { postType, attribution, subtext });
+      else if (step === "textColor") setTextColorId(arg || "tangerine");   // manual colour pick
+      else if (step === "addOverlay") { const asset = DEFAULT_OVERLAYS.find(o=>o.id===(arg||"acc-spark")); if (asset) { const t=suggestPlacement(asset.kind,asset.ratio,W,H); setOverlayLayers(prev=>[...prev.filter(l=>l.assetId!==asset.id),{uid:"ol_"+Math.random().toString(36).slice(2),assetId:asset.id,mode:"overlay",master:t,byDim:{}}]); } }
+      else if (step === "dragHero") updateTextLayout({ x: arg?.x ?? 0.12, y: arg?.y ?? 0.20 });   // = canvas drag
+      return step;
+    };
+    // Read the current live design fingerprint (hero geometry + colour + overlay count).
+    window.__woReproState = () => ({
+      archetypeId, textColorId, heroRegister, photoTreatment, photoFrameType: photoFrame?.type,
+      heroXY: { x: (typeLayouts[postType]?.x), y: (typeLayouts[postType]?.y), w: (typeLayouts[postType]?.width) },
+      hasRoles: !!(typeLayouts[postType]?.roles),
+      overlayCount: overlayLayers.length, motifCount: overlayLayers.filter(l=>l.motif).length,
+    });
+    return () => { try { delete window.__woReproStep; delete window.__woReproState; } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postType, attribution, subtext, archetypeId, textColorId, heroRegister, photoTreatment, photoFrame, typeLayouts, overlayLayers, W, H]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
      Fires after an AI patch's render commits. runLocalAudit identity changes on
