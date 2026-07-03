@@ -497,7 +497,9 @@ const ARCHETYPES = [
     furniture:[
       {type:"underline", x:0.33, y:0.175, w:0.09},
       {type:"index", text:"— No. 18", x:0.10, y:0.16, size:0.024, align:"left"},
-      {type:"counterweight", x:0.33, y:0.90},
+      // (R2a) ACCENT BADGE — event archetype carries the Higgsfield-style pill; shows
+      // only on accent variants (skipped on the dark variant). One-accent rule holds.
+      {type:"badge", text:"NOW ENROLLING", x:0.06, y:0.875, size:0.022, align:"left"},
     ],
     perDim:{ banner:{hero:{x:0.06,y:0.14,w:0.40,h:0.62},microLabel:{x:0.06,y:0.10,w:0.40,h:0.10},support:{x:0.50,y:0.30,w:0.44,h:0.40}} },
   },
@@ -640,6 +642,9 @@ const ARCHETYPES = [
     furniture:[
       {type:"underline", x:0.08, y:0.335, w:0.12},
       {type:"index", text:"09", x:0.92, y:0.335, size:0.028, align:"right"},
+      // (R2a) ACCENT BADGE for the announcement register (shows on accent variants only).
+      // Top-left band, above the kicker — the archetype's empty upper zone.
+      {type:"badge", text:"NOW ENROLLING", x:0.08, y:0.155, size:0.022, align:"left"},
       {type:"counterweight", x:0.08, y:0.90},
     ],
     perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
@@ -1300,7 +1305,8 @@ function measureHeroLines(ctx, words, register, size, maxW){
 // fillStyle + shadow before calling. register ∈ {serif, heavySans}.
 function drawHeroText(ctx, str, opts){
   const {x, y, maxW, maxH, align="left", register="serif", caps=false,
-         start=120, minSize=28, leading=1.02, exactSize=null} = opts;
+         start=120, minSize=28, leading=1.02, exactSize=null,
+         accentInk=null, baseInk=null} = opts;
   const src=caps? stripHeroMarkers(str).toUpperCase() : str;
   const words= caps
     ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
@@ -1341,10 +1347,15 @@ function drawHeroText(ctx, str, opts){
     ctx.textAlign="left";
     lineWords.forEach((wtok,wi)=>{
       ctx.font=heroFont(register,size,wtok.italic);
+      // (R2a) the ONE accent ink paints the ITALIC emphasis word(s); roman words keep
+      // baseInk. Only active when the caller passed an accentInk (suitable variants).
+      if(accentInk && wtok.italic){ ctx.fillStyle=accentInk; }
+      else if(baseInk){ ctx.fillStyle=baseInk; }
       ctx.fillText(wtok.text,cx,baseY);
       cx+=ctx.measureText(wtok.text).width;
       if(wi<lineWords.length-1) cx+=ctx.measureText(" ").width;
     });
+    if(baseInk) ctx.fillStyle=baseInk;
   });
   return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount};
 }
@@ -1355,8 +1366,10 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
   const tracking=Math.max(0.05,Math.min(0.12,opts.tracking==null?0.08:opts.tracking));
   const txt=stripHeroMarkers(str).toUpperCase();
   ctx.save();
-  ctx.font=`600 ${size}px ${F.subtitle}`;
-  ctx.letterSpacing=`${tracking*size}px`;
+  // (R1) THINNER micro-caption — Syne variable floors at 400, so drop 600→400 (its
+  // lightest weight) to lighten the eyebrow; +0.01em added to the caps tracking below.
+  ctx.font=`400 ${size}px ${F.subtitle}`;
+  ctx.letterSpacing=`${(tracking+0.01)*size}px`;
   ctx.textAlign=opts.align||"left";
   ctx.textBaseline="alphabetic";
   const tx=opts.align==="center"?x:opts.align==="right"?x:x;
@@ -1382,10 +1395,14 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
      {type:"index", text, x,y, size?, align?}– small numeral/index token (e.g. "01")
      {type:"counterweight", text?, x,y, size?, align?} – url/context line in the
         opposing region; defaults to a short brand line to balance the hero mass.
-   `ink` is the resolved field ink; `avoid` is a list of px boxes the furniture must
-   not overprint (hero/support/label/photo) — any item intersecting is skipped so we
-   never clutter or collide (anti-pattern #15/#16). */
-function drawFurniture(ctx, items, w, h, sm, ink, avoid){
+     {type:"badge", text, x,y, size?, align?} – (R2a) a small ACCENT pill/lozenge
+        (client's Higgsfield "NOW ENROLLING" reference): filled with the one accent ink,
+        ink-contrast caps label inside. Event/announcement archetypes only; counts as
+        the post's single accent (one-accent rule) so it appears only on accent variants.
+   `ink` is the resolved field ink; `accent` is the resolved accent hex (or null);
+   `avoid` is a list of px boxes the furniture must not overprint (hero/support/label/
+   photo) — any item intersecting is skipped so we never clutter or collide (#15/#16). */
+function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
   if(!Array.isArray(items)||!items.length) return;
   const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
   const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009)); // 0.5–1px @ common sizes
@@ -1395,6 +1412,15 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid){
       return {x:px(it.x),y:py(it.y)-hair,w:(it.w||0.1)*w,h:hair*2+2};
     }
     const s=(it.size||0.026)*h;
+    if(it.type==="badge"){
+      // caps label + tracking + a horizontal pill pad on each side.
+      const bs=(it.size||0.024)*h;
+      const padX=bs*0.9, padY=bs*0.55;
+      const tw=Math.max(20,(it.text||"").length*bs*0.66)+padX*2;
+      const th=bs+padY*2;
+      const ax=it.align==="right"?px(it.x)-tw:it.align==="center"?px(it.x)-tw/2:px(it.x);
+      return {x:ax,y:py(it.y)-th*0.5,w:tw,h:th};
+    }
     const tw=Math.max(20,(it.text||"").length*s*0.62);
     const ax=it.align==="right"?px(it.x)-tw:it.align==="center"?px(it.x)-tw/2:px(it.x);
     return {x:ax,y:py(it.y)-s,w:tw,h:s*1.3};
@@ -1416,9 +1442,9 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid){
       ctx.globalAlpha=it.alpha==null?0.7:it.alpha;
       ctx.fillStyle=ink;
       const s=(it.size||0.030)*h;
-      ctx.font=`600 ${s}px ${F.subtitle}`;
+      ctx.font=`400 ${s}px ${F.subtitle}`;  // (R1) lighter index token (Syne 400 floor)
       ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
-      ctx.letterSpacing=`${0.10*s}px`;
+      ctx.letterSpacing=`${0.11*s}px`;
       const tx=it.align==="right"?it.x*w:it.align==="center"?it.x*w:it.x*w;
       ctx.fillText(String(it.text==null?"01":it.text).toUpperCase(), tx, it.y*h);
       ctx.letterSpacing="0px";
@@ -1426,11 +1452,37 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid){
       ctx.globalAlpha=it.alpha==null?0.6:it.alpha;
       ctx.fillStyle=ink;
       const s=(it.size||0.024)*h;
-      ctx.font=`500 ${s}px ${F.subtitle}`;
+      ctx.font=`400 ${s}px ${F.subtitle}`;  // (R1) lighter counterweight line
       ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
-      ctx.letterSpacing=`${0.06*s}px`;
+      ctx.letterSpacing=`${0.07*s}px`;
       const tx=it.x*w;
       ctx.fillText(String(it.text==null?"thewhiteorchid.co":it.text), tx, it.y*h);
+      ctx.letterSpacing="0px";
+    }else if(it.type==="badge"){
+      // (R2a) ACCENT PILL — the one accent as a filled lozenge with a caps label
+      // (Higgsfield "NOW ENROLLING" reference). Skips silently if no accent resolved
+      // (dark/field variants) so it only surfaces the single accent on accent tiles.
+      if(!accent) continue;
+      const bs=(it.size||0.024)*h;
+      const padX=bs*0.9, padY=bs*0.55;
+      const txt=String(it.text==null?"NOW ENROLLING":it.text).toUpperCase();
+      ctx.font=`600 ${bs}px ${F.subtitle}`; ctx.letterSpacing=`${0.10*bs}px`;
+      const tw=ctx.measureText(txt).width+0.10*bs*Math.max(0,txt.length-1);
+      const pillW=tw+padX*2, pillH=bs+padY*2;
+      const px0=it.align==="right"?it.x*w-pillW:it.align==="center"?it.x*w-pillW/2:it.x*w;
+      const py0=it.y*h-pillH*0.5, rad=pillH*0.5;
+      ctx.globalAlpha=1; ctx.fillStyle=accent;
+      ctx.beginPath();
+      ctx.moveTo(px0+rad,py0);
+      ctx.arcTo(px0+pillW,py0,px0+pillW,py0+pillH,rad);
+      ctx.arcTo(px0+pillW,py0+pillH,px0,py0+pillH,rad);
+      ctx.arcTo(px0,py0+pillH,px0,py0,rad);
+      ctx.arcTo(px0,py0,px0+pillW,py0,rad);
+      ctx.closePath(); ctx.fill();
+      // label ink = higher-contrast pole against the accent fill.
+      ctx.fillStyle = hexLuminance(accent)>0.5 ? "#254E48" : "#F5F6E7";
+      ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+      ctx.fillText(txt, px0+padX, py0+padY+bs*0.82);
       ctx.letterSpacing="0px";
     }
   }
@@ -3592,6 +3644,16 @@ export default function App() {
       // applies on materialized designs (the client's exact bug).
       let inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
       if(textColorId&&textColorId!=="auto") inkColor=B[textColorId]||inkColor;
+      // (R2a) ACCENT ACTIVATION — resolve the ONE accent ink for this variant. When
+      // accentUse names a real colour (softTangerine on suitable pastel/ivory variants,
+      // or a pastel), the hero's ITALIC emphasis word renders in it (spec §3 mixed
+      // roman+italic; one-accent rule). "field"/"whiteSmoke"/"celadon" = no emphasis
+      // accent (the field or a same-family ink IS the accent). A user text-colour
+      // override suppresses the accent so their choice reads pure.
+      const accentActive = !textColorId || textColorId==="auto";
+      const accentInk = (accentActive && pal.accent && ARCHETYPE_COLORS[pal.accent]
+        && pal.accent!=="field" && pal.accent!=="whiteSmoke")
+        ? ARCHETYPE_COLORS[pal.accent] : null;
       // Clamp a role box (fractions) into this format's safe margins, in px. The box
       // is pulled fully INSIDE the safe rect: x/y are capped so that x+w and y+h never
       // cross the right/bottom margins (a box authored past the safe bottom on a tall
@@ -3769,6 +3831,11 @@ export default function App() {
           register, caps:mat.caps||isBigNum, start:reflow.heroStart, minSize:reflow.heroMin,
           exactSize:reflow.heroPx,
           leading: register==="serif"?1.02:1.05,
+          // (R2a) the italic *emphasis* word paints in the ONE accent ink (if any) —
+          // roman words stay in ink. Only on solid-field editorial tiles (accentInk
+          // is null on caps heroes and full-bleed/framed heroes).
+          accentInk: (!(mat.caps||isBigNum) && typeof accentInk!=="undefined") ? accentInk : null,
+          baseInk: heroInk,
         });
         endText();
         usedH=hr.usedH;
@@ -3778,9 +3845,13 @@ export default function App() {
       // support / caption
       if(supportText && supBox){
         beginText(); ctx.fillStyle=heroInk;
-        const sf=fitText(ctx,supportText,s=>`400 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
-        ctx.font=`400 ${sf.size}px ${F.body}`;
+        // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
+        // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
+        const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+        ctx.font=`300 ${sf.size}px ${F.body}`;
+        ctx.letterSpacing=`${0.01*sf.size}px`;
         drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,mat.roles?.support?.align||"left");
+        ctx.letterSpacing="0px";
         fontMeta.subtext=sf.size;
         endText();
       }
@@ -3796,7 +3867,7 @@ export default function App() {
           cardBox, maskBox,
           (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         ].filter(Boolean);
-        drawFurniture(ctx, mat.furniture, w, h, sm, heroInk, avoid);
+        drawFurniture(ctx, mat.furniture, w, h, sm, heroInk, avoid, accentInk);
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
