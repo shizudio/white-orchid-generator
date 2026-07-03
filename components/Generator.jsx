@@ -437,7 +437,7 @@ const ARCHETYPES = [
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
-    suitedPostTypes:["text_post","quote"], frequencyCap:0.18,
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.18, logoUse:"none", // (P1) statement tile: no logo
     // (T1) text-only tile read empty on v3 → 3 furniture tells: an underline under the
     // eyebrow, an index token top-right (counterweighting the top-left hero), and a
     // bottom-left counterweight url line balancing the caption side.
@@ -517,7 +517,7 @@ const ARCHETYPES = [
     // Full-bleed stays the deep-green statement register (spec §3): no pastel variants.
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:true,
-    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12,
+    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12, logoUse:"none", // (P1) full-bleed photo: no logo
     cropDrama:1.22, // (T8) full-bleed hero wants the most dramatic crop
     perDim:{ story:{hero:{x:0.06,y:0.66,w:0.70,h:0.14}} },
   },
@@ -559,7 +559,7 @@ const ARCHETYPES = [
     // Quote stays deep-green (spec §2.6 / §3): the statement register, no pastels.
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
-    suitedPostTypes:["quote"], frequencyCap:0.14,
+    suitedPostTypes:["quote"], frequencyCap:0.14, logoUse:"none", // (P1) statement/quote: no logo
     // (T1) v3 tile 6 "plain but composition slightly better" → 2 tells on the green
     // field: a short hairline rule above the quote (a quote-mark surrogate) and a
     // bottom counterweight opposite the attribution.
@@ -586,7 +586,7 @@ const ARCHETYPES = [
       {bg:"butter",    ink:"burnham",accentUse:"softTangerine",klass:"light"},
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
-    suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35,
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35, logoUse:"none", // (P1) manifesto: url line via furniture, no lockup
     // (T1) v3 tile 7 "plain, content small" → an index+underline at the top anchor and
     // a bottom counterweight give the manifesto page-feel structure.
     furniture:[
@@ -614,7 +614,7 @@ const ARCHETYPES = [
       {bg:"whiteSmoke",ink:"burnham",   accentUse:"field",klass:"light"},
     ],
     photoTreatment:"cleanGrain", heroRegister:"serif", caps:true,
-    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10,
+    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10, logoUse:"none", // (P1) documentary photo: label only
     cropDrama:1.20, // (T8) documentary honesty benefits from a bold, decisive crop
   },
   { // §2.9 Two-Tier Label + Headline
@@ -763,7 +763,7 @@ function archetypeVariant(arch,variantIdx){
   const base=arch?.palette||{bg:"whiteSmoke",ink:"burnham",accent:"softTangerine",klass:"light"};
   if(!vs) return {bg:base.bg,ink:base.ink,accentUse:base.accent,klass:base.klass||"light"};
   const v=vs[((variantIdx||0)%vs.length+vs.length)%vs.length];
-  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels};
+  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels,logoUse:v.logoUse};
 }
 function materializeArchetypeLayout(arch, dimId, variantIdx){
   const el=resolveArchetypeElements(arch,dimId);
@@ -798,6 +798,13 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
     // Palette resolved through the chosen VARIANT (bg/ink). accent = one emphasis ink
     // name, preserving the spec one-accent rule downstream.
     palette: {klass:V.klass, bg:V.bg, ink:V.ink, accent:V.accentUse||arch.palette?.accent||"softTangerine"},
+    // (WP-P P1) LOGO RESTRAINT — per-archetype/variant logo policy (feed-grammar §2).
+    // "none"  → no logo at all (statement/manifesto/stat/photo tiles)
+    // "url"   → a small light url line only (furniture-like), no lockup image
+    // "mark"  → the flower mark alone (small)
+    // "lockup"→ the full mark+wordmark lockup (brand/closing cards only)
+    // Variant may override the archetype default (V.logoUse); else arch.logoUse; else "url".
+    logoUse: V.logoUse || arch.logoUse || "url",
     variantIdx: variantIdx||0, variantCount: (arch.variants?.length||1),
   };
 }
@@ -3322,7 +3329,8 @@ export default function App() {
       const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
       const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,drawInkLum,frameBox);
       if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
-      const pct=LOGO_SIZES.find(s=>s.id===place.sizeId)?.pct||0.12,lSz=w*pct;
+      const effSizeId=logoOpts.sizeId||place.sizeId; // (P1) logoUse:"mark" forces small
+      const pct=LOGO_SIZES.find(s=>s.id===effSizeId)?.pct||0.12,lSz=w*pct;
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
       const[lx,ly]=logoCenter(pos,w,h,lSz);
       // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
@@ -3401,7 +3409,7 @@ export default function App() {
         photoTreatment:om.photoTreatment, photoFrame:frame, fullBleed:om.fullBleed, thinBorder:om.thinBorder,
         heroCapFrac:om.heroCapFrac, heroToSupport:om.heroToSupport, leading:om.leading, leadingBody:om.leadingBody,
         palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
-        motif:om.motif, furniture:om.furniture, cropDrama:om.cropDrama,
+        motif:om.motif, furniture:om.furniture, cropDrama:om.cropDrama, logoUse:om.logoUse,
       };
     }else{
       // Live materialized state. `editorial` is true when the design carries role
@@ -3424,7 +3432,7 @@ export default function App() {
         leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
         palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
         gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
-        cropDrama: specNums?.cropDrama||null,
+        cropDrama: specNums?.cropDrama||null, logoUse: specNums?.logoUse||null,
       };
     }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
@@ -3853,10 +3861,10 @@ export default function App() {
           register, caps:mat.caps||isBigNum, start:reflow.heroStart, minSize:reflow.heroMin,
           exactSize:reflow.heroPx,
           leading: register==="serif"?1.02:1.05,
-          // (R2a) the italic *emphasis* word paints in the ONE accent ink (if any) —
-          // roman words stay in ink. Only on solid-field editorial tiles (accentInk
-          // is null on caps heroes and full-bleed/framed heroes).
-          accentInk: (!(mat.caps||isBigNum) && typeof accentInk!=="undefined") ? accentInk : null,
+          // (WP-P §7 INK DISCIPLINE) The accent-coloured emphasis word is RETIRED — the
+          // accent now lives ONLY in the pill/CTA. The italic emphasis word still reads
+          // as italic, but in the SAME hero ink (never a second colour at the hero level).
+          accentInk: null,
           baseInk: heroInk,
         });
         endText();
@@ -3893,12 +3901,19 @@ export default function App() {
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
+      // (WP-P P1) LOGO RESTRAINT — the feed reference stamps the lockup on brand/closing
+      // cards ONLY; every other tile carries at most a url line (drawn as furniture) or
+      // nothing. Honour an explicit user logo placement (userLogoTouched); otherwise the
+      // archetype/variant `logoUse` policy governs: none|url → no lockup, mark|lockup → draw.
+      const logoUse = mat.logoUse || "url";
+      const drawLockup = userLogoTouched || logoUse==="lockup" || logoUse==="mark";
       let logoOpts={};
+      if(logoUse==="mark" && !userLogoTouched) logoOpts.sizeId="s"; // mark = small
       if(!logoVariantTouched && !mat.fullBleed){
         const swap=readableLogoForField(hexLuminance(fieldColor));
-        if(swap) logoOpts={logoImg:swap.img,inkLum:swap.inkLum};
+        if(swap) logoOpts={...logoOpts,logoImg:swap.img,inkLum:swap.inkLum};
       }
-      putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
+      if(drawLockup) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){

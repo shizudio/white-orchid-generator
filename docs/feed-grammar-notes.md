@@ -60,3 +60,30 @@ none | mark | lockup | url-only`; default for most archetypes = none or url-only
 5. Feed-rhythm sequencing in the AI rotation ring (photo/solid alternation, no adjacent
    palette repeats) + calibration board rendered as a FEED (this grid's rhythm).
 6. Optional (later): a "Feed planner" surface — compose N posts as a campaign with enforced rhythm.
+
+## 6. Grid reference #2 addenda (2026-07-04, second client grid in generated/)
+Client brief with it: "bright, airy, luminous, and all ~10-year-old Asian children."
+- PHOTOGRAPHY DIRECTIVE (applies to ALL Higgsfield generation): window light, bright/airy/
+  luminous, plants and whites; subjects are ~10-year-old ASIAN children (matches the brand's
+  actual student age); teachers appear ("BESIDE THEM" tile). Also OBJECT/STILL-LIFE photography
+  is in-grammar ("TEA AT FOUR": fruit plate + gingham cloth). Update lib/higgsfield.js
+  brandImagePrompt: casting + light + occasional still-life category.
+- NEW: SCHEDULE TILE archetype — eyebrow ("A DAY HERE"), rows of serif time + light sans
+  activity separated by hairline rules (2.30 School pick-up / 3.30 Free play / ...). Structured
+  list content; ivory field. Maps well to event/timetable content.
+- NEW: NO-TEXT PHOTO TILES — portrait tiles with zero or label-only text are legitimate feed
+  members (bottom-left smiling portrait had NOTHING).
+- Brand card LIGHT variant: butter field, deep-green solid-tone mark, wordmark + italic tagline.
+- Stat tile variant: "40 / children. Two gardens. / One quiet hum." — poetic multi-line caption.
+- Rhythm confirmed brighter overall: butter/photo/dark // photo/wisteria/photo //
+  celadon/photo/ivory // photo/dark/photo.
+
+## 7. Client type & colour rulings (2026-07-04, verbal)
+- MORE WHITESPACE: err even airier than current numbers; emptiness is on-brand.
+- NO HUGE TITLES: retire poster-scale 8-10x heroes for feed tiles — statements sit calm
+  (~3-5x caption), like both reference grids. Billboard scale only where a format demands it.
+- THINNER FONTS THROUGHOUT: hero serif at regular/light optical weight (no bold, no heavy
+  shadows); sans registers lean light (300-500); avoid 700+ except tiny tracked micro-labels.
+- INK DISCIPLINE: max 1-2 font colours per poster; if 2, they occupy DIFFERENT hierarchy
+  levels (e.g. deep-green hero + muted eyebrow), never two colours at the same level.
+  Kills accent-coloured emphasis words entirely — accent lives ONLY in the pill/CTA.
