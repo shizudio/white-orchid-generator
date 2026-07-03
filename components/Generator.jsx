@@ -2283,9 +2283,10 @@ export default function App() {
     let cancelled = false;
     const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
     if (!arch) return;
-    const wanted = new Set();
-    if (arch.special === "petalWindow") wanted.add("orchid-petal");
-    if (arch.special === "motifField") ["shape-1","shape-2","shape-3","acc-spark"].forEach(id=>wanted.add(id));
+    // Preload the FULL special-asset set once any archetype is active, so the
+    // calibration board (Commit 4) — which renders all 12 offscreen — always has the
+    // orchid mask + motif shapes ready, not just the assets the live archetype needs.
+    const wanted = new Set(["orchid-petal","shape-1","shape-2","shape-3","acc-spark"]);
     const need = [...wanted].filter(id => !archAssetImgs.current[id]);
     if (!need.length) return;
     Promise.all(need.map(id => {
@@ -2796,9 +2797,12 @@ export default function App() {
     // The elements rail keeps working because manual edits write the same override
     // state — but the archetype path derives its boxes from the spec, not the
     // legacy text-zone, so we render here and RETURN before the legacy branches.
-    const archActive = archetypeId && ARCHETYPES_BY_ID[archetypeId] && !hasFrame;
+    // opts.archOverride (Commit 4 calibration board) renders an ARBITRARY archetype
+    // offscreen without touching live state — the board loops all 12 through here.
+    const effArchId = opts.archOverride && ARCHETYPES_BY_ID[opts.archOverride] ? opts.archOverride : archetypeId;
+    const archActive = effArchId && ARCHETYPES_BY_ID[effArchId] && !hasFrame;
     if(archActive){
-      const arch=ARCHETYPES_BY_ID[archetypeId];
+      const arch=ARCHETYPES_BY_ID[effArchId];
       const el=resolveArchetypeElements(arch,dimId);
       const pal=arch.palette||{};
       const fieldColor=(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
@@ -2841,7 +2845,7 @@ export default function App() {
         const c=clampBox(el.card);
         if(c){
           const r=Math.max(0.06,Math.min(0.14,arch.cardRadiusFrac||0.10))*c.w;
-          const rot=(arch.suitedPostTypes.includes("photo_logo")||postType==="photo_logo")&&!arch.fullBleed?( (parseInt(archetypeId.length+ (headline||"").length)%2)?-3:3 ):0; // ±2–4° only on photo-moment (spec §5.4)
+          const rot=(arch.suitedPostTypes.includes("photo_logo")||postType==="photo_logo")&&!arch.fullBleed?( (parseInt(effArchId.length+ (headline||"").length)%2)?-3:3 ):0; // ±2–4° only on photo-moment (spec §5.4)
           ctx.save();
           ctx.translate(c.x+c.w/2,c.y+c.h/2); if(rot) ctx.rotate(rot*Math.PI/180); ctx.translate(-(c.x+c.w/2),-(c.y+c.h/2));
           // thin ivory/ink border card
@@ -2908,8 +2912,15 @@ export default function App() {
       // subtext/attribution→support. A short attribution becomes the eyebrow
       // (micro-label) when BOTH a support line (subtext) and a label slot exist.
       const isBigNum=arch.usesDateAsHero;
-      const heroFinal = isBigNum ? (dateText||headline||"") : (headline || "");
-      const supportText = subtext || attribution || (isBigNum?headline:"") || "";
+      // Calibration board (Commit 4) may inject per-cell content without touching
+      // state; fall back to the live copy fields otherwise.
+      const cc=opts.calibrationContent||null;
+      const ccHeadline=cc&&cc.headline!=null?cc.headline:headline;
+      const ccSubtext=cc&&cc.subtext!=null?cc.subtext:subtext;
+      const ccAttribution=cc&&cc.attribution!=null?cc.attribution:attribution;
+      const ccDateText=cc&&cc.dateText!=null?cc.dateText:dateText;
+      const heroFinal = isBigNum ? (ccDateText||ccHeadline||"") : (ccHeadline || "");
+      const supportText = ccSubtext || ccAttribution || (isBigNum?ccHeadline:"") || "";
       // Hero register: heavySans is the ≤1-in-3 poster register; "either" and the
       // serif default both render serif here (heavySans is opt-in per archetype).
       const register = arch.heroRegister==="heavySans" ? "heavySans" : "serif";
@@ -2917,7 +2928,7 @@ export default function App() {
       let heroInk=inkColor;
       if(arch.fullBleed && mediaObj && heroBox){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
       let usedH=0;
-      const eyebrow=(labelBox && arch.elements.microLabel && attribution && subtext && attribution.length<=28) ? attribution : "";
+      const eyebrow=(labelBox && arch.elements.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28) ? ccAttribution : "";
       if(eyebrow){
         ctx.save(); ctx.fillStyle=heroInk;
         const lblSize=Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h);
@@ -3282,6 +3293,54 @@ export default function App() {
     window.__runWoAudit = () => runLocalAudit();
     window.__runWoAuditAll = () => auditAllFormats();
   }, [runLocalAudit, auditAllFormats]);
+
+  /* ── CALIBRATION BOARD (Commit 4, dev-only) ──────────────────────────────────
+     window.__woCalibrationBoard(content?) renders the CURRENT design's content
+     through ALL 12 archetypes at ig_square into ONE tall labelled composite (3×4
+     grid) and returns + downloads a PNG dataURL for the client to score-tune the
+     spec numbers. Each cell renders via renderScene with opts.archOverride (no live
+     state mutation). If `content` is passed, its headline/subtext/attribution/
+     dateText override the current copy for the board only (per-cell, not state). */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__woCalibrationBoard = (content) => {
+      const CELL = 360;               // per-archetype tile (ig_square, downscaled)
+      const cols = 3, rows = 4, pad = 18, labelH = 26;
+      const boardW = cols * CELL + (cols + 1) * pad;
+      const boardH = rows * (CELL + labelH) + (rows + 1) * pad + 40;
+      const board = document.createElement("canvas");
+      board.width = boardW; board.height = boardH;
+      const bctx = board.getContext("2d");
+      bctx.fillStyle = "#EDECE4"; bctx.fillRect(0, 0, boardW, boardH);
+      bctx.fillStyle = "#254E48"; bctx.font = "700 20px " + (FU.subtitle || "sans-serif");
+      bctx.textBaseline = "alphabetic";
+      bctx.fillText("White Orchid — Archetype Calibration Board (ig_square)", pad, 28);
+      // Off-screen full-res cell canvas reused per archetype.
+      const cell = document.createElement("canvas"); cell.width = 1080; cell.height = 1080;
+      const cctx = cell.getContext("2d");
+      ARCHETYPE_IDS.forEach((id, i) => {
+        const col = i % cols, row = (i / cols) | 0;
+        const x = pad + col * (CELL + pad);
+        const y = 40 + pad + row * (CELL + labelH + pad);
+        try {
+          renderScene(cctx, 1080, 1080, { dimensionId: "ig_square", live: false, archOverride: id, calibrationContent: content || null });
+        } catch (_) { cctx.clearRect(0, 0, 1080, 1080); }
+        bctx.drawImage(cell, x, y, CELL, CELL);
+        bctx.strokeStyle = "#254E4833"; bctx.lineWidth = 1; bctx.strokeRect(x + 0.5, y + 0.5, CELL, CELL);
+        const arch = ARCHETYPES_BY_ID[id];
+        bctx.fillStyle = "#254E48"; bctx.font = "600 12px " + (FU.subtitle || "sans-serif");
+        bctx.fillText(`${i + 1}. ${arch?.name || id}`, x, y + CELL + 17);
+      });
+      const dataURL = board.toDataURL("image/png");
+      try {
+        const a = document.createElement("a");
+        a.href = dataURL; a.download = "wo-calibration-board.png";
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (_) { /* headless / no-DOM download — dataURL still returned */ }
+      return dataURL;
+    };
+    return () => { try { delete window.__woCalibrationBoard; } catch {} };
+  }, [renderScene]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
      Fires after an AI patch's render commits. runLocalAudit identity changes on
