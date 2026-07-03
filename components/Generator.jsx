@@ -15,6 +15,12 @@ const B = {
   tangerine:"#F6644E", yellowGreen:"#A5CF61", celadon:"#B4D6C0",
   ash:"#D1C8C8", jet:"#282B28",
   burnhamDk:"#1B3B36", celadonDeep:"#7FA88C",
+  // Curated pastel field family (spec §3 colour discipline, rev: childcare set).
+  // Low-chroma mid-high-value tints that read "premium nursery" beside burnham ink +
+  // ivory. Used as SOLID BACKGROUND FIELDS (the light-share of the feed), never as a
+  // second accent. terracotta is the one warm/saturated member (the §2.12 die-cut).
+  dustyPink:"#E7C9CC", butter:"#F2E2A8", sky:"#C4D8E2",
+  sage:"#C3D2BC", terracotta:"#D08C6E", lilac:"#D6C8E0",
 };
 
 const F = {
@@ -39,7 +45,20 @@ const BG_OPTIONS = [
   {id:"wisteria",label:"Wisteria",color:B.wisteria,light:false},
   {id:"celadon",label:"Celadon",color:B.celadon,light:false},
   {id:"jet",label:"Jet",color:B.jet,light:true},
+  // Curated pastel fields (spec §3) — selectable brand backgrounds, all light-value.
+  {id:"dustyPink",label:"Dusty Pink",color:B.dustyPink,light:false},
+  {id:"butter",label:"Butter",color:B.butter,light:false},
+  {id:"sky",label:"Sky",color:B.sky,light:false},
+  {id:"sage",label:"Sage",color:B.sage,light:false},
+  {id:"terracotta",label:"Terracotta",color:B.terracotta,light:false},
+  {id:"lilac",label:"Lilac",color:B.lilac,light:false},
 ];
+// The pastel bg ids (the light-share rotation draws from these ~1-in-3 of light picks).
+const PASTEL_BG_IDS = ["dustyPink","butter","sky","sage","terracotta","lilac","wisteria","celadon"];
+// Full set of valid background field ids (incl. the sanctioned pastels). Used to gate
+// a materialized VARIANT bg — which is brand-sanctioned and may be a pastel NOT in the
+// tighter AI-facing PATCH_OPTIONS.bgColor enum.
+const BG_ID_SET = new Set(BG_OPTIONS.map(o => o.id));
 const TEXT_COLOR_OPTIONS = [
   {id:"auto",label:"Auto"},
   {id:"whiteSmoke",label:"White Smoke"},
@@ -405,6 +424,14 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.36,heroToSupport:9},
     whitespace:0.52, gridAnchor:"edge", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Sanctioned palette variants (spec §3): serif_word is a prime pastel carrier.
+    // {bg, ink, accentUse, klass}; one-accent rule preserved (accent = emphasis ink).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"butter",    ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"dustyPink", ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.18,
     perDim:{ story:{hero:{x:0.06,y:0.16,w:0.88,h:0.40}}, banner:{hero:{x:0.05,y:0.14,w:0.60,h:0.62},support:{x:0.05,y:0.78,w:0.50,h:0.14}} },
@@ -421,6 +448,12 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.14,heroToSupport:7}, split:0.60,
     whitespace:0.25, gridAnchor:"edge", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Split text block stays neutral (ivory/sage) so the duotone photo carries colour.
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sage",      ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
     perDim:{ story:{photo:{x:0,y:0.58,w:1,h:0.42},hero:{x:0.08,y:0.10,w:0.84,h:0.28},support:{x:0.08,y:0.40,w:0.84,h:0.14}} },
@@ -436,6 +469,11 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.44,heroToSupport:9}, thirdsX:0.34,
     whitespace:0.52, gridAnchor:"thirds", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sky",       ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["event"], frequencyCap:0.12, usesDateAsHero:true,
     perDim:{ banner:{hero:{x:0.06,y:0.14,w:0.40,h:0.62},microLabel:{x:0.06,y:0.10,w:0.40,h:0.10},support:{x:0.50,y:0.30,w:0.44,h:0.40}} },
@@ -451,6 +489,8 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.05,heroToSupport:6},
     whitespace:0.0, gridAnchor:"thirds", centerExclude:true, fullBleed:true,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    // Full-bleed stays the deep-green statement register (spec §3): no pastel variants.
+    variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12,
     perDim:{ story:{hero:{x:0.06,y:0.66,w:0.70,h:0.14}} },
@@ -467,6 +507,13 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
     whitespace:0.50, gridAnchor:"thirds", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Floated-card is a prime pastel carrier (spec §2.5: bg may be a curated pastel).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"dustyPink", ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sky",       ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sage",      ink:"burnham",accentUse:"softTangerine",klass:"light"},
+    ],
     photoTreatment:"cleanGrain", heroRegister:"either", caps:false,
     suitedPostTypes:["photo_logo","event","texture_text"], frequencyCap:0.20,
     special:"floatedCard", cardRadiusFrac:0.10, // rounded corners 6–14% card W
@@ -483,6 +530,8 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.10,heroToSupport:3}, // attribution 0.30–0.40× of quote
     whitespace:0.58, gridAnchor:"edge", centerExclude:false,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    // Quote stays deep-green (spec §2.6 / §3): the statement register, no pastels.
+    variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["quote"], frequencyCap:0.14,
     perDim:{ banner:{hero:{x:0.10,y:0.14,w:0.80,h:0.50}} },
@@ -497,6 +546,12 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.09,heroToSupport:4}, // carousel-page relaxes to 4–6×
     whitespace:0.48, gridAnchor:"center-column", centerExclude:false,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Manifesto is a pastel carrier (spec §2.7: bg = ivory or a curated pastel).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"lilac",     ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"butter",    ink:"burnham",accentUse:"softTangerine",klass:"light"},
+    ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35,
     perDim:{ banner:{hero:{x:0.06,y:0.18,w:0.88,h:0.56}} },
@@ -511,6 +566,11 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.04,heroToSupport:6},
     whitespace:0.05, gridAnchor:"thirds", centerExclude:true, fullBleed:true, thinBorder:true,
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    // Documentary is a full-bleed photo; the field only shows through the whisper line.
+    variants:[
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"field",klass:"dark"},
+      {bg:"whiteSmoke",ink:"burnham",   accentUse:"field",klass:"light"},
+    ],
     photoTreatment:"cleanGrain", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10,
   },
@@ -525,6 +585,13 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
     whitespace:0.42, gridAnchor:"edge", centerExclude:false,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Label+headline is a pastel carrier (spec: mainly on serif/label archetypes).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sage",      ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"dustyPink", ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
     perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
@@ -541,6 +608,11 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.17,heroToSupport:7}, split:0.52,
     whitespace:0.20, gridAnchor:"edge", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"sky",       ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","event","quote"], frequencyCap:0.10,
     perDim:{ story:{photo:{x:0,y:0,w:1,h:0.52},hero:{x:0.06,y:0.60,w:0.84,h:0.22},support:{x:0.06,y:0.84,w:0.84,h:0.10},microLabel:{x:0.06,y:0.55,w:0.84,h:0.04}} },
@@ -556,6 +628,15 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.27,heroToSupport:8},
     whitespace:0.55, gridAnchor:"thirds", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"field"},
+    // Motif-warmed field is THE pastel-carrier archetype (spec §2.11 set-B signature).
+    // Each variant pairs a field with a harmonious motif family (motifPastels) — the
+    // motif set is the single "accent", so no separate tangerine accent (spec guardrail).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"field",klass:"light",motifPastels:["sage","butter"]},
+      {bg:"butter",    ink:"burnham",accentUse:"field",klass:"light",motifPastels:["sage","dustyPink"]},
+      {bg:"lilac",     ink:"burnham",accentUse:"field",klass:"light",motifPastels:["sky","celadon"]},
+      {bg:"sky",       ink:"burnham",accentUse:"field",klass:"light",motifPastels:["butter","dustyPink"]},
+    ],
     photoTreatment:"none", heroRegister:"either", caps:false,
     suitedPostTypes:["text_post","quote","event"], frequencyCap:0.14,
     special:"motifField", motifCount:3, motifPastels:["sage","butter"],
@@ -573,6 +654,13 @@ const ARCHETYPES = [
     scaleRatio:{heroCapFrac:0.22,heroToSupport:9},
     whitespace:0.52, gridAnchor:"thirds", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Petal window: solid field around the mask may be ivory, deep-green, or the ONE
+    // terracotta die-cut field (spec §2.12). Terracotta is a field, not a 2nd accent.
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+      {bg:"terracotta",ink:"whiteSmoke",accentUse:"whiteSmoke", klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
+    ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
     special:"petalWindow", maskAreaFrac:0.30, // 22–42% of canvas
@@ -609,9 +697,20 @@ function resolveArchetypeElements(arch,dimId){
    photoTreatment/photoFrame/heroRegister/microLabel state, so the archetype becomes
    ordinary editable state — no render fork. It is ALSO consulted per-dim so the
    materialized square geometry cascades into other formats' safe zones. */
-function materializeArchetypeLayout(arch, dimId){
+// Resolve the sanctioned palette variant for an archetype: variantIdx cycles the
+// archetype's `variants` array (picker re-click / rotation). Falls back to the base
+// palette. Returns {bg, ink, accentUse, klass, motifPastels?} — all valid B/BG ids.
+function archetypeVariant(arch,variantIdx){
+  const vs=arch&&Array.isArray(arch.variants)&&arch.variants.length?arch.variants:null;
+  const base=arch?.palette||{bg:"whiteSmoke",ink:"burnham",accent:"softTangerine",klass:"light"};
+  if(!vs) return {bg:base.bg,ink:base.ink,accentUse:base.accent,klass:base.klass||"light"};
+  const v=vs[((variantIdx||0)%vs.length+vs.length)%vs.length];
+  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels};
+}
+function materializeArchetypeLayout(arch, dimId, variantIdx){
   const el=resolveArchetypeElements(arch,dimId);
   const asRole=(b)=> b?{x:b.x,y:b.y,w:b.w,h:b.h,align:b.align||"left"}:null;
+  const V=archetypeVariant(arch,variantIdx);
   // Photo-frame intent from the archetype's special mode.
   let photoFrame={type:"none"};
   if(arch.special==="floatedCard" && el.card){
@@ -630,13 +729,16 @@ function materializeArchetypeLayout(arch, dimId){
     photoTreatment: arch.photoTreatment||"none",
     photoFrame,
     split: arch.split||null, sideFrac: arch.split||null,
-    motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:arch.motifPastels||["sage","butter"]}:null,
+    motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:V.motifPastels||arch.motifPastels||["sage","butter"]}:null,
     fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
     heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
     leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
     whitespace: typeof arch.whitespace==="number"?arch.whitespace:null,
     centerExclude: !!arch.centerExclude, gridAnchor: arch.gridAnchor||"edge",
-    palette: arch.palette||null,
+    // Palette resolved through the chosen VARIANT (bg/ink). accent = one emphasis ink
+    // name, preserving the spec one-accent rule downstream.
+    palette: {klass:V.klass, bg:V.bg, ink:V.ink, accent:V.accentUse||arch.palette?.accent||"softTangerine"},
+    variantIdx: variantIdx||0, variantCount: (arch.variants?.length||1),
   };
 }
 
@@ -879,14 +981,16 @@ function mixHex(a, b, t){
 const SOFT_TANGERINE = mixHex("#F6644E", "#F5F6E7", 0.10); // ≈ #F6705B
 const ARCHETYPE_COLORS = {
   softTangerine: SOFT_TANGERINE, // the codified accent (spec §3 / §5.2)
-  // Curated pastel family — one family per post (spec §3). Values are hand-tuned
-  // tints, not machine-mixed, to stay harmonious with burnham + ivory.
-  dustyPink:  "#E7C9CC",
-  butter:     "#F2E2A8",
-  sky:        "#C4D8E2",
-  sage:       "#C3D2BC",
-  terracotta: "#D08C6E", // the warm die-cut field (§2.12) — the saturated member
-  lilac:      "#D6C8E0",
+  // Curated pastel family — one family per post (spec §3). Single source of truth in
+  // B (also registered as selectable BG_OPTIONS fields).
+  dustyPink:  B.dustyPink,
+  butter:     B.butter,
+  sky:        B.sky,
+  sage:       B.sage,
+  terracotta: B.terracotta,
+  lilac:      B.lilac,
+  wisteria:   B.wisteria,
+  celadon:    B.celadon,
 };
 const PASTEL_IDS = ["dustyPink","butter","sky","sage","terracotta","lilac"];
 
@@ -1943,6 +2047,7 @@ export default function App() {
   // Archetype starting-point (Commit 3). null = legacy FORMAT_LAYOUTS path (100%
   // backward compatible). When set, renderScene resolves layout from ARCHETYPES.
   const [archetypeId, setArchetypeId] = useState(null);
+  const [archVariant, setArchVariant] = useState(0); // sanctioned palette-variant index
   const [bgColor, setBgColor] = useState("burnham");
   const [textColorId, setTextColorId] = useState("auto");
   const [suggestedTextColor, setSuggestedTextColor] = useState("whiteSmoke");
@@ -2221,7 +2326,8 @@ export default function App() {
     const pt = ctx.postType || postType;
     const attr = ctx.attribution ?? attribution;
     const sub = ctx.subtext ?? subtext;
-    const m = materializeArchetypeLayout(arch, MASTER_DIM);
+    const variant = ctx.variant ?? archVariant ?? 0;
+    const m = materializeArchetypeLayout(arch, MASTER_DIM, variant);
     const shortAttr = m.roles.microLabel && attr && attr.length <= 28 && sub;
     let frame = m.photoFrame || { type: "none" };
     if (frame.type === "card") {
@@ -2249,7 +2355,9 @@ export default function App() {
       }
     }
     return {
-      postType: pt, bg: (arch.palette?.bg && inList(arch.palette.bg,"bgColor")) ? arch.palette.bg : null,
+      // bg from the RESOLVED VARIANT palette (m.palette), not the base — this is how the
+      // sanctioned palette rotation lands on the canvas as a real bgColor.
+      postType: pt, bg: (m.palette?.bg && BG_ID_SET.has(m.palette.bg)) ? m.palette.bg : null,
       register: m.register, microLabel: shortAttr ? attr : "",
       photoTreatment: m.photoTreatment || "none", photoFrame: frame,
       layout, motifLayers,
@@ -2262,9 +2370,13 @@ export default function App() {
   // heroRegister, microLabel). Motifs → normal overlay layers. archetypeId is PROVENANCE
   // only — the renderer never forks on it.
   const materializeArchetype = (id, ctx = {}) => {
-    if (id === null || id === "none") { setArchetypeId(null); return; }
+    if (id === null || id === "none") { setArchetypeId(null); setArchVariant(0); return; }
     const mat = buildMaterialized(id, ctx); if (!mat) return;
     setArchetypeId(id);   // provenance
+    // Sanctioned palette-variant index travels with the materialization so the render
+    // path (specNums) resolves the SAME variant that wrote bgColor here. Explicit
+    // ctx.variant wins (rotation / picker re-click); otherwise reset to the base variant.
+    setArchVariant(ctx.variant ?? 0);
     if (mat.bg) setBgColor(mat.bg);
     setTextColorId("auto");
     setBackdropMode("auto");
@@ -2286,6 +2398,18 @@ export default function App() {
   };
   // Back-compat alias — older call sites (dev hook, patch path) call applyArchetype.
   const applyArchetype = (id) => materializeArchetype(id);
+  // Picker click: first click on an archetype materializes its base variant; clicking
+  // the ALREADY-ACTIVE archetype cycles to the next sanctioned palette variant (spec §3
+  // measured rotation, user-driven). Re-materializes so the new bg/ink/motif land.
+  const pickArchetype = (id) => {
+    if (id === null) { materializeArchetype(null); return; }
+    if (id === archetypeId) {
+      const arch = ARCHETYPES_BY_ID[id];
+      const count = arch?.variants?.length || 1;
+      if (count > 1) { materializeArchetype(id, { variant: (archVariant + 1) % count }); return; }
+    }
+    materializeArchetype(id);
+  };
 
   const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
@@ -2323,6 +2447,9 @@ export default function App() {
           postType: inList(patch.postType,"postType") ? patch.postType : postType,
           attribution: typeof patch.attribution==="string" ? patch.attribution : attribution,
           subtext: typeof patch.subtext==="string" ? patch.subtext : subtext,
+          // Server-side measured palette rotation supplies a sanctioned variant index
+          // (§3). Absent → base variant 0. materializeArchetype clamps the index.
+          variant: Number.isInteger(patch.archVariant) ? patch.archVariant : 0,
         });
         applied.push("archetypeId");
       }
@@ -2426,6 +2553,7 @@ export default function App() {
     if (!s) return;
     setPostType(s.postType);
     setArchetypeId("archetypeId" in s ? s.archetypeId : null);
+    setArchVariant(Number.isInteger(s.archVariant) ? s.archVariant : 0);
     setDimensionId(s.dimensionId);
     setHeadline(s.headline);
     setSubtext(s.subtext);
@@ -2967,7 +3095,7 @@ export default function App() {
     if(overrideArch){
       // Calibration board: temporary materialized state for an arbitrary archetype at
       // THIS dim, with per-cell content (no React state touched).
-      const om=materializeArchetypeLayout(overrideArch,dimId);
+      const om=materializeArchetypeLayout(overrideArch,dimId,opts.archVariant||0);
       const cc=opts.calibrationContent||null;
       const attrCC=cc&&cc.attribution!=null?cc.attribution:attribution;
       const subCC=cc&&cc.subtext!=null?cc.subtext:subtext;
@@ -2993,7 +3121,7 @@ export default function App() {
       // provArch supplies the numeric spec targets (cap frac / ratio) + fullBleed/
       // thinBorder/photoRegion shape. When the user has fully detached (edited copy on
       // a legacy design) provArch is null → non-editorial.
-      const specNums=provArch?materializeArchetypeLayout(provArch,dimId):null;
+      const specNums=provArch?materializeArchetypeLayout(provArch,dimId,archVariant):null;
       mat={
         roles: editorial?rolesGeom:null,
         photoRegion: specNums?specNums.photoRegion:null,
@@ -3712,7 +3840,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -3802,7 +3930,8 @@ export default function App() {
      dateText override the current copy for the board only (per-cell, not state). */
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.__woCalibrationBoard = (content) => {
+    window.__woCalibrationBoard = (content, variant) => {
+      const V = Number.isInteger(variant) ? variant : 0;
       const CELL = 360;               // per-archetype tile (ig_square, downscaled)
       const cols = 3, rows = 4, pad = 18, labelH = 26;
       const boardW = cols * CELL + (cols + 1) * pad;
@@ -3822,7 +3951,7 @@ export default function App() {
         const x = pad + col * (CELL + pad);
         const y = 40 + pad + row * (CELL + labelH + pad);
         try {
-          renderScene(cctx, 1080, 1080, { dimensionId: "ig_square", live: false, archOverride: id, calibrationContent: content || null });
+          renderScene(cctx, 1080, 1080, { dimensionId: "ig_square", live: false, archOverride: id, archVariant: V, calibrationContent: content || null });
         } catch (_) { cctx.clearRect(0, 0, 1080, 1080); }
         bctx.drawImage(cell, x, y, CELL, CELL);
         bctx.strokeStyle = "#254E4833"; bctx.lineWidth = 1; bctx.strokeRect(x + 0.5, y + 0.5, CELL, CELL);
@@ -4332,7 +4461,7 @@ export default function App() {
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); sSet(SK_DOC_TS, Date.now()); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
-    postType, archetypeId, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
+    postType, archetypeId, archVariant, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, heroRegister,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
@@ -4375,6 +4504,7 @@ export default function App() {
     const s = template?.state; if (!s) return;
     setPostType(s.postType || "photo_logo");
     setArchetypeId(ARCHETYPE_IDS.includes(s.archetypeId) ? s.archetypeId : null);
+    setArchVariant(Number.isInteger(s.archVariant) ? s.archVariant : 0);
     setDimensionId(s.dimensionId || "ig_square");
     setBgColor(s.bgColor || "burnham");
     setBgAlpha(s.bgAlpha ?? 1);
@@ -4416,7 +4546,7 @@ export default function App() {
     const tplArchId = ARCHETYPE_IDS.includes(s.archetypeId) ? s.archetypeId : null;
     const alreadyMaterialized = !!(s.typeLayouts && s.typeLayouts[s.postType]?.roles);
     if (tplArchId && !alreadyMaterialized) {
-      const mat = buildMaterialized(tplArchId, { postType: s.postType, attribution: s.attribution, subtext: s.subtext });
+      const mat = buildMaterialized(tplArchId, { postType: s.postType, attribution: s.attribution, subtext: s.subtext, variant: Number.isInteger(s.archVariant) ? s.archVariant : 0 });
       if (mat) {
         if (mat.bg) setBgColor(mat.bg);
         setHeroRegister(mat.register);
@@ -4991,7 +5121,7 @@ export default function App() {
                 const fieldC=(BG_OPTIONS.find(o=>o.id===a.palette?.bg)?.color)||B.whiteSmoke;
                 const inkC=(BG_OPTIONS.find(o=>o.id===a.palette?.ink)?.color)||B.burnham;
                 return (
-                  <button key={a.id} onClick={()=>applyArchetype(a.id)} aria-pressed={on} title={`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
+                  <button key={a.id} onClick={()=>pickArchetype(a.id)} aria-pressed={on} title={on&&(a.variants?.length||1)>1?`${a.name} — click again to cycle palette (${(archVariant%(a.variants.length))+1}/${a.variants.length})`:`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
                     style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?`${B.celadon}33`:"#fff",cursor:"pointer"}}>
                     <svg viewBox="0 0 40 40" style={{width:"100%",aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
                       <rect x="0" y="0" width="40" height="40" rx="3" fill={fieldC} stroke={`${B.ash}55`} strokeWidth="0.6"/>

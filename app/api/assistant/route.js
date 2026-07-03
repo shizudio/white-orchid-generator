@@ -128,6 +128,57 @@ function recordPick(id) {
   RECENT_PICKS.push(id);
   if (RECENT_PICKS.length > RECENT_MAX) RECENT_PICKS.shift();
 }
+
+// ── MEASURED PALETTE ROTATION (spec §3) ──────────────────────────────────────
+// Mirror of the client ARCHETYPES[].variants palette classes (bg + class per index)
+// — the server can't import the client component, so this table must stay in sync
+// with Generator.jsx. Each entry: { bg, kind } where kind ∈ {ivory,pastel,dark}.
+// Only the CLASS matters here (the client resolves exact ink/accent from the index).
+const LANDING_VARIANTS = {
+  serif_word:        [{bg:'whiteSmoke',kind:'ivory'},{bg:'butter',kind:'pastel'},{bg:'dustyPink',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  editorial_split:   [{bg:'whiteSmoke',kind:'ivory'},{bg:'sage',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  big_number:        [{bg:'whiteSmoke',kind:'ivory'},{bg:'sky',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  full_bleed_duotone:[{bg:'burnham',kind:'dark'}],
+  floated_card:      [{bg:'whiteSmoke',kind:'ivory'},{bg:'dustyPink',kind:'pastel'},{bg:'sky',kind:'pastel'},{bg:'sage',kind:'pastel'}],
+  quote_margin:      [{bg:'burnham',kind:'dark'}],
+  manifesto:         [{bg:'whiteSmoke',kind:'ivory'},{bg:'lilac',kind:'pastel'},{bg:'butter',kind:'pastel'}],
+  documentary:       [{bg:'burnham',kind:'dark'},{bg:'whiteSmoke',kind:'ivory'}],
+  label_headline:    [{bg:'whiteSmoke',kind:'ivory'},{bg:'sage',kind:'pastel'},{bg:'dustyPink',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  portrait_credential:[{bg:'whiteSmoke',kind:'ivory'}], // no variants array client-side → base only
+  motif_field:       [{bg:'whiteSmoke',kind:'ivory'},{bg:'butter',kind:'pastel'},{bg:'lilac',kind:'pastel'},{bg:'sky',kind:'pastel'}],
+  petal_window:      [{bg:'whiteSmoke',kind:'ivory'},{bg:'terracotta',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+};
+// Recent variant KINDS chosen (parallel to RECENT_PICKS) so pastel-share (~1-in-3 of
+// light picks) and dark-share (25–30%) are enforced deterministically across requests.
+const RECENT_VKINDS = [];
+function recordVKind(kind) {
+  RECENT_VKINDS.push(kind);
+  if (RECENT_VKINDS.length > RECENT_MAX) RECENT_VKINDS.shift();
+}
+// Deterministically choose a sanctioned variant index for `id`, given the recent
+// kind history. Rules (spec §3): dark share 25–30% (never 3 dark in a row); of the
+// LIGHT picks, ~1-in-3 should be pastel. Falls back to base index 0.
+function pickVariant(id) {
+  const vs = LANDING_VARIANTS[id];
+  if (!vs || vs.length <= 1) { recordVKind(vs?.[0]?.kind || 'ivory'); return 0; }
+  const n = RECENT_VKINDS.length;
+  const darkTail2 = RECENT_VKINDS.slice(-2).every(k => k === 'dark') && RECENT_VKINDS.length >= 2;
+  const darkShare = n ? RECENT_VKINDS.filter(k => k === 'dark').length / n : 0;
+  const lightCount = RECENT_VKINDS.filter(k => k !== 'dark').length;
+  const pastelCount = RECENT_VKINDS.filter(k => k === 'pastel').length;
+  const pastelShareOfLight = lightCount ? pastelCount / lightCount : 0;
+  const wantDark = vs.some(v => v.kind === 'dark') && !darkTail2 && darkShare < 0.27;
+  const wantPastel = vs.some(v => v.kind === 'pastel') && pastelShareOfLight < 0.34;
+  // Priority: fill the dark quota when under target, else the pastel quota, else ivory.
+  const order = wantDark ? ['dark','pastel','ivory'] : wantPastel ? ['pastel','ivory','dark'] : ['ivory','pastel','dark'];
+  let idx = 0;
+  for (const kind of order) {
+    const i = vs.findIndex(v => v.kind === kind);
+    if (i >= 0) { idx = i; break; }
+  }
+  recordVKind(vs[idx].kind);
+  return idx;
+}
 // Would adding `id` to the recent ring exceed its per-archetype cap OR the combined
 // dark-class share cap (spec §3: 25–30% dark, hard "never 3+ dark in a row")?
 function exceedsCap(id) {
@@ -587,6 +638,10 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     const finalArchetype = resolveLandingArchetype(picked, intent);
     patch.archetypeId = finalArchetype;
     recordPick(finalArchetype);
+    // Measured palette rotation (spec §3): pick a sanctioned variant index for this
+    // archetype, enforcing pastel-share (~1-in-3 of light) + dark-share (25–30%)
+    // deterministically. The client materializes this exact variant.
+    patch.archVariant = pickVariant(finalArchetype);
   } else if (patch && patch.archetypeId != null && patch.archetypeId !== 'none') {
     // ── EDITOR LAYOUT-CHANGE GUARD (Commit 1) ────────────────────────────────
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
