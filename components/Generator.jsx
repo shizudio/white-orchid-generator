@@ -4048,6 +4048,20 @@ export default function App() {
           setTextBounds(zh);
         }
       }
+      // (Bug B fix) FULL-BLEED TEXT LEGIBILITY — the editorial branch draws hero/support
+      // straight onto the photo relying only on the zone colour-flip + soft shadow, with
+      // NO backdrop. On a bright photo (e.g. the Now Enrolling starter) white whisper text
+      // lands at ~2:1, failing the contrast floor with no remedy. So when text sits ON a
+      // full-bleed photo, run the SAME drawBackdrop ladder the stacked path uses: Auto
+      // drops a solid brand band only where the zone is too busy/bright; an explicit
+      // backdropMode ("band"/"none") is honoured. Solid-field tiles (no mediaObj / not
+      // full-bleed) are unaffected — drawBackdrop no-ops without a photo.
+      if(mat.fullBleed && mediaObj){
+        if(heroFinal && heroBox){ resolveZoneTc(heroBox); drawBackdrop(heroBox,"bottom",false); }
+        if(supportText && supBox){ resolveZoneTc(supBox); drawBackdrop(supBox,"bottom",false); }
+        // Re-resolve the hero ink against the (now backdropped) zone so ink + band agree.
+        if(heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc(heroBox); heroInk=zoneTc; }
+      }
       // hero
       if(!isSchedule && heroFinal && heroBox){
         beginText(); ctx.fillStyle=heroInk;
