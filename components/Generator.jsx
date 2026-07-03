@@ -615,7 +615,8 @@ const ARCHETYPES = [
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"field",klass:"dark"},
       {bg:"whiteSmoke",ink:"burnham",   accentUse:"field",klass:"light"},
     ],
-    photoTreatment:"cleanGrain", heroRegister:"serif", caps:true,
+    // (P3) label-only photo tile → warm grade (near-raw, bright/airy) not duotone.
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10, logoUse:"none", // (P1) documentary photo: label only
     cropDrama:1.20, // (T8) documentary honesty benefits from a bold, decisive crop
   },
@@ -1296,6 +1297,33 @@ function applyFilmGrain(ctx, x, y, w, h, opts={}){
   ctx.restore();
 }
 
+// (WP-P P3 / feed-grammar §4) WARM GRADE — the near-raw treatment the reference
+// photo tiles use: a gentle luminance lift + a soft warm cast, NOT a green duotone.
+// This is the default for LABEL-ONLY photo tiles (documentary / photo moments) where
+// the image's own honesty carries the tile; duotone stays reserved for text-on-photo.
+// Faint desat unifies variable classroom photos; a warm soft-light pass + a small
+// highlight lift keep it bright, airy and luminous (§6 photography brief).
+function applyWarmGrade(ctx, x, y, w, h, opts={}){
+  const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  // 1. very light desaturation (0–12%) to settle mixed-quality sources.
+  ctx.globalCompositeOperation="saturation";
+  ctx.globalAlpha=0.06+0.06*s;
+  ctx.fillStyle="#808080"; ctx.fillRect(x,y,w,h);
+  // 2. warm cast — a soft-light amber wash, restrained (0.06–0.12).
+  ctx.globalCompositeOperation="soft-light";
+  ctx.globalAlpha=0.06+0.06*s;
+  ctx.fillStyle="#F3E4C8"; ctx.fillRect(x,y,w,h); // warm ivory-amber
+  // 3. gentle highlight lift for the bright/airy feel (screen ivory, very light).
+  ctx.globalCompositeOperation="screen";
+  ctx.globalAlpha=0.05+0.05*s;
+  ctx.fillStyle="#F5F6E7"; ctx.fillRect(x,y,w,h);
+  ctx.restore();
+  // optional faint grain for the film feel, capped ≤0.06.
+  applyFilmGrain(ctx,x,y,w,h,{strength:0.15,desat:0,seed:opts.seed==null?2027:opts.seed});
+}
+
 // (§3.4-adjacent) Accent wash — a masked tangerine multiply, 0.08–0.12. Used
 // sparingly to warm a corner of a treated photo. `mask` optional (fn drawing a
 // clip path); default is the whole region.
@@ -1327,6 +1355,8 @@ const PHOTO_TREATMENTS = {
   duotoneStrong: (ctx,x,y,w,h)=>{ applyStrongDuotone(ctx,x,y,w,h); },
   // §2.5 floated card / already-art-directed: near-full color, faint grain only.
   cleanGrain:    (ctx,x,y,w,h)=>{ applyFilmGrain(ctx,x,y,w,h,{strength:0.2,desat:0.05}); },
+  // (P3) warm grade — near-raw, bright/airy, warm cast. Default for label-only photos.
+  warmGrade:     (ctx,x,y,w,h)=>{ applyWarmGrade(ctx,x,y,w,h,{strength:0.5}); },
   // No treatment (documentary clean).
   none:          ()=>{},
 };

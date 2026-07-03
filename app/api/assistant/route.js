@@ -155,6 +155,13 @@ const LANDING_ARCHETYPES = [
   { id:'schedule_tile',     desc:'a daily schedule: eyebrow ("A DAY HERE") + serif time rows + light activity lines separated by hairline rules on an ivory field — timetables, a day in the life', suits:['event','text_post'], klass:'light', cap:0.06, palette:'ivory field, serif times + light activities, hairline rules' },
 ];
 const LANDING_ARCH_BY_ID = Object.fromEntries(LANDING_ARCHETYPES.map(a => [a.id, a]));
+// (WP-P P3 / feed-grammar §1) FEED RHYTHM — photo-led vs solid-field tiles must
+// ALTERNATE across the grid (the reference's checkerboard). Classify each archetype.
+const PHOTO_LED = new Set([
+  'editorial_split', 'full_bleed_duotone', 'floated_card', 'documentary',
+  'portrait_credential', 'petal_window',
+]);
+const isPhotoLed = (id) => PHOTO_LED.has(id);
 // petal_window is doubly gated: the DECOR intent gate (below) AND its ≤1-in-8 cap.
 // It is never suggested in the rotation and never a cap-override fallback target.
 // petal_window + the logo-bearing bookends (brand/closing) are never silent-fallback
@@ -204,6 +211,9 @@ function recordVKind(kind) {
   RECENT_VKINDS.push(kind);
   if (RECENT_VKINDS.length > RECENT_MAX) RECENT_VKINDS.shift();
 }
+// (P3 FEED RHYTHM) Track the last chosen bg id so two adjacent solid tiles never share
+// the exact same field colour (feed-grammar §1: "no two adjacent solids share a palette").
+let LAST_BG = null;
 // Deterministically choose a sanctioned variant index for `id`, given the recent
 // kind history. Rules (spec §3): dark share 25–30% (never 3 dark in a row); of the
 // LIGHT picks, ~1-in-3 should be pastel. Falls back to base index 0.
@@ -222,10 +232,15 @@ function pickVariant(id) {
   const order = wantDark ? ['dark','pastel','ivory'] : wantPastel ? ['pastel','ivory','dark'] : ['ivory','pastel','dark'];
   let idx = 0;
   for (const kind of order) {
-    const i = vs.findIndex(v => v.kind === kind);
-    if (i >= 0) { idx = i; break; }
+    // (P3) no-adjacent-repeat: skip a candidate whose bg equals the last tile's bg,
+    // preferring another variant of the same kind when one exists.
+    const cands = vs.map((v, i) => ({ v, i })).filter(o => o.v.kind === kind);
+    const nonRepeat = cands.find(o => o.v.bg !== LAST_BG);
+    const chosen = nonRepeat || cands[0];
+    if (chosen) { idx = chosen.i; break; }
   }
   recordVKind(vs[idx].kind);
+  LAST_BG = vs[idx].bg;
   return idx;
 }
 // Would adding `id` to the recent ring exceed its per-archetype cap OR the combined
@@ -257,9 +272,16 @@ function resolveLandingArchetype(picked, intent) {
   // petal_window is only allowed when explicitly named (handled by the caller's
   // DECOR gate); if it reached here it's already been vetted, so respect its cap too.
   if (valid && !exceedsCap(valid)) return valid;
-  // Override: prefer a same-intent, cap-clear archetype; else any cap-clear one.
-  const bySuit = CAP_SELECTABLE.filter(a => a.id !== picked && (!intent || a.suits.includes(intent)) && !exceedsCap(a.id));
-  const any = CAP_SELECTABLE.filter(a => a.id !== picked && !exceedsCap(a.id));
+  // (P3 FEED RHYTHM) Prefer a fallback whose photo-led/solid class ALTERNATES off the
+  // last pick, so the resulting grid keeps the reference's checkerboard rather than
+  // clustering photos or solids. Applied as a soft sort key over the cap-clear pool.
+  const lastId = RECENT_PICKS[RECENT_PICKS.length - 1];
+  const wantPhotoLed = lastId ? !isPhotoLed(lastId) : false; // alternate off the last led-class
+  const rank = (a) => (isPhotoLed(a.id) === wantPhotoLed ? 0 : 1); // 0 = preferred alternation
+  // Override: prefer a same-intent, cap-clear archetype; else any cap-clear one — with
+  // alternation as the tie-breaker within each group.
+  const bySuit = CAP_SELECTABLE.filter(a => a.id !== picked && (!intent || a.suits.includes(intent)) && !exceedsCap(a.id)).sort((x, y) => rank(x) - rank(y));
+  const any = CAP_SELECTABLE.filter(a => a.id !== picked && !exceedsCap(a.id)).sort((x, y) => rank(x) - rank(y));
   return (bySuit[0] || any[0] || CAP_SELECTABLE[0]).id;
 }
 // Guess a coarse intent tag from the user's landing message, to route the cap
