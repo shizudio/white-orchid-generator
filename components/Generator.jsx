@@ -598,6 +598,48 @@ function resolveArchetypeElements(arch,dimId){
   return out;
 }
 
+/* ── ARCHETYPE MATERIALIZATION (Commit 1 — full unification) ──────────────────
+   materializeArchetypeLayout(arch, dimId) translates an archetype's element boxes
+   (§2 data) into the CONCRETE role geometry the SINGLE render path consumes:
+     { roles:{hero,support,microLabel} (canvas fractions {x,y,w,h,align}),
+       register, photoTreatment, photoFrame, split, sideFrac, motif, fullBleed,
+       thinBorder, heroCapFrac, heroToSupport, whitespace, centerExclude,
+       gridAnchor, palette, caps }
+   This is used at APPLY time to write typeLayouts[postType].roles (+byDim) and the
+   photoTreatment/photoFrame/heroRegister/microLabel state, so the archetype becomes
+   ordinary editable state — no render fork. It is ALSO consulted per-dim so the
+   materialized square geometry cascades into other formats' safe zones. */
+function materializeArchetypeLayout(arch, dimId){
+  const el=resolveArchetypeElements(arch,dimId);
+  const asRole=(b)=> b?{x:b.x,y:b.y,w:b.w,h:b.h,align:b.align||"left"}:null;
+  // Photo-frame intent from the archetype's special mode.
+  let photoFrame={type:"none"};
+  if(arch.special==="floatedCard" && el.card){
+    photoFrame={type:"card", box:asRole(el.card), radiusFrac:arch.cardRadiusFrac||0.10,
+      rotationDeg:0 /* set at apply-time for photo-moment only */};
+  }else if(arch.special==="petalWindow" && el.mask){
+    const c={x:(el.mask.x+el.mask.w/2),y:(el.mask.y+el.mask.h/2)};
+    photoFrame={type:"petalMask", box:asRole(el.mask), areaFrac:arch.maskAreaFrac||0.30, centroid:c};
+  }
+  return {
+    roles:{ hero:asRole(el.hero), support:asRole(el.support), microLabel:asRole(el.microLabel) },
+    photoRegion: asRole(el.photo),               // split/portrait side photo
+    register: arch.heroRegister==="heavySans"?"heavySans":"serif",
+    caps: !!(arch.caps||arch.usesDateAsHero),
+    usesDateAsHero: !!arch.usesDateAsHero,
+    photoTreatment: arch.photoTreatment||"none",
+    photoFrame,
+    split: arch.split||null, sideFrac: arch.split||null,
+    motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:arch.motifPastels||["sage","butter"]}:null,
+    fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
+    heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
+    leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
+    whitespace: typeof arch.whitespace==="number"?arch.whitespace:null,
+    centerExclude: !!arch.centerExclude, gridAnchor: arch.gridAnchor||"edge",
+    palette: arch.palette||null,
+  };
+}
+
 /* Resolution rule (documented per prompt):
    For a render dimension D and post type P, the effective text layout is:
      1. user override typeLayoutsByDim[D][P]  (written only when the user edits
@@ -609,11 +651,26 @@ function resolveArchetypeElements(arch,dimId){
         default (absolute positions do NOT translate and were the core bug).
    This is the single clean rule: absolute geometry is per-format (spec), while
    relative typographic intent (scale, alignment) follows the user's master. */
-function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim){
+function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim,arch){
   const override=typeLayoutsByDim?.[dimId]?.[postType];
   if(override)return override;
   const master=typeLayouts?.[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post;
   if(dimId===MASTER_DIM)return master;
+  // MATERIALIZED-ARCHETYPE geometry cascade (Commit 1): when an archetype is the
+  // design's provenance, its per-dim role geometry (perDim overrides in §2 data)
+  // is the correct absolute placement for THIS format's safe zones — the SAME way
+  // legacy pulls per-format spec defaults. This is geometry RESOLUTION, not a render
+  // fork: the single path renders identically whether roles came from here or a drag.
+  if(arch && master.roles){
+    const m=materializeArchetypeLayout(arch,dimId);
+    return {
+      x:m.roles.hero?.x??master.x, y:m.roles.hero?.y??master.y, width:m.roles.hero?.w??master.width,
+      align:m.roles.hero?.align??master.align??"left",
+      scale:master.scale??1,
+      lineHeight:master.lineHeight??(TYPE_LAYOUT_DEFAULTS[postType]?.lineHeight||1.16),
+      roles:m.roles, register:master.register,
+    };
+  }
   const fmt=formatLayoutFor(dimId,postType),tz=fmt.textZone;
   // ABSOLUTE geometry (x,y,width) ALWAYS comes from the per-format spec default —
   // master absolute positions do NOT translate across aspect ratios and were the
@@ -1704,6 +1761,24 @@ export default function App() {
   // Text backdrop treatment for text-over-photo (spec §5): auto | band | none.
   // (The old "gradient" treatment was removed 2026-07-02.)
   const [backdropMode, setBackdropMode] = useState("auto");
+  // ── MATERIALIZED ARCHETYPE VISUALS (Commit 1 — full unification) ──
+  // The archetype system is no longer a parallel render path keyed on archetypeId.
+  // Applying an archetype MATERIALIZES its visuals into first-class design state
+  // that the SINGLE render path (and every manual tool) reads by construction:
+  //   photoTreatment  PHOTO_TREATMENTS id (none|duotone|duotoneLift|filmGrain|
+  //                   duotoneStrong|cleanGrain) — composited over the photo region.
+  //   photoFrame      {type:"none"} | {type:"card",radiusFrac,rotationDeg} |
+  //                   {type:"petalMask",areaFrac,centroid:{x,y}} — the photo shape.
+  //   microLabel      the small all-caps eyebrow string (spec §2 label register).
+  //   heroRegister    "serif" | "heavySans" — editorial hero typography for the
+  //                   headline; null/"" keeps the legacy per-type caps-sans.
+  // Motifs (§2.11) are materialized as normal OVERLAY LAYERS (existing system).
+  // archetypeId remains PROVENANCE only (drift audit + picker highlight + AI sel);
+  // the renderer NEVER forks on it.
+  const [photoTreatment, setPhotoTreatment] = useState("none");
+  const [photoFrame, setPhotoFrame] = useState({ type: "none" });
+  const [microLabel, setMicroLabel] = useState("");
+  const [heroRegister, setHeroRegister] = useState("");   // "" = legacy caps-sans hero
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
   // the user adjusts layout while a non-master dimension is active (spec §1 user-edit model).
@@ -1913,6 +1988,10 @@ export default function App() {
   const snapshotApplyableState = () => ({
     postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
+    // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
+    // patch that materializes an archetype reverts cleanly as one action.
+    photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, heroRegister,
+    typeLayouts: JSON.parse(JSON.stringify(typeLayouts)),
     userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
     typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
@@ -1924,25 +2003,90 @@ export default function App() {
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
-  // Apply an archetype as a STARTING POINT (Commit 3/4): set archetypeId and seed
-  // its palette (bg/ink→textColor) + treatment defaults so the canvas restyles.
-  // Content fields + manual overrides are preserved — archetypes are starting
-  // points the user then edits (elements rail keeps writing the same override
-  // state as today). Passing null returns to the legacy free path.
-  const applyArchetype = (id) => {
-    if (id === null || id === "none") { setArchetypeId(null); return; }
-    const arch = ARCHETYPES_BY_ID[id]; if (!arch) return;
-    setArchetypeId(id);
-    // Palette: bg token + let text colour resolve auto (contrast-safe). Only set a
-    // known BG_OPTIONS token; archetype bg keys are burnham/whiteSmoke here.
-    if (arch.palette?.bg && inList(arch.palette.bg, "bgColor")) setBgColor(arch.palette.bg);
-    setTextColorId("auto");
-    // Backdrop stays auto (harmonizer/contrast still guarantees legibility).
-    setBackdropMode("auto");
-    // Let the archetype logo-contrast fix (Commit 3) pick the readable variant for
-    // the archetype's field (green on light, ivory on dark) — the user hasn't chosen.
-    setLogoVariantTouched(false);
+  // MATERIALIZE an archetype into first-class design state (Commit 1 — full
+  // unification). This is a ONE-SHOT write of concrete per-element values into the
+  // SAME state every manual tool edits: hero/support/label geometry into
+  // typeLayouts[postType].roles (+byDim where the current dim differs), textColorId
+  // (auto), bgColor, fontSizes intent, logoPosition/Size via explicit placement, and
+  // the NEW visual fields (photoTreatment, photoFrame, heroRegister, microLabel).
+  // Motifs (§2.11) become normal overlay layers. archetypeId is stored as PROVENANCE
+  // only (drift audit + picker highlight + AI selection) — the renderer never forks
+  // on it. Content fields are preserved; manual overrides then edit this same state.
+  // Pure: compute the materialized field values for archetype `id` given the copy
+  // context (postType + attribution/subtext for the eyebrow decision). Returns null
+  // for the "none" sentinel. Used by both the picker apply and template apply so the
+  // exact same materialization runs regardless of entry point (setState is async, so
+  // template apply passes its own copy rather than reading stale closures).
+  const buildMaterialized = (id, ctx = {}) => {
+    const arch = ARCHETYPES_BY_ID[id]; if (!arch) return null;
+    const pt = ctx.postType || postType;
+    const attr = ctx.attribution ?? attribution;
+    const sub = ctx.subtext ?? subtext;
+    const m = materializeArchetypeLayout(arch, MASTER_DIM);
+    const shortAttr = m.roles.microLabel && attr && attr.length <= 28 && sub;
+    let frame = m.photoFrame || { type: "none" };
+    if (frame.type === "card") {
+      const rot = (pt === "photo_logo" || arch.suitedPostTypes?.includes("photo_logo")) ? 3 : 0;
+      frame = { ...frame, rotationDeg: rot };
+    }
+    const layout = {
+      x: m.roles.hero?.x ?? 0.08, y: m.roles.hero?.y ?? 0.18,
+      width: m.roles.hero?.w ?? 0.8, align: m.roles.hero?.align || "left",
+      lineHeight: m.register === "heavySans" ? 1.05 : 1.02, scale: 1,
+      roles: m.roles, register: m.register,
+    };
+    let motifLayers = null;
+    if (m.motif) {
+      const spots = [[0.10,0.12],[0.88,0.16],[0.14,0.86],[0.86,0.84],[0.90,0.50]];
+      const shapes = ["shape-1","shape-2","shape-3","acc-spark"];
+      const pastels = (m.motif.pastels||["sage","butter"]);
+      const count = Math.max(2, Math.min(5, m.motif.count||3));
+      motifLayers = [];
+      for (let i=0;i<count;i++){
+        const [x,y]=spots[i%spots.length];
+        motifLayers.push({ uid:"ol_motif_"+i+"_"+Math.random().toString(36).slice(2,5),
+          assetId:shapes[i%shapes.length], mode:"overlay", motif:true,
+          master:{ x, y, scale:0.09, rotation:0, opacity:0.9, colorId:pastels[i%pastels.length] }, byDim:{} });
+      }
+    }
+    return {
+      postType: pt, bg: (arch.palette?.bg && inList(arch.palette.bg,"bgColor")) ? arch.palette.bg : null,
+      register: m.register, microLabel: shortAttr ? attr : "",
+      photoTreatment: m.photoTreatment || "none", photoFrame: frame,
+      layout, motifLayers,
+    };
   };
+  // MATERIALIZE an archetype into first-class design state (Commit 1 — full
+  // unification). ONE-SHOT write of concrete per-element values into the SAME state
+  // every manual tool edits: hero geometry into typeLayouts[postType].roles, textColorId,
+  // bgColor, logo (auto variant), and the NEW visual fields (photoTreatment, photoFrame,
+  // heroRegister, microLabel). Motifs → normal overlay layers. archetypeId is PROVENANCE
+  // only — the renderer never forks on it.
+  const materializeArchetype = (id, ctx = {}) => {
+    if (id === null || id === "none") { setArchetypeId(null); return; }
+    const mat = buildMaterialized(id, ctx); if (!mat) return;
+    setArchetypeId(id);   // provenance
+    if (mat.bg) setBgColor(mat.bg);
+    setTextColorId("auto");
+    setBackdropMode("auto");
+    setLogoVariantTouched(false);
+    setHeroRegister(mat.register);
+    setMicroLabel(mat.microLabel);
+    setPhotoTreatment(mat.photoTreatment);
+    setPhotoFrame(mat.photoFrame);
+    setTypeLayouts(prev => ({
+      ...prev,
+      [mat.postType]: { ...(prev[mat.postType] || TYPE_LAYOUT_DEFAULTS[mat.postType] || TYPE_LAYOUT_DEFAULTS.text_post), ...mat.layout },
+    }));
+    // Fresh materialization on master clears stale per-dim drags so the archetype's
+    // own per-dim geometry cascades (resolveTextLayout re-materializes per format).
+    setTypeLayoutsByDim({});
+    if (mat.motifLayers) setOverlayLayers(mat.motifLayers);
+    else setOverlayLayers(prev => prev.filter(l => !l.motif));
+    setSelOverlay(null);
+  };
+  // Back-compat alias — older call sites (dev hook, patch path) call applyArchetype.
+  const applyArchetype = (id) => materializeArchetype(id);
 
   const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
@@ -1973,7 +2117,16 @@ export default function App() {
     // + treatment defaults (mirrors the picker) so a chat patch restyles fully.
     if (patch.archetypeId !== undefined && patch.archetypeId !== null) {
       if (patch.archetypeId === "none" && archetypeId !== null) { setArchetypeId(null); applied.push("archetypeId"); }
-      else if (ARCHETYPE_IDS.includes(patch.archetypeId) && patch.archetypeId !== archetypeId) { applyArchetype(patch.archetypeId); applied.push("archetypeId"); }
+      else if (ARCHETYPE_IDS.includes(patch.archetypeId) && patch.archetypeId !== archetypeId) {
+        // Pass the patch's own copy so materialization (register/eyebrow/frame) uses
+        // the SAME values this patch is about to set, not stale closure state.
+        materializeArchetype(patch.archetypeId, {
+          postType: inList(patch.postType,"postType") ? patch.postType : postType,
+          attribution: typeof patch.attribution==="string" ? patch.attribution : attribution,
+          subtext: typeof patch.subtext==="string" ? patch.subtext : subtext,
+        });
+        applied.push("archetypeId");
+      }
     }
     if (inList(patch.dimensionId, "dimensionId") && patch.dimensionId !== dimensionId) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
     if (typeof patch.headline === "string" && patch.headline !== headline) { setHeadline(patch.headline); applied.push("headline"); }
@@ -1983,6 +2136,17 @@ export default function App() {
     if (inList(patch.bgColor, "bgColor") && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
     if (inList(patch.textColorId, "textColorId") && patch.textColorId !== textColorId) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
     if (inList(patch.backdropMode, "backdropMode") && patch.backdropMode !== backdropMode) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
+    // Materialized visuals (Commit 1). A direct tweak to the photo tone or frame on an
+    // existing design — applied AFTER any archetypeId materialization above so an
+    // explicit override wins. photoFrameType maps to the {type,...} object (card/petal
+    // geometry is re-derived from the active archetype's data, or a sensible default).
+    if (inList(patch.photoTreatment, "photoTreatment") && patch.photoTreatment !== photoTreatment) { setPhotoTreatment(patch.photoTreatment); applied.push("photoTreatment"); }
+    if (inList(patch.photoFrameType, "photoFrameType") && patch.photoFrameType !== (photoFrame?.type || "none")) {
+      if (patch.photoFrameType === "none") setPhotoFrame({ type: "none" });
+      else if (patch.photoFrameType === "card") setPhotoFrame({ type: "card", box: { x:0.54,y:0.32,w:0.38,h:0.42,align:"left" }, radiusFrac:0.10, rotationDeg:0 });
+      else if (patch.photoFrameType === "petalMask") setPhotoFrame({ type: "petalMask", box:{ x:0.62,y:0.34,w:0.34,h:0.44,align:"left" }, areaFrac:0.30, centroid:{ x:0.79, y:0.56 } });
+      applied.push("photoFrameType");
+    }
 
     if (inList(patch.logoId, "logoId") && patch.logoId !== selectedLogoId) {
       setSelectedLogoId(patch.logoId);
@@ -2071,6 +2235,12 @@ export default function App() {
     setBgColor(s.bgColor);
     setTextColorId(s.textColorId);
     setBackdropMode(s.backdropMode === "gradient" ? "auto" : s.backdropMode);
+    // Restore materialized archetype visuals (Commit 1) — older snapshots omit them.
+    setPhotoTreatment(s.photoTreatment || "none");
+    setPhotoFrame(s.photoFrame || { type: "none" });
+    setMicroLabel(s.microLabel || "");
+    setHeroRegister(s.heroRegister || "");
+    if (s.typeLayouts) setTypeLayouts(s.typeLayouts);
     setSelectedLogoId(s.selectedLogoId);
     setLogoPosition(s.logoPosition);
     setLogoSize(s.logoSize);
@@ -3769,6 +3939,7 @@ export default function App() {
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
     postType, archetypeId, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
+    photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, heroRegister,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
@@ -3816,6 +3987,13 @@ export default function App() {
     setTextColorId(s.textColorId || "auto");
     setExportFormat(s.exportFormat || "png");
     setBackdropMode(s.backdropMode === "gradient" || !s.backdropMode ? "auto" : s.backdropMode);
+    // Materialized archetype visuals (Commit 1). A template saved BEFORE unification
+    // (archetypeId set but no materialized fields) is re-materialized below so it
+    // renders through the single path; newer templates round-trip the fields verbatim.
+    setPhotoTreatment(s.photoTreatment || "none");
+    setPhotoFrame(s.photoFrame || { type: "none" });
+    setMicroLabel(s.microLabel || "");
+    setHeroRegister(s.heroRegister || "");
     setHeadline(s.headline || "");
     setSubtext(s.subtext || "");
     setAttribution(s.attribution || "");
@@ -3834,11 +4012,33 @@ export default function App() {
     setLogoByDim(s.logoByDim || {});
     setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
     setImgTByDim(s.imgTByDim || {});
-    setTypeLayouts(s.typeLayouts || freshTypeLayouts());
-    setTypeLayoutsByDim(s.typeLayoutsByDim || {});
     setFontSizes(s.fontSizes || freshFontSizes());
     const nextLayers=(s.overlayLayers || []).map(layer => ({ ...layer, uid:"ol_" + Math.random().toString(36).slice(2) }));
-    setOverlayLayers(nextLayers);
+    // Materialize the archetype (Commit 1): starter templates + templates saved before
+    // unification carry an archetypeId but no role geometry — re-materialize using the
+    // TEMPLATE's own copy (not stale closures) so hero geometry, register, treatment,
+    // frame, eyebrow and motif layers all land through the single render path. A newer
+    // template that already carries materialized typeLayouts.roles round-trips verbatim.
+    const tplArchId = ARCHETYPE_IDS.includes(s.archetypeId) ? s.archetypeId : null;
+    const alreadyMaterialized = !!(s.typeLayouts && s.typeLayouts[s.postType]?.roles);
+    if (tplArchId && !alreadyMaterialized) {
+      const mat = buildMaterialized(tplArchId, { postType: s.postType, attribution: s.attribution, subtext: s.subtext });
+      if (mat) {
+        if (mat.bg) setBgColor(mat.bg);
+        setHeroRegister(mat.register);
+        setMicroLabel(mat.microLabel);
+        setPhotoTreatment(mat.photoTreatment);
+        setPhotoFrame(mat.photoFrame);
+        const baseTL = s.typeLayouts || freshTypeLayouts();
+        setTypeLayouts({ ...baseTL, [mat.postType]: { ...(baseTL[mat.postType] || TYPE_LAYOUT_DEFAULTS[mat.postType] || TYPE_LAYOUT_DEFAULTS.text_post), ...mat.layout } });
+        setTypeLayoutsByDim({});
+        setOverlayLayers(mat.motifLayers || nextLayers.filter(l => !l.motif));
+      } else { setTypeLayouts(s.typeLayouts || freshTypeLayouts()); setTypeLayoutsByDim(s.typeLayoutsByDim || {}); setOverlayLayers(nextLayers); }
+    } else {
+      setTypeLayouts(s.typeLayouts || freshTypeLayouts());
+      setTypeLayoutsByDim(s.typeLayoutsByDim || {});
+      setOverlayLayers(nextLayers);
+    }
     setSelOverlay(null);
     setOverlayChromeVisible(false);
     setPhotoSel(false);
