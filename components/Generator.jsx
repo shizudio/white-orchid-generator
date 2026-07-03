@@ -698,9 +698,10 @@ const ARCHETYPES = [
   { // §2.12 Petal / Organic-Shape Photo Window
     id:"petal_window", name:"Petal Window",
     elements:{
-      // (T6) enlarged window to the spec's 22–42% canvas area at a thirds centroid
-      // (was w0.34×h0.44 → too small on v3 tile 12). Centroid ≈(0.77,0.57).
-      mask:{x:0.55,y:0.32,w:0.44,h:0.50},          // orchid-mask window (thirds)
+      // (T6→R2 R3b) SIGNATURE-SCALE window. v4 tile 12 still read as an accent, not a
+      // signature. Push to the spec ceiling: w/h ≈0.50–0.55, mask area toward 35–42%,
+      // centroid still on a thirds intersection ≈(0.71,0.60). Makes this the board hero.
+      mask:{x:0.46,y:0.34,w:0.52,h:0.54},          // orchid-mask window (thirds centroid)
       // (T6) tightened type block: eyebrow pulled to just above the hero (consistent
       // rhythm gap, one left edge at x0.08) — fixes "weird spacing between typefaces".
       microLabel:{x:0.08,y:0.27,w:0.44,h:0.05},
@@ -720,7 +721,7 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
-    special:"petalWindow", maskAreaFrac:0.34, // (T6) 22–42% of canvas — enlarged window
+    special:"petalWindow", maskAreaFrac:0.40, // (R3b) toward the 35–42% ceiling — signature scale
     perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.28},hero:{x:0.06,y:0.52,w:0.84,h:0.24},support:{x:0.06,y:0.80,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
 ];
@@ -1279,20 +1280,22 @@ function greedyHeroWrap(ctx, words, register, size, maxW){
 }
 function measureHeroLines(ctx, words, register, size, maxW){
   let best=greedyHeroWrap(ctx,words,register,size,maxW);
-  // (rev: calibration r1) BALANCED LINE WRAP — kill orphan short last lines like
-  // "Freedom / to / explore" (board v3 tile 5). If the last line is much narrower
-  // than the widest line (<35%) and doesn't shorten the whole block, progressively
-  // tighten the effective wrap width and re-wrap; keep the candidate whose last line
-  // is the least orphaned WITHOUT adding lines. Word-atomic (canvas can't split a
-  // word), so a genuinely unbreakable long word is left alone.
-  const orphanFrac=(r)=>{ const wmax=Math.max(...r.widths,1); return r.widths[r.widths.length-1]/wmax; };
+  // (rev: calibration r1 → r2 R3a) BALANCED LINE WRAP — kill orphan short lines.
+  // r1 only rescued the LAST line; r2 extends the rule to ANY line (incl. a lone
+  // MIDDLE line like the "to" in "Freedom / to / explore", board v4 tiles 2/5/12).
+  // Score = the NARROWEST line as a fraction of the widest; if any line is <35% of
+  // the widest, progressively tighten the effective wrap width and re-wrap, keeping
+  // the candidate whose worst line is the least orphaned WITHOUT adding lines.
+  // Word-atomic (canvas can't split a word), so a genuinely unbreakable long word is
+  // left alone (its short line can't be widened, but the loop simply keeps `best`).
+  const worstFrac=(r)=>{ const wmax=Math.max(...r.widths,1); return Math.min(...r.widths)/wmax; };
   if(best.lineCount>=2 && words.length>best.lineCount){
     const baseLines=best.lineCount;
-    let bestScore=orphanFrac(best);
-    for(let f=0.96; f>=0.72 && bestScore<0.35; f-=0.04){
+    let bestScore=worstFrac(best);
+    for(let f=0.96; f>=0.70 && bestScore<0.35; f-=0.04){
       const cand=greedyHeroWrap(ctx,words,register,size,maxW*f);
       if(cand.lineCount!==baseLines) continue; // never add/remove lines
-      const s=orphanFrac(cand);
+      const s=worstFrac(cand);
       if(s>bestScore){ best=cand; bestScore=s; }
     }
   }
@@ -1574,12 +1577,31 @@ function reflowEditorial(ctx, a){
     // honour this (spec: nothing crops at the canvas edge). This kills the "SEPTEMBER"
     // clipped-at-right-edge bug on long content in a narrow hero box.
     const widestWordFits=(size)=>{ let ok=true; for(const wt of words){ ctx.font=heroFont(register,size,wt.italic); if(ctx.measureText(wt.text).width>heroBox.w){ ok=false; break; } } return ok; };
+    const multiWord=words.length>=3; // orphan-shrink only helps when ≥3 words can re-pack
     let size=Math.max(heroStart,heroMin);
     let hitFloor=false;
     while(size>=heroMin){
       const fit=measureHeroLines(ctx,words,register,size,heroBox.w);
       if(fit.lineCount*size*lr<=heroBox.h && widestWordFits(size)){ heroPx=size; heroLineH=size*lr; heroUsedH=fit.lineCount*heroLineH; break; }
       size-=2;
+    }
+    // (R3a) ORPHAN-LINE SHRINK — when the chosen size leaves a lone short line (any
+    // line <35% of the widest, e.g. the "to" in "Freedom / to / explore" in a narrow
+    // box), try a modestly smaller size that re-wraps two short words onto one line.
+    // Bounded to ≥84% of the fitting size (and ≥heroMin) so the hero stays oversized;
+    // only accepted if it does NOT increase the line count. Fixes board v4 tiles 2/5/12.
+    if(heroPx>=heroMin && multiWord){
+      const worst=(sz)=>{ const g=greedyHeroWrap(ctx,words,register,sz,heroBox.w); const wmax=Math.max(...g.widths,1); return {frac:Math.min(...g.widths)/wmax,lines:g.lineCount}; };
+      const cur=worst(heroPx);
+      if(cur.frac<0.35){
+        const lo=Math.max(heroMin,Math.floor(heroPx*0.84));
+        for(let sz=heroPx-2; sz>=lo; sz-=2){
+          const c=worst(sz);
+          if(c.lines<=cur.lines && c.frac>=0.35 && sz*c.lines*lr<=heroBox.h && widestWordFits(sz)){
+            heroPx=sz; heroLineH=sz*lr; heroUsedH=c.lines*heroLineH; break;
+          }
+        }
+      }
     }
     if(size<heroMin){
       // Height/width still not satisfied at the min: keep shrinking (below the min)
@@ -3966,11 +3988,18 @@ export default function App() {
           const sz=0.14*Math.min(w,h)*szMul; // (T7) larger so motifs read as deliberate botanicals
           const box={x:fx*w-sz/2,y:fy*h-sz/2,w:sz,h:sz};
           if(ixm(box,heroObs)||ixm(box,supObs)) continue; // never crowd hero/caption
+          // (R3c) DEEPER MOTIFS — v4 tile 11 still read washy. Deepen the pastel toward
+          // burnham 0.30→0.42 (more saturation/contrast on the ivory field) and paint at
+          // full alpha so the shapes read as deliberate botanicals, not ghost blobs. ONE
+          // motif (the smaller last accent, index 2 = "acc-spark") takes the SOFT_TANGERINE
+          // accent among the pastels — the single accent-coloured motif the spec permits
+          // (one-accent rule: the motif family is the accent, this is one member of it).
+          const isAccentMotif = (i===2);
           const base=ARCHETYPE_COLORS[pastels[i%pastels.length]]||ARCHETYPE_COLORS.sage;
-          const deep=mixHex(base,B.burnham,0.30); // (T7) deepen more so it reads composed, not a ghost blob
+          const deep=isAccentMotif ? mixHex(SOFT_TANGERINE,B.burnham,0.12) : mixHex(base,B.burnham,0.42);
           const tinted=tintedAccessory(img,deep);
           const cx=box.x+sz/2, cy=box.y+sz/2;
-          if(tinted){ ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot*Math.PI/180); ctx.translate(-cx,-cy); containDraw(ctx,tinted,cx,cy,sz,sz,0.92); ctx.restore(); }
+          if(tinted){ ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot*Math.PI/180); ctx.translate(-cx,-cy); containDraw(ctx,tinted,cx,cy,sz,sz,1.0); ctx.restore(); }
         }
       }
       // Shared overlay-layer draw (motifs + any user accessories). Motifs are tinted
