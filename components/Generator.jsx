@@ -4305,12 +4305,18 @@ export default function App() {
         const col = i % cols, row = (i / cols) | 0;
         const x = pad + col * (CELL + pad);
         const y = 40 + pad + row * (CELL + labelH + pad);
+        // (R2 board variety) When the caller does not pin a variant (bare board call,
+        // V===0), rotate each tile through its OWN variant ring so the default board
+        // shows the sanctioned pastel + ~25–30% dark spread (spec §3), not 12 ivory
+        // tiles. An explicit `variant` arg still pins every tile (variant-sweep mode).
+        const arch = ARCHETYPES_BY_ID[id];
+        const vCount = arch?.variants?.length || 1;
+        const cellV = Number.isInteger(variant) ? V : (i % vCount);
         try {
-          renderScene(cctx, 1080, 1080, { dimensionId: "ig_square", live: false, archOverride: id, archVariant: V, calibrationContent: content || null });
+          renderScene(cctx, 1080, 1080, { dimensionId: "ig_square", live: false, archOverride: id, archVariant: cellV, calibrationContent: content || null });
         } catch (_) { cctx.clearRect(0, 0, 1080, 1080); }
         bctx.drawImage(cell, x, y, CELL, CELL);
         bctx.strokeStyle = "#254E4833"; bctx.lineWidth = 1; bctx.strokeRect(x + 0.5, y + 0.5, CELL, CELL);
-        const arch = ARCHETYPES_BY_ID[id];
         bctx.fillStyle = "#254E48"; bctx.font = "600 12px " + (FU.subtitle || "sans-serif");
         bctx.fillText(`${i + 1}. ${arch?.name || id}`, x, y + CELL + 17);
       });
