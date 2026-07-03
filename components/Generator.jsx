@@ -357,6 +357,247 @@ const FORMAT_LAYOUTS = {
 // pos "bottom-left (above UI)" for story → bottom-left (safe margins already lift it).
 const formatLayoutFor=(dimId,postType)=>(FORMAT_LAYOUTS[dimId]||FORMAT_LAYOUTS.ig_square)[postType]||FORMAT_LAYOUTS.ig_square.text_post;
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARCHETYPE LIBRARY (Commit 3) — the 12 archetypes of docs/visual-language-spec
+   §2, encoded as DATA the render path resolves layout from when archetypeId is
+   set. Backward compatible: archetypeId=null → legacy FORMAT_LAYOUTS path.
+
+   Each archetype:
+     id            stable id (mirrored in lib/design-patch.js PATCH_OPTIONS)
+     name          human label for the picker
+     elements      per-ROLE layout, {x,y,w,h} canvas fractions:
+                     hero       the dominant word/number/photo
+                     support    caption / attribution / details
+                     microLabel the small all-caps eyebrow (optional)
+                     logo       {position,sizeId} 9-grid slot
+                     photo      photo draw region (when the archetype uses one)
+                     motif      motif-field bounds (§2.11)
+                     card       floated-card bounds (§2.5)
+                     mask       petal-window bounds (§2.12)
+     scaleRatio    {heroCapFrac} hero cap-height as frac of canvas H, and the
+                   target hero:support ratio (heroToSupport) — spec §3 8–10× floor 6×
+     whitespace    target whitespace fraction (spec §2/§3)
+     gridAnchor    "thirds" | "edge" | "center-column"; centerExclude=true means
+                   the hero centroid must avoid the 0.40–0.60 both-axes box
+     palette       {klass:"light"|"dark", bg, ink, accent} — accent is an
+                   ARCHETYPE_COLORS key or a B key or "field" (the bg is the accent)
+     photoTreatment PHOTO_TREATMENTS id
+     heroRegister  "serif" | "heavySans" | "either" ; caps:boolean
+     suitedPostTypes  which POST_TYPES map cleanly onto this archetype
+     frequencyCap  data-only for now (enforced by AI selection next package):
+                   fraction of a run this archetype may occupy
+     special       optional render mode: "floatedCard"|"motifField"|"petalWindow"
+     perDim        per-dimension overrides (square/portrait/story/wide) that
+                   follow format-design-spec safe zones. Sparse — only what differs.
+   Positions are authored on the SQUARE; the render path clamps every role box
+   into the active format's safe margins (format-design-spec §1.0) so archetype
+   composition always composes WITH the per-format safe zones, never against them.
+   ═════════════════════════════════════════════════════════════════════════ */
+const ARCHETYPES = [
+  { // §2.1 Oversized Serif Word
+    id:"serif_word", name:"Oversized Serif Word",
+    elements:{
+      microLabel:{x:0.06,y:0.08,w:0.60,h:0.05},
+      hero:{x:0.06,y:0.14,w:0.88,h:0.42},
+      support:{x:0.06,y:0.60,w:0.70,h:0.08},
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.36,heroToSupport:9},
+    whitespace:0.52, gridAnchor:"edge", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"none", heroRegister:"serif", caps:false,
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.18,
+    perDim:{ story:{hero:{x:0.06,y:0.16,w:0.88,h:0.40}}, banner:{hero:{x:0.05,y:0.14,w:0.60,h:0.62},support:{x:0.05,y:0.78,w:0.50,h:0.14}} },
+  },
+  { // §2.2 Asymmetric Editorial Split
+    id:"editorial_split", name:"Asymmetric Editorial Split",
+    elements:{
+      photo:{x:0.60,y:0,w:0.40,h:1},
+      microLabel:{x:0.08,y:0.14,w:0.44,h:0.05},
+      hero:{x:0.08,y:0.22,w:0.46,h:0.34},
+      support:{x:0.08,y:0.60,w:0.44,h:0.24},
+      logo:{position:"bottom-left",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.14,heroToSupport:7}, split:0.60,
+    whitespace:0.25, gridAnchor:"edge", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
+    perDim:{ story:{photo:{x:0,y:0.58,w:1,h:0.42},hero:{x:0.08,y:0.10,w:0.84,h:0.28},support:{x:0.08,y:0.40,w:0.84,h:0.14}} },
+  },
+  { // §2.3 Big Number / Date
+    id:"big_number", name:"Big Number / Date",
+    elements:{
+      microLabel:{x:0.33,y:0.18,w:0.60,h:0.05},
+      hero:{x:0.30,y:0.26,w:0.62,h:0.44},        // the numeral/date
+      support:{x:0.33,y:0.72,w:0.60,h:0.08},
+      logo:{position:"bottom-left",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.44,heroToSupport:9}, thirdsX:0.34,
+    whitespace:0.52, gridAnchor:"thirds", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    suitedPostTypes:["event"], frequencyCap:0.12, usesDateAsHero:true,
+    perDim:{ banner:{hero:{x:0.06,y:0.14,w:0.40,h:0.62},microLabel:{x:0.06,y:0.10,w:0.40,h:0.10},support:{x:0.50,y:0.30,w:0.44,h:0.40}} },
+  },
+  { // §2.4 Full-Bleed Duotone + Whisper Caption
+    id:"full_bleed_duotone", name:"Full-Bleed Duotone",
+    elements:{
+      photo:{x:0,y:0,w:1,h:1},
+      hero:{x:0.06,y:0.70,w:0.60,h:0.14},        // small hero/caption (whisper)
+      support:{x:0.06,y:0.84,w:0.50,h:0.06},
+      logo:{position:"top-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.05,heroToSupport:6},
+    whitespace:0.0, gridAnchor:"thirds", centerExclude:true, fullBleed:true,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    photoTreatment:"duotoneStrong", heroRegister:"serif", caps:true,
+    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12,
+    perDim:{ story:{hero:{x:0.06,y:0.66,w:0.70,h:0.14}} },
+  },
+  { // §2.5 Floated Photo Card on Solid Field
+    id:"floated_card", name:"Floated Photo Card",
+    elements:{
+      card:{x:0.54,y:0.32,w:0.38,h:0.42},        // the floated photo card
+      microLabel:{x:0.08,y:0.16,w:0.42,h:0.05},
+      hero:{x:0.08,y:0.24,w:0.42,h:0.34},
+      support:{x:0.08,y:0.62,w:0.40,h:0.16},
+      logo:{position:"bottom-left",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
+    whitespace:0.50, gridAnchor:"thirds", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"cleanGrain", heroRegister:"either", caps:false,
+    suitedPostTypes:["photo_logo","event","texture_text"], frequencyCap:0.20,
+    special:"floatedCard", cardRadiusFrac:0.10, // rounded corners 6–14% card W
+    perDim:{ story:{card:{x:0.30,y:0.44,w:0.44,h:0.30},hero:{x:0.06,y:0.12,w:0.84,h:0.28},support:{x:0.06,y:0.76,w:0.60,h:0.10}},
+             banner:{card:{x:0.56,y:0.14,w:0.30,h:0.72},hero:{x:0.05,y:0.20,w:0.46,h:0.44}} },
+  },
+  { // §2.6 Quote with Generous Margin
+    id:"quote_margin", name:"Quote (Generous Margin)",
+    elements:{
+      hero:{x:0.10,y:0.28,w:0.80,h:0.40},        // the quote
+      support:{x:0.10,y:0.70,w:0.60,h:0.06},      // attribution
+      logo:{position:"bottom-center",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.10,heroToSupport:3}, // attribution 0.30–0.40× of quote
+    whitespace:0.58, gridAnchor:"edge", centerExclude:false,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    suitedPostTypes:["quote"], frequencyCap:0.14,
+    perDim:{ banner:{hero:{x:0.10,y:0.14,w:0.80,h:0.50}} },
+  },
+  { // §2.7 Text-Only Manifesto
+    id:"manifesto", name:"Text-Only Manifesto",
+    elements:{
+      hero:{x:0.12,y:0.24,w:0.66,h:0.50},
+      support:{x:0.12,y:0.78,w:0.50,h:0.06},
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.09,heroToSupport:4}, // carousel-page relaxes to 4–6×
+    whitespace:0.48, gridAnchor:"center-column", centerExclude:false,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"none", heroRegister:"serif", caps:false,
+    suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35,
+    perDim:{ banner:{hero:{x:0.06,y:0.18,w:0.88,h:0.56}} },
+  },
+  { // §2.8 Documentary Photo Moment
+    id:"documentary", name:"Documentary Photo Moment",
+    elements:{
+      photo:{x:0.03,y:0.03,w:0.94,h:0.94},        // 94–96% bleed w/ thin border
+      hero:{x:0.06,y:0.86,w:0.50,h:0.06},          // optional metadata line
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.04,heroToSupport:6},
+    whitespace:0.05, gridAnchor:"thirds", centerExclude:true, fullBleed:true, thinBorder:true,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    photoTreatment:"cleanGrain", heroRegister:"serif", caps:true,
+    suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10,
+  },
+  { // §2.9 Two-Tier Label + Headline
+    id:"label_headline", name:"Label + Headline",
+    elements:{
+      microLabel:{x:0.08,y:0.28,w:0.84,h:0.05},
+      hero:{x:0.08,y:0.34,w:0.84,h:0.30},
+      support:{x:0.08,y:0.66,w:0.60,h:0.06},
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
+    whitespace:0.42, gridAnchor:"edge", centerExclude:false,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"none", heroRegister:"serif", caps:false,
+    suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
+    perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
+  },
+  { // §2.10 Side-by-Side Portrait + Credential (wide-leaning)
+    id:"portrait_credential", name:"Portrait + Credential",
+    elements:{
+      photo:{x:0.52,y:0,w:0.48,h:1},
+      microLabel:{x:0.06,y:0.20,w:0.42,h:0.05},
+      hero:{x:0.06,y:0.28,w:0.42,h:0.24},
+      support:{x:0.06,y:0.56,w:0.42,h:0.22},
+      logo:{position:"bottom-left",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.17,heroToSupport:7}, split:0.52,
+    whitespace:0.20, gridAnchor:"edge", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    suitedPostTypes:["photo_logo","event","quote"], frequencyCap:0.10,
+    perDim:{ story:{photo:{x:0,y:0,w:1,h:0.52},hero:{x:0.06,y:0.60,w:0.84,h:0.22},support:{x:0.06,y:0.84,w:0.84,h:0.10},microLabel:{x:0.06,y:0.55,w:0.84,h:0.04}} },
+  },
+  { // §2.11 Motif-Warmed Solid Field
+    id:"motif_field", name:"Motif-Warmed Field",
+    elements:{
+      hero:{x:0.10,y:0.30,w:0.80,h:0.36},
+      support:{x:0.10,y:0.70,w:0.60,h:0.06},
+      motif:{x:0,y:0,w:1,h:1},                     // scatter zone (margins/corners)
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.27,heroToSupport:8},
+    whitespace:0.55, gridAnchor:"thirds", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"field"},
+    photoTreatment:"none", heroRegister:"either", caps:false,
+    suitedPostTypes:["text_post","quote","event"], frequencyCap:0.14,
+    special:"motifField", motifCount:3, motifPastels:["sage","butter"],
+    perDim:{ banner:{hero:{x:0.06,y:0.22,w:0.70,h:0.56}} },
+  },
+  { // §2.12 Petal / Organic-Shape Photo Window
+    id:"petal_window", name:"Petal Window",
+    elements:{
+      mask:{x:0.62,y:0.34,w:0.34,h:0.44},          // orchid-mask window (thirds)
+      microLabel:{x:0.08,y:0.20,w:0.44,h:0.05},
+      hero:{x:0.08,y:0.30,w:0.48,h:0.34},
+      support:{x:0.08,y:0.68,w:0.44,h:0.08},
+      logo:{position:"bottom-left",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.22,heroToSupport:9},
+    whitespace:0.52, gridAnchor:"thirds", centerExclude:true,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
+    suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
+    special:"petalWindow", maskAreaFrac:0.30, // 22–42% of canvas
+    perDim:{ story:{mask:{x:0.30,y:0.14,w:0.44,h:0.30},hero:{x:0.06,y:0.50,w:0.84,h:0.24},support:{x:0.06,y:0.78,w:0.60,h:0.08},microLabel:{x:0.06,y:0.45,w:0.60,h:0.04}} },
+  },
+];
+const ARCHETYPES_BY_ID=Object.fromEntries(ARCHETYPES.map(a=>[a.id,a]));
+const ARCHETYPE_IDS=ARCHETYPES.map(a=>a.id);
+// Resolve an archetype's per-dimension element boxes: start from square-authored
+// elements, deep-merge the perDim override for this format class. Returns a fresh
+// elements object (never mutates the source). formatClass maps DIMENSIONS→keys.
+const archetypeFormatClass=(dimId)=> dimId==="ig_square"?"square"
+  : dimId==="ig_portrait"?"portrait" : dimId==="story"?"story"
+  : ["twitter","facebook","banner"].includes(dimId)?(dimId==="banner"?"banner":"wide"):"square";
+function resolveArchetypeElements(arch,dimId){
+  const base=arch.elements||{};
+  const pd=arch.perDim||{};
+  // perDim keys are dimension ids (story/banner) for precision; fall back none.
+  const ov=pd[dimId]||null;
+  const out={};
+  for(const k of Object.keys(base)) out[k]={...base[k]};
+  if(ov) for(const k of Object.keys(ov)) out[k]={...(out[k]||{}),...ov[k]};
+  return out;
+}
+
 /* Resolution rule (documented per prompt):
    For a render dimension D and post type P, the effective text layout is:
      1. user override typeLayoutsByDim[D][P]  (written only when the user edits
@@ -1436,6 +1677,9 @@ export default function App() {
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [brandKit, setBrandKit] = useState(null);
   const [postType, setPostType] = useState("photo_logo");
+  // Archetype starting-point (Commit 3). null = legacy FORMAT_LAYOUTS path (100%
+  // backward compatible). When set, renderScene resolves layout from ARCHETYPES.
+  const [archetypeId, setArchetypeId] = useState(null);
   const [bgColor, setBgColor] = useState("burnham");
   const [textColorId, setTextColorId] = useState("auto");
   const [suggestedTextColor, setSuggestedTextColor] = useState("whiteSmoke");
@@ -1655,7 +1899,7 @@ export default function App() {
   // guard). Audit "apply" flows are EXCLUDED — those are already user-reviewed.
   const harmonizeRef = useRef({ armed: false, rounds: 0, applied: [] });
   const snapshotApplyableState = () => ({
-    postType, dimensionId, headline, subtext, attribution, dateText,
+    postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
     userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
     typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
@@ -1667,6 +1911,23 @@ export default function App() {
     image, imgT: JSON.parse(JSON.stringify(imgT)),
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
+
+  // Apply an archetype as a STARTING POINT (Commit 3/4): set archetypeId and seed
+  // its palette (bg/ink→textColor) + treatment defaults so the canvas restyles.
+  // Content fields + manual overrides are preserved — archetypes are starting
+  // points the user then edits (elements rail keeps writing the same override
+  // state as today). Passing null returns to the legacy free path.
+  const applyArchetype = (id) => {
+    if (id === null || id === "none") { setArchetypeId(null); return; }
+    const arch = ARCHETYPES_BY_ID[id]; if (!arch) return;
+    setArchetypeId(id);
+    // Palette: bg token + let text colour resolve auto (contrast-safe). Only set a
+    // known BG_OPTIONS token; archetype bg keys are burnham/whiteSmoke here.
+    if (arch.palette?.bg && inList(arch.palette.bg, "bgColor")) setBgColor(arch.palette.bg);
+    setTextColorId("auto");
+    // Backdrop stays auto (harmonizer/contrast still guarantees legibility).
+    setBackdropMode("auto");
+  };
 
   const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
@@ -1692,6 +1953,13 @@ export default function App() {
     // current value — the model sometimes echoes unchanged fields into the
     // patch, and we don't want those in the "changed: …" summary or undo scope.
     if (inList(patch.postType, "postType") && patch.postType !== postType) { setPostType(patch.postType); applied.push("postType"); }
+    // archetypeId: enum of archetype ids OR the explicit sentinel "none"/null to
+    // return to the legacy free path. Applying an archetype also seeds its palette
+    // + treatment defaults (mirrors the picker) so a chat patch restyles fully.
+    if (patch.archetypeId !== undefined && patch.archetypeId !== null) {
+      if (patch.archetypeId === "none" && archetypeId !== null) { setArchetypeId(null); applied.push("archetypeId"); }
+      else if (ARCHETYPE_IDS.includes(patch.archetypeId) && patch.archetypeId !== archetypeId) { applyArchetype(patch.archetypeId); applied.push("archetypeId"); }
+    }
     if (inList(patch.dimensionId, "dimensionId") && patch.dimensionId !== dimensionId) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
     if (typeof patch.headline === "string" && patch.headline !== headline) { setHeadline(patch.headline); applied.push("headline"); }
     if (typeof patch.subtext === "string" && patch.subtext !== subtext) { setSubtext(patch.subtext); applied.push("subtext"); }
@@ -1778,6 +2046,7 @@ export default function App() {
   const restoreSnapshot = (s) => {
     if (!s) return;
     setPostType(s.postType);
+    setArchetypeId("archetypeId" in s ? s.archetypeId : null);
     setDimensionId(s.dimensionId);
     setHeadline(s.headline);
     setSubtext(s.subtext);
@@ -1862,6 +2131,27 @@ export default function App() {
     imgFrom(SAMPLE_IMAGES[0].full).then(img=>{if(active)setImageObj(img);});
     return()=>{active=false;};
   }, []);
+
+  // Dev-only verification hook (Commit 3): drive an archetype design + sample
+  // content from the console so each of the 12 can be rendered + asserted. Reads
+  // fontMetaRef/auditRef the same signals the audit uses. Harmless in prod.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__woSetArchetype = (id, content = {}) => {
+      applyArchetype(id === "none" ? null : id);
+      if (content.headline !== undefined) setHeadline(content.headline);
+      if (content.subtext !== undefined) setSubtext(content.subtext);
+      if (content.attribution !== undefined) setAttribution(content.attribution);
+      if (content.dateText !== undefined) setDateText(content.dateText);
+      if (content.postType) setPostType(content.postType);
+      if (content.dimensionId) setDimensionId(content.dimensionId);
+    };
+    window.__woArchAudit = () => auditRef.current;
+    window.__woArchFontMeta = () => fontMetaRef.current;
+    window.__woArchTextBounds = () => textBoundsRef.current;
+    window.__woArchetypeIds = ARCHETYPE_IDS;
+    return () => { try { delete window.__woSetArchetype; } catch {} };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brand Kit is the source of truth for canvas colours, typography and checks.
   useEffect(() => {
@@ -1967,6 +2257,27 @@ export default function App() {
       .then(() => { if (!cancelled) draw(); });
     return () => { cancelled = true; };
   }, [overlays]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Preload built-in shape assets the archetype special renders need ──
+     petal_window uses orchid-petal as a photo mask; motif_field scatters flat
+     shapes. These aren't overlay LAYERS (no user placement), so load them into a
+     dedicated ref keyed by DEFAULT_OVERLAYS id when an archetype is active. */
+  const archAssetImgs = useRef({});
+  useEffect(() => {
+    let cancelled = false;
+    const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
+    if (!arch) return;
+    const wanted = new Set();
+    if (arch.special === "petalWindow") wanted.add("orchid-petal");
+    if (arch.special === "motifField") ["shape-1","shape-2","shape-3","acc-spark"].forEach(id=>wanted.add(id));
+    const need = [...wanted].filter(id => !archAssetImgs.current[id]);
+    if (!need.length) return;
+    Promise.all(need.map(id => {
+      const a = DEFAULT_OVERLAYS.find(o=>o.id===id); if (!a) return Promise.resolve();
+      return imgFrom(a.src).then(img => { if (img) archAssetImgs.current[id] = img; });
+    })).then(() => { if (!cancelled) draw(); });
+    return () => { cancelled = true; };
+  }, [archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Load selected logo from static asset ── */
   useEffect(() => {
@@ -2427,6 +2738,200 @@ export default function App() {
       frameLayers.forEach(l=>drawFrameLayer(ctx,fcv,overlayImgs.current[l.assetId],mediaObj,w,h,resolveT(l),imgT));
     }
 
+    // ═══ ARCHETYPE RENDER PATH (Commit 3) ═══════════════════════════════════
+    // When an archetype is active, layout resolves from ARCHETYPES (§2) instead of
+    // the legacy FORMAT_LAYOUTS text zones. Format safe zones STILL clamp every
+    // role box (spec format-design §1.0); MIN_FONT_PX still floors; drawBackdrop /
+    // harmonizer still guarantee contrast. Content maps to roles: headline→hero
+    // (dateText→hero for big_number), subtext/attribution→support, logo→logo slot.
+    // The elements rail keeps working because manual edits write the same override
+    // state — but the archetype path derives its boxes from the spec, not the
+    // legacy text-zone, so we render here and RETURN before the legacy branches.
+    const archActive = archetypeId && ARCHETYPES_BY_ID[archetypeId] && !hasFrame;
+    if(archActive){
+      const arch=ARCHETYPES_BY_ID[archetypeId];
+      const el=resolveArchetypeElements(arch,dimId);
+      const pal=arch.palette||{};
+      const fieldColor=(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
+      const inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
+      // Clamp a role box (fractions) into this format's safe margins, in px.
+      const clampBox=(b)=>{
+        if(!b) return null;
+        const x0=Math.max(sm.l,Math.min(1-sm.r,(b.x??sm.l)));
+        const y0=Math.max(sm.t,Math.min(1-sm.b,(b.y??sm.t)));
+        const bw2=Math.min((b.w??0.8),1-sm.r-x0);
+        const bh2=Math.min((b.h??0.2),1-sm.b-y0);
+        return {x:x0*w,y:y0*h,w:Math.max(0.05*w,bw2*w),h:Math.max(0.03*h,bh2*h)};
+      };
+      // 1. Base field or full-bleed photo.
+      if(arch.fullBleed && mediaObj){
+        ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
+        if(arch.thinBorder){
+          const p=clampBox(el.photo)||{x:0.03*w,y:0.03*h,w:0.94*w,h:0.94*h};
+          ctx.save(); ctx.beginPath(); ctx.rect(p.x,p.y,p.w,p.h); ctx.clip();
+          drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
+          const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,p.x,p.y,p.w,p.h);
+          ctx.restore();
+        }else{
+          drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
+          const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,0,0,w,h);
+        }
+      }else{
+        ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
+      }
+      // 2. Special composite (photo split / card / motifs / petal window).
+      const drawSplitPhoto=(box)=>{
+        if(!mediaObj||!box) return;
+        ctx.save(); ctx.beginPath(); ctx.rect(box.x,box.y,box.w,box.h); ctx.clip();
+        ctx.translate(box.x,box.y);
+        drawPhotoFramed(ctx,mediaObj,box.w,box.h,effImgTFor(box.w,box.h,true));
+        ctx.restore();
+        const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,box.x,box.y,box.w,box.h);
+      };
+      if(arch.special==="floatedCard"){
+        const c=clampBox(el.card);
+        if(c){
+          const r=Math.max(0.06,Math.min(0.14,arch.cardRadiusFrac||0.10))*c.w;
+          const rot=(arch.suitedPostTypes.includes("photo_logo")||postType==="photo_logo")&&!arch.fullBleed?( (parseInt(archetypeId.length+ (headline||"").length)%2)?-3:3 ):0; // ±2–4° only on photo-moment (spec §5.4)
+          ctx.save();
+          ctx.translate(c.x+c.w/2,c.y+c.h/2); if(rot) ctx.rotate(rot*Math.PI/180); ctx.translate(-(c.x+c.w/2),-(c.y+c.h/2));
+          // thin ivory/ink border card
+          const rr=(x,y,ww,hh,rad)=>{ctx.beginPath();ctx.moveTo(x+rad,y);ctx.arcTo(x+ww,y,x+ww,y+hh,rad);ctx.arcTo(x+ww,y+hh,x,y+hh,rad);ctx.arcTo(x,y+hh,x,y,rad);ctx.arcTo(x,y,x+ww,y,rad);ctx.closePath();};
+          const bpad=Math.max(2,0.01*Math.min(w,h));
+          ctx.fillStyle=inkColor; rr(c.x-bpad,c.y-bpad,c.w+bpad*2,c.h+bpad*2,r+bpad); ctx.fill();
+          ctx.save(); rr(c.x,c.y,c.w,c.h,r); ctx.clip();
+          if(mediaObj){ ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,effImgTFor(c.w,c.h,true)); ctx.restore();
+            const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,c.x,c.y,c.w,c.h);
+          }else{ ctx.fillStyle=withAlpha(B.celadon,1); ctx.fillRect(c.x,c.y,c.w,c.h); }
+          ctx.restore();
+          ctx.restore();
+        }
+      }else if(arch.special==="motifField"){
+        // 2–5 flat pastel motifs scattered to the corners/margins (spec §2.11),
+        // never behind the hero. Deterministic placement so exports are stable.
+        const shapes=["shape-1","shape-2","shape-3","acc-spark"].map(id=>archAssetImgs.current[id]).filter(Boolean);
+        const pastels=(arch.motifPastels||["sage","butter"]).map(k=>ARCHETYPE_COLORS[k]||B.celadon);
+        const count=Math.max(2,Math.min(5,arch.motifCount||3));
+        const spots=[[0.10,0.12],[0.88,0.16],[0.14,0.86],[0.86,0.84],[0.90,0.50]];
+        for(let i=0;i<count && shapes.length;i++){
+          const img=shapes[i%shapes.length], col=pastels[i%pastels.length];
+          const [fx,fy]=spots[i%spots.length];
+          const sz=Math.min(w,h)*0.09; // ≤10% of min(W,H)
+          const tinted=tintedAccessory(img,col);
+          if(tinted) containDraw(ctx,tinted,fx*w,fy*h,sz,sz,0.9);
+        }
+      }else if(arch.special==="petalWindow"){
+        // Orchid mask photo window (§2.12): duotone INSIDE the mask only, on a
+        // generous solid field. Mask area target 22–42% of canvas.
+        const m=clampBox(el.mask);
+        const orchid=archAssetImgs.current["orchid-petal"];
+        if(m && mediaObj && orchid){
+          const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
+          const octx=oc.getContext("2d");
+          // paint photo into a temp, then keep only inside the mask via source-in.
+          octx.save(); octx.translate(m.x+m.w/2,m.y+m.h/2);
+          const scale=Math.max(m.w,m.h);
+          // draw silhouette solid
+          for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
+          octx.globalCompositeOperation="source-in";
+          octx.translate(-(m.x+m.w/2),-(m.y+m.h/2));
+          octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
+          drawPhotoFramed(octx,mediaObj,m.w,m.h,effImgTFor(m.w,m.h,true)); octx.restore();
+          octx.globalCompositeOperation="source-over";
+          octx.restore();
+          // duotone the masked photo (inside mask only) then blit.
+          applyDuotone(octx,m.x,m.y,m.w,m.h,{strength:1});
+          ctx.drawImage(oc,0,0);
+        }else if(m && orchid){
+          // no photo → draw the orchid as a solid accent mark on the field.
+          const tinted=tintedAccessory(orchid,ARCHETYPE_COLORS.terracotta);
+          if(tinted) containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,Math.max(m.w,m.h),Math.max(m.w,m.h),0.9);
+        }
+      }else if(el.photo){
+        // Plain split/side photo archetypes (editorial_split, portrait_credential).
+        drawSplitPhoto(clampBox(el.photo));
+      }
+      // 3. Text roles. hero register + caps per archetype; support = caption.
+      const heroBox=clampBox(el.hero);
+      const supBox=clampBox(el.support);
+      const labelBox=clampBox(el.microLabel);
+      // Content mapping: headline→hero (dateText→hero for big_number),
+      // subtext/attribution→support. A short attribution becomes the eyebrow
+      // (micro-label) when BOTH a support line (subtext) and a label slot exist.
+      const isBigNum=arch.usesDateAsHero;
+      const heroFinal = isBigNum ? (dateText||headline||"") : (headline || "");
+      const supportText = subtext || attribution || (isBigNum?headline:"") || "";
+      // Hero register: heavySans is the ≤1-in-3 poster register; "either" and the
+      // serif default both render serif here (heavySans is opt-in per archetype).
+      const register = arch.heroRegister==="heavySans" ? "heavySans" : "serif";
+      // Solid field → fixed ink; photo (fullBleed) → resolve for contrast.
+      let heroInk=inkColor;
+      if(arch.fullBleed && mediaObj && heroBox){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
+      let usedH=0;
+      const eyebrow=(labelBox && arch.elements.microLabel && attribution && subtext && attribution.length<=28) ? attribution : "";
+      if(eyebrow){
+        ctx.save(); ctx.fillStyle=heroInk;
+        const lblSize=Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h);
+        drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,Math.min(lblSize,labelBox.h),{align:el.microLabel.align||"left",tracking:0.08});
+        ctx.restore();
+      }
+      // hero
+      if(heroFinal){
+        beginText(); ctx.fillStyle=heroInk;
+        const heroStart=Math.max(24, (arch.scaleRatio?.heroCapFrac||0.3)*h*1.35);
+        const heroMin=minFloor("headline",h,heroStart,38*S);
+        const hr=drawHeroText(ctx,heroFinal,{
+          x:heroBox.x,y:heroBox.y,maxW:heroBox.w,maxH:heroBox.h,
+          align:el.hero.align|| (arch.gridAnchor==="center-column"?"left":"left"),
+          register, caps:arch.caps||isBigNum, start:heroStart, minSize:heroMin,
+          leading: register==="serif"?1.02:1.05,
+        });
+        endText();
+        usedH=hr.usedH;
+        fontMeta.headline=hr.size;
+        setTextBounds(hr.usedH);
+      }
+      // support / caption (much smaller — the hero:support ratio does the work).
+      if(supportText && supBox){
+        beginText(); ctx.fillStyle=heroInk;
+        const capH=fontMeta.headline||heroBox.h*0.5;
+        const supStart=Math.max(0.02*h, capH/(arch.scaleRatio?.heroToSupport||8));
+        const supMin=minFloor("body",h,supStart,24*S);
+        const sf=fitText(ctx,supportText,s=>`400 ${s}px ${F.body}`,supStart,supBox.w,supBox.h,1.32,supMin);
+        ctx.font=`400 ${sf.size}px ${F.body}`;
+        drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,el.support.align||"left");
+        fontMeta.subtext=sf.size;
+        endText();
+      }
+      // logo (same guard as legacy — avoids text + focal band).
+      const logoSlot=el.logo||arch.elements.logo;
+      putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null);
+      // audit + drop info (reuse the same accumulators the legacy path fills).
+      if(live)dropInfoRef.current=dropped.length?{dropped}:null;
+      if(live)fontMetaRef.current=fontMeta;
+      if(live||opts.captureAudit){
+        let contrast=null; const tb=textBoundsRef.current;
+        if(tb&&tb.w>0&&tb.h>0) contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},heroInk);
+        auditRef.current={
+          dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
+          zoneContrast:contrast,flooredRoles:[],dropped:[...dropped],logo:{...auditLogo},
+          safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
+        };
+      }
+      // top overlay layers still draw (unlikely on archetype designs, but keep it
+      // consistent — a user could add an accessory). Fall through to the shared
+      // topLayers block by NOT returning until after it.
+      const _octail = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
+      topLayers.forEach(layer=>{
+        const img=overlayImgs.current[layer.assetId]; if(!img) return;
+        const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
+        if(layer.mode==="outline"){drawOutlineLayer(ctx,_octail,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);return;}
+        if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
+        if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
+      });
+      return; // archetype path complete — skip legacy postType branches.
+    }
+
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
@@ -2603,7 +3108,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,archetypeId,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -2650,7 +3155,7 @@ export default function App() {
     if (typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };
     return findings;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderScene, W, H, dimensionId, postType, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
+  }, [renderScene, W, H, dimensionId, postType, archetypeId, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
 
   // Sweep EVERY format's contrast audit off-screen. The live runLocalAudit only
   // reflects the current dimension; an AI design can be legible on Square yet fail
@@ -3110,7 +3615,7 @@ export default function App() {
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); sSet(SK_DOC_TS, Date.now()); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
-    postType, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
+    postType, archetypeId, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
@@ -3151,6 +3656,7 @@ export default function App() {
   const applyDesignTemplate = (template) => {
     const s = template?.state; if (!s) return;
     setPostType(s.postType || "photo_logo");
+    setArchetypeId(ARCHETYPE_IDS.includes(s.archetypeId) ? s.archetypeId : null);
     setDimensionId(s.dimensionId || "ig_square");
     setBgColor(s.bgColor || "burnham");
     setBgAlpha(s.bgAlpha ?? 1);
