@@ -1186,14 +1186,44 @@ function reflowEditorial(ctx, a){
   // box overlaps a photo obstacle, shrink its WIDTH to the clear side (never draw the
   // hero on top of the photo unless full-bleed, which doesn't reach here).
   const photoObstacle = cardBox||maskBox||photoRegion||null;
-  if(heroBox && photoObstacle && intersects(heroBox,photoObstacle)){
-    // Prefer the wider clear band: left of, or right of, the obstacle.
-    const leftW=Math.max(0,photoObstacle.x-heroBox.x);
-    const rightClear=Math.max(0,(heroBox.x+heroBox.w)-(photoObstacle.x+photoObstacle.w));
-    if(leftW>=rightClear && leftW>0.18*w){ heroBox.w=Math.min(heroBox.w, photoObstacle.x-heroBox.x-Math.min(w,h)*0.02); }
-    else if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+Math.min(w,h)*0.02; heroBox.w=(heroBox.x+heroBox.w)-nx; heroBox.x=nx; }
-    // else: obstacle spans the hero width → the hero keeps its box; vertical reflow
-    // below still separates the caption. (A full-width photo above/below is fine.)
+  // A photo obstacle spanning (nearly) the full canvas WIDTH is a top/bottom BAND
+  // (e.g. editorial_split / portrait_credential on Story); text must live in the clear
+  // vertical strip, not on the band. A NARROWER obstacle (a floated card/mask) is a
+  // side object text flows around horizontally.
+  const gapPx=Math.min(w,h)*0.02;
+  const safeW=(1-sm.l-sm.r)*w;
+  const bandFull = photoObstacle && photoObstacle.w>=0.8*safeW;
+  const constrainToBand=(box)=>{
+    if(!box||!photoObstacle||!intersects(box,photoObstacle)) return box;
+    if(bandFull){
+      // Clear strip above vs below the band — keep the box in the taller one, without
+      // disturbing its relative Y (a support box already reflowed below the hero must
+      // stay below it, only capped so it doesn't spill into the band).
+      const above=photoObstacle.y-safeTop, below=safeBot-(photoObstacle.y+photoObstacle.h);
+      if(above>=below){ const bottom=photoObstacle.y-gapPx; const ny=Math.max(safeTop,Math.min(box.y,bottom-0.05*h)); return {...box,y:ny,h:Math.max(0.05*h,Math.min(box.h,bottom-ny))}; }
+      const top=photoObstacle.y+photoObstacle.h+gapPx; const ny=Math.max(top,box.y); return {...box,y:ny,h:Math.max(0.05*h,safeBot-ny)};
+    }
+    // Side object → clip width to the wider clear side.
+    const leftW=Math.max(0,photoObstacle.x-box.x);
+    const rightClear=Math.max(0,(box.x+box.w)-(photoObstacle.x+photoObstacle.w));
+    if(leftW>=rightClear && leftW>0.18*w) return {...box,w:Math.min(box.w,photoObstacle.x-box.x-gapPx)};
+    if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
+    return box;
+  };
+  if(heroBox) heroBox=constrainToBand(heroBox);
+  // Reserve vertical room for the support caption BELOW the hero when both share the
+  // lower zone: cap the hero box height so hero_bottom + gap + a min caption fits above
+  // the bottom safe margin. This prevents the tall-format (Story) case where a big hero
+  // pushes the reflowed caption past the margin or back onto the hero.
+  const supMinPre=supportText?minFloor("body",h,0.02*h,24*S)*1.3:0;
+  if(heroBox && supportText && supBox){
+    const gapPre=Math.max(h*0.03,0.05*h);
+    // When a full-width photo band sits BELOW the hero, the caption must fit between the
+    // hero and the band (not below the band) — so cap the hero against the band top too.
+    let effBottom=safeBot;
+    if(bandFull && photoObstacle && photoObstacle.y>heroBox.y) effBottom=Math.min(effBottom,photoObstacle.y-gapPx);
+    const heroBottomCap=effBottom-supMinPre-gapPre;
+    if(heroBox.y+heroBox.h>heroBottomCap) heroBox.h=Math.max(0.06*h,heroBottomCap-heroBox.y);
   }
   // ── Measure the hero at its target size, shrink-to-fit W×H, MIN floored. ──
   let heroStart=Math.max(24,(heroCapFrac||0.3)*h*1.35);
@@ -1257,15 +1287,22 @@ function reflowEditorial(ctx, a){
     if(heroBox && intersects(supBox,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
       supBox={...supBox,y:clampY(heroBottom+gap)};
     }
-    // Never below the bottom safe margin; keep at least min-height room.
-    if(supBox.y+supBox.h>safeBot) supBox={...supBox,h:Math.max(supMin*1.3,safeBot-supBox.y)};
-    // Avoid a photo obstacle: if support overlaps the card/mask, clip its width to the
-    // clear side (same logic as the hero).
-    if(photoObstacle && intersects(supBox,photoObstacle)){
-      const leftW=Math.max(0,photoObstacle.x-supBox.x);
-      const rightClear=Math.max(0,(supBox.x+supBox.w)-(photoObstacle.x+photoObstacle.w));
-      if(leftW>=rightClear && leftW>0.18*w) supBox={...supBox,w:Math.min(supBox.w,photoObstacle.x-supBox.x-Math.min(w,h)*0.02)};
-      else if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+Math.min(w,h)*0.02; supBox={...supBox,x:nx,w:(supBox.x+supBox.w)-nx}; }
+    // Keep the WHOLE support box inside the bottom safe margin: first cap its height to
+    // the room below its y, and if that leaves less than a min line, pull the box UP so
+    // a min-height caption fits entirely above safeBot (never draw past the margin).
+    const minSupH=supMin*1.3;
+    if(supBox.y+supBox.h>safeBot){
+      const room=safeBot-supBox.y;
+      if(room>=minSupH) supBox={...supBox,h:room};
+      else supBox={...supBox,y:Math.max(safeTop,safeBot-minSupH),h:minSupH};
+    }
+    // Avoid a photo obstacle (side clip, or move out of a full-width band).
+    supBox=constrainToBand(supBox);
+    // Re-clamp inside the bottom safe margin after any band move.
+    if(supBox.y+supBox.h>safeBot){
+      const room=safeBot-supBox.y;
+      if(room>=minSupH) supBox={...supBox,h:room};
+      else supBox={...supBox,y:Math.max(safeTop,safeBot-minSupH),h:minSupH};
     }
     if(supBox.h<supMin*1.3) flooredRoles.push({label:"Body text"});
   }
@@ -3172,14 +3209,19 @@ export default function App() {
       // applies on materialized designs (the client's exact bug).
       let inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
       if(textColorId&&textColorId!=="auto") inkColor=B[textColorId]||inkColor;
-      // Clamp a role box (fractions) into this format's safe margins, in px.
+      // Clamp a role box (fractions) into this format's safe margins, in px. The box
+      // is pulled fully INSIDE the safe rect: x/y are capped so that x+w and y+h never
+      // cross the right/bottom margins (a box authored past the safe bottom on a tall
+      // format — e.g. documentary's y:0.86 metadata line on Story where safe.b lifts to
+      // 0.80 — is lifted up, not left overflowing). Min sizes are respected first.
       const clampBox=(b)=>{
         if(!b) return null;
-        const x0=Math.max(sm.l,Math.min(1-sm.r,(b.x??sm.l)));
-        const y0=Math.max(sm.t,Math.min(1-sm.b,(b.y??sm.t)));
-        const bw2=Math.min((b.w??0.8),1-sm.r-x0);
-        const bh2=Math.min((b.h??0.2),1-sm.b-y0);
-        return {x:x0*w,y:y0*h,w:Math.max(0.05*w,bw2*w),h:Math.max(0.03*h,bh2*h)};
+        const minW=0.05, minH=0.03;
+        let bw2=Math.max(minW,Math.min((b.w??0.8),1-sm.l-sm.r));
+        let bh2=Math.max(minH,Math.min((b.h??0.2),1-sm.t-sm.b));
+        let x0=Math.max(sm.l,Math.min(1-sm.r-bw2,(b.x??sm.l)));
+        let y0=Math.max(sm.t,Math.min(1-sm.b-bh2,(b.y??sm.t)));
+        return {x:x0*w,y:y0*h,w:bw2*w,h:bh2*h};
       };
       const treatOf=id=>PHOTO_TREATMENTS[id]||PHOTO_TREATMENTS.none;
       const frame=mat.photoFrame||{type:"none"};
@@ -3353,6 +3395,25 @@ export default function App() {
         const provPal=provArch?.palette||{};
         const palAccent=provPal.accent, palBg=provPal.bg;
         const pastelClash=PASTEL_IDS.includes(palBg)&&PASTEL_IDS.includes(palAccent)&&palAccent!==palBg;
+        // ── COLLISION ASSERTION (Commit 3) ── Count UNINTENDED intersections between
+        // the FINAL role/photo boxes (using each text role's ACTUAL drawn height) and
+        // whether any box crosses the format safe margins. Text-over-photo is allowed
+        // only for full-bleed (the hero sits on the treated photo by design); every
+        // other role-pair overlap is a collision the reflow pass should have removed.
+        // Zero = clean (the audit assertion the client asked for).
+        const heroDrawn=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||0)}:null;
+        const supDrawn=supBox&&supportText?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.3)}:null;
+        const labelDrawn=labelBox&&eyebrow?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:reflow.labelSize||labelBox.h}:null;
+        const ix=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+        const textRoles=[heroDrawn,supDrawn,labelDrawn].filter(Boolean);
+        let boxOverlaps=0;
+        for(let i=0;i<textRoles.length;i++)for(let j=i+1;j<textRoles.length;j++) if(ix(textRoles[i],textRoles[j])) boxOverlaps++;
+        // Text vs photo obstacle (card/mask/split) — a real collision unless fullBleed.
+        const photoObs=cardBox||maskBox||(mat.photoRegion&&!mat.fullBleed?clampBox(mat.photoRegion):null);
+        if(!mat.fullBleed && photoObs) for(const t of textRoles) if(ix(t,photoObs)) boxOverlaps++;
+        // Margin crop: any drawn text box outside the safe rect (tolerance 0.5%).
+        const tolX=0.005*w,tolY=0.005*h;
+        const outOfMargin=textRoles.some(t=>t.x<sm.l*w-tolX||t.y<sm.t*h-tolY||t.x+t.w>(1-sm.r)*w+tolX||t.y+t.h>(1-sm.b)*h+tolY);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
@@ -3362,7 +3423,7 @@ export default function App() {
             supportFloor:(mat.heroToSupport||8),
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
-            warmthDevices, pastelClash,
+            warmthDevices, pastelClash, boxOverlaps, outOfMargin,
           },
         };
       }
@@ -3683,6 +3744,45 @@ export default function App() {
       return dataURL;
     };
     return () => { try { delete window.__woCalibrationBoard; } catch {} };
+  }, [renderScene]);
+
+  /* ── STRESS SWEEP (Commit 3 verification, dev-only) ──────────────────────────
+     window.__woArchStress(content?) renders EVERY archetype × {square,story,banner}
+     offscreen with the given (long) copy via renderScene(archOverride+captureAudit),
+     reading the collision assertion (boxOverlaps / outOfMargin) from each render's
+     audit signal. Returns a report + a pass flag (zero overlaps, zero crops). No live
+     state is touched (temporary materialized state per cell). */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__woArchStress = (content) => {
+      const cc = content || {
+        headline: "Early Childhood *Educators* Wanted for Our Growing Nurturing Community",
+        subtext: "Join our team of dedicated professionals shaping young minds every single day at The White Orchid preschool",
+        attribution: "Apply now at hello@thewhiteorchid.sg before the end of this month",
+        dateText: "18 September",
+      };
+      const fmts = ["ig_square", "story", "banner"];
+      const prev = auditRef.current, prevBounds = textBoundsRef.current;
+      const rows = []; let overlaps = 0, crops = 0;
+      try {
+        for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
+          const dm = DIMENSIONS.find(d => d.id === dimId);
+          try {
+            const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
+            renderScene(c.getContext("2d"), dm.w, dm.h, { dimensionId: dimId, live: false, captureAudit: true, archOverride: id, calibrationContent: cc });
+            const dr = auditRef.current?.archetypeDrift || {};
+            const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0;
+            overlaps += o; crops += cr;
+            if (o || cr) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr });
+          } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
+        }
+      } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
+      const report = { pass: overlaps === 0 && crops === 0, totalOverlaps: overlaps, totalCrops: crops, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      // eslint-disable-next-line no-console
+      console.log("[woArchStress]", JSON.stringify(report));
+      return report;
+    };
+    return () => { try { delete window.__woArchStress; } catch {} };
   }, [renderScene]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
