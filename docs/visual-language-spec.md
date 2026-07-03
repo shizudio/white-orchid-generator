@@ -251,6 +251,13 @@ reversing draft A's demotion per the client ruling.**
 
 ### Type scale
 - **Hero:caption ratio: 8–10×** (floor 6×, matching the refs' ~9× median; drafts said 6–15×).
+- **Caption / support size floor (rev: calibration r1): ≥62px at 1080 canvas H** (~0.057×H;
+  engine floor `max(0.062×h, 32px@1080)`). Client scored captions universally too small on
+  board v3 (tiles 2,4,7,9,10,11,12); the caption now STARTS at `max(ratio-target, this floor)`
+  so short captions fill to a legible size while the hero keeps the 8–10× hierarchy. **One
+  consistent hero↔support rhythm gap (rev: calibration r1): `gap = clamp(0.35×heroLineHeight,
+  min 24px@1080)`**, applied whenever support sits below the hero (fixes tile 4 too-tight /
+  tile 9 too-small gaps).
 - **Display leading: 0.95–1.05×** for hero serif (tight, poster-like).
 - **Body/caption leading: 1.30–1.40×.**
 - **All-caps micro-labels: +0.06 to +0.10em tracking** (tighter for larger labels).

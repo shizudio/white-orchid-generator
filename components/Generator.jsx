@@ -468,6 +468,7 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
+    cropDrama:1.18, // (T8) push the crop tighter — v3's split photo read timid vs tile 10's winner
     // (T1) photo archetype → ≤1 tell: a hairline rule dividing hero from the detail tier.
     furniture:[ {type:"rule", x:0.08, y:0.575, w:0.30} ],
     perDim:{ story:{photo:{x:0,y:0.58,w:1,h:0.42},hero:{x:0.08,y:0.10,w:0.84,h:0.28},support:{x:0.08,y:0.40,w:0.84,h:0.14}} },
@@ -515,6 +516,7 @@ const ARCHETYPES = [
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12,
+    cropDrama:1.22, // (T8) full-bleed hero wants the most dramatic crop
     perDim:{ story:{hero:{x:0.06,y:0.66,w:0.70,h:0.14}} },
   },
   { // §2.5 Floated Photo Card on Solid Field
@@ -538,7 +540,7 @@ const ARCHETYPES = [
     ],
     photoTreatment:"cleanGrain", heroRegister:"either", caps:false,
     suitedPostTypes:["photo_logo","event","texture_text"], frequencyCap:0.20,
-    special:"floatedCard", cardRadiusFrac:0.10, // rounded corners 6–14% card W
+    special:"floatedCard", cardRadiusFrac:0.06, // (T4) system radius lower bound (was 0.10); tilt removed
     perDim:{ story:{card:{x:0.30,y:0.44,w:0.44,h:0.30},hero:{x:0.06,y:0.12,w:0.84,h:0.28},support:{x:0.06,y:0.76,w:0.60,h:0.10}},
              banner:{card:{x:0.56,y:0.14,w:0.30,h:0.72},hero:{x:0.05,y:0.20,w:0.46,h:0.44}} },
   },
@@ -596,7 +598,9 @@ const ARCHETYPES = [
     id:"documentary", name:"Documentary Photo Moment",
     elements:{
       photo:{x:0.03,y:0.03,w:0.94,h:0.94},        // 94–96% bleed w/ thin border
-      hero:{x:0.06,y:0.86,w:0.50,h:0.06},          // optional metadata line
+      // (T5) widened + lifted so the whole caps line fits without mid-phrase clipping
+      // ("FREEDOM TO" was cut on v3 tile 8). Wider box + T2 floor keeps it legible.
+      hero:{x:0.06,y:0.82,w:0.86,h:0.10},          // metadata / whisper line
       logo:{position:"bottom-right",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.04,heroToSupport:6},
@@ -609,6 +613,7 @@ const ARCHETYPES = [
     ],
     photoTreatment:"cleanGrain", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.10,
+    cropDrama:1.20, // (T8) documentary honesty benefits from a bold, decisive crop
   },
   { // §2.9 Two-Tier Label + Headline
     id:"label_headline", name:"Label + Headline",
@@ -688,10 +693,14 @@ const ARCHETYPES = [
   { // §2.12 Petal / Organic-Shape Photo Window
     id:"petal_window", name:"Petal Window",
     elements:{
-      mask:{x:0.62,y:0.34,w:0.34,h:0.44},          // orchid-mask window (thirds)
-      microLabel:{x:0.08,y:0.20,w:0.44,h:0.05},
-      hero:{x:0.08,y:0.30,w:0.48,h:0.34},
-      support:{x:0.08,y:0.68,w:0.44,h:0.08},
+      // (T6) enlarged window to the spec's 22–42% canvas area at a thirds centroid
+      // (was w0.34×h0.44 → too small on v3 tile 12). Centroid ≈(0.77,0.57).
+      mask:{x:0.55,y:0.32,w:0.44,h:0.50},          // orchid-mask window (thirds)
+      // (T6) tightened type block: eyebrow pulled to just above the hero (consistent
+      // rhythm gap, one left edge at x0.08) — fixes "weird spacing between typefaces".
+      microLabel:{x:0.08,y:0.27,w:0.44,h:0.05},
+      hero:{x:0.08,y:0.33,w:0.46,h:0.30},
+      support:{x:0.08,y:0.66,w:0.42,h:0.08},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.22,heroToSupport:9},
@@ -706,7 +715,7 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
-    special:"petalWindow", maskAreaFrac:0.30, // 22–42% of canvas
+    special:"petalWindow", maskAreaFrac:0.34, // (T6) 22–42% of canvas — enlarged window
     perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.28},hero:{x:0.06,y:0.52,w:0.84,h:0.24},support:{x:0.06,y:0.80,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
 ];
@@ -757,8 +766,8 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
   // Photo-frame intent from the archetype's special mode.
   let photoFrame={type:"none"};
   if(arch.special==="floatedCard" && el.card){
-    photoFrame={type:"card", box:asRole(el.card), radiusFrac:arch.cardRadiusFrac||0.10,
-      rotationDeg:0 /* set at apply-time for photo-moment only */};
+    photoFrame={type:"card", box:asRole(el.card), radiusFrac:arch.cardRadiusFrac||0.06,
+      rotationDeg:0 /* (T4) de-tilt: rotation 0 everywhere — client disliked the tilted card */};
   }else if(arch.special==="petalWindow" && el.mask){
     const c={x:(el.mask.x+el.mask.w/2),y:(el.mask.y+el.mask.h/2)};
     photoFrame={type:"petalMask", box:asRole(el.mask), areaFrac:arch.maskAreaFrac||0.30, centroid:c};
@@ -774,6 +783,7 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
     split: arch.split||null, sideFrac: arch.split||null,
     motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:V.motifPastels||arch.motifPastels||["sage","butter"]}:null,
     furniture: Array.isArray(arch.furniture)?arch.furniture:null,   // (T1) anchoring tells
+    cropDrama: typeof arch.cropDrama==="number"?arch.cropDrama:null, // (T8) focal-aware crop zoom
     fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
     heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
     leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
@@ -2491,8 +2501,7 @@ export default function App() {
     const shortAttr = m.roles.microLabel && attr && attr.length <= 28 && sub;
     let frame = m.photoFrame || { type: "none" };
     if (frame.type === "card") {
-      const rot = (pt === "photo_logo" || arch.suitedPostTypes?.includes("photo_logo")) ? 3 : 0;
-      frame = { ...frame, rotationDeg: rot };
+      frame = { ...frame, rotationDeg: 0 };  // (T4) de-tilt everywhere
     }
     const layout = {
       x: m.roles.hero?.x ?? 0.08, y: m.roles.hero?.y ?? 0.18,
@@ -2502,16 +2511,19 @@ export default function App() {
     };
     let motifLayers = null;
     if (m.motif) {
-      const spots = [[0.10,0.12],[0.88,0.16],[0.14,0.86],[0.86,0.84],[0.90,0.50]];
+      // (T7) composed diagonal-arc arrangement (matches the board render path): the
+      // first N spots form a balanced TL→BR diagonal hugging the corners, each rotated
+      // for an organic feel, in ≤2 pastel hues.
+      const spots = [[0.13,0.15,-14,0.105],[0.86,0.82,12,0.105],[0.88,0.20,22,0.085],[0.12,0.85,-8,0.082],[0.90,0.52,4,0.072]];
       const shapes = ["shape-1","shape-2","shape-3","acc-spark"];
-      const pastels = (m.motif.pastels||["sage","butter"]);
+      const pastels = (m.motif.pastels||["sage","butter"]).slice(0,2);
       const count = Math.max(2, Math.min(5, m.motif.count||3));
       motifLayers = [];
       for (let i=0;i<count;i++){
-        const [x,y]=spots[i%spots.length];
+        const [x,y,rot,scale]=spots[i%spots.length];
         motifLayers.push({ uid:"ol_motif_"+i+"_"+Math.random().toString(36).slice(2,5),
           assetId:shapes[i%shapes.length], mode:"overlay", motif:true,
-          master:{ x, y, scale:0.09, rotation:0, opacity:0.9, colorId:pastels[i%pastels.length] }, byDim:{} });
+          master:{ x, y, scale, rotation:rot, opacity:0.9, colorId:pastels[i%pastels.length] }, byDim:{} });
       }
     }
     return {
@@ -2629,7 +2641,7 @@ export default function App() {
     if (inList(patch.photoTreatment, "photoTreatment") && patch.photoTreatment !== photoTreatment) { setPhotoTreatment(patch.photoTreatment); applied.push("photoTreatment"); }
     if (inList(patch.photoFrameType, "photoFrameType") && patch.photoFrameType !== (photoFrame?.type || "none")) {
       if (patch.photoFrameType === "none") setPhotoFrame({ type: "none" });
-      else if (patch.photoFrameType === "card") setPhotoFrame({ type: "card", box: { x:0.54,y:0.32,w:0.38,h:0.42,align:"left" }, radiusFrac:0.10, rotationDeg:0 });
+      else if (patch.photoFrameType === "card") setPhotoFrame({ type: "card", box: { x:0.54,y:0.32,w:0.38,h:0.42,align:"left" }, radiusFrac:0.06, rotationDeg:0 });
       else if (patch.photoFrameType === "petalMask") setPhotoFrame({ type: "petalMask", box:{ x:0.62,y:0.34,w:0.34,h:0.44,align:"left" }, areaFrac:0.30, centroid:{ x:0.79, y:0.56 } });
       applied.push("photoFrameType");
     }
@@ -3306,7 +3318,7 @@ export default function App() {
       const subCC=cc&&cc.subtext!=null?cc.subtext:subtext;
       const shortAttr=om.roles.microLabel&&attrCC&&attrCC.length<=28&&subCC;
       let frame=om.photoFrame||{type:"none"};
-      if(frame.type==="card") frame={...frame,rotationDeg:(postType==="photo_logo"||overrideArch.suitedPostTypes?.includes("photo_logo"))?3:0};
+      if(frame.type==="card") frame={...frame,rotationDeg:0};  // (T4) de-tilt everywhere
       mat={
         roles:{ // per-dim role boxes (fractions → px) clamped later
           hero:om.roles.hero,support:om.roles.support,microLabel:om.roles.microLabel,
@@ -3315,7 +3327,7 @@ export default function App() {
         photoTreatment:om.photoTreatment, photoFrame:frame, fullBleed:om.fullBleed, thinBorder:om.thinBorder,
         heroCapFrac:om.heroCapFrac, heroToSupport:om.heroToSupport, leading:om.leading, leadingBody:om.leadingBody,
         palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
-        motif:om.motif, furniture:om.furniture,
+        motif:om.motif, furniture:om.furniture, cropDrama:om.cropDrama,
       };
     }else{
       // Live materialized state. `editorial` is true when the design carries role
@@ -3338,6 +3350,7 @@ export default function App() {
         leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
         palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
         gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
+        cropDrama: specNums?.cropDrama||null,
       };
     }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
@@ -3453,9 +3466,14 @@ export default function App() {
     //                        target rule-of-thirds x (text-left wide → 0.66; else
     //                        centre 0.50), fy = subject band centre clamped [0.30,0.55],
     //                        carrying the master zoom. Estimation is cached per image.
+    // (T8) crop-drama zoom: the materialized archetype may push a tighter, focal-aware
+    // crop (mat.cropDrama>1). It multiplies the effective zoom around the estimated
+    // focal point (faces never sliced — focalToImgT centres the subject band). Applies
+    // even on the master dim so the calibration board reflects the drama.
+    const cropDrama=(typeof mat?.cropDrama==="number"&&mat.cropDrama>1)?mat.cropDrama:1;
     const effImgTFor=(pw,ph,isSideBand)=>{
-      if(dimId===MASTER_DIM)return imgT;
-      if(imgTByDim[dimId])return imgTByDim[dimId];
+      if(dimId===MASTER_DIM && cropDrama<=1)return imgT;
+      if(imgTByDim[dimId] && cropDrama<=1)return imgTByDim[dimId];
       if(!mediaObj)return imgT;
       const focal=estimateFocalPoint(mediaObj);
       // Text-left wide layout → subject biased right (0.66). Side-band photo is
@@ -3465,7 +3483,8 @@ export default function App() {
       let targetFy;
       if(focal.confidence<0.35)targetFy=0.38;                 // low-confidence fallback (spec §4.3)
       else targetFy=Math.max(0.30,Math.min(0.55,(focal.band[0]+focal.band[1])/2));
-      const uz=(imgT.zoom&&imgT.zoom!==1)?imgT.zoom:1;         // carry a sane master zoom
+      const baseZ=(imgT.zoom&&imgT.zoom!==1)?imgT.zoom:1;     // carry a sane master zoom
+      const uz=baseZ*cropDrama;                                // (T8) apply the drama
       const t=focalToImgT(mediaObj,pw,ph,focal.confidence<0.35?{...focal,fx:0.5,fy:0.38}:focal,targetFx,targetFy,uz);
       return {...t,rotation:imgT.rotation||0};
     };
@@ -3851,22 +3870,36 @@ export default function App() {
       // the shape reads on an ivory field without becoming candy. Kept to the margins/
       // corners, never over the hero (spec §2.11 guardrail).
       if(mat.motif && !overlayLayers.some(l=>l.motif)){
-        const spots=[[0.11,0.13],[0.88,0.15],[0.13,0.87],[0.87,0.85],[0.90,0.50]];
+        // (T7) COMPOSED motif arrangement. v3 tile 11 read "floating petals not
+        // composed". Study of the childcare refs (Examples/Great/00a5…): flat botanical
+        // motifs sit on a deliberate DIAGONAL ARC hugging opposing corners, in ≤2
+        // pastel hues, slightly larger, each rotated a touch for an organic (not
+        // stamped) feel — never over the text zone. Spots are ordered so the first N
+        // always form a balanced diagonal (TL→BR) counterweighting the off-centre hero.
+        const spots=[
+          [0.13,0.15,-14,1.06],   // top-left anchor
+          [0.86,0.82, 12,1.06],   // bottom-right anchor (diagonal partner)
+          [0.88,0.20, 22,0.86],   // upper-right accent
+          [0.12,0.85,-8, 0.82],   // lower-left accent
+          [0.90,0.52, 4, 0.72],   // right-edge filler
+        ];
         const shapes=["shape-1","shape-2","shape-3","acc-spark"];
-        const pastels=(mat.motif.pastels&&mat.motif.pastels.length?mat.motif.pastels:["sage","butter"]);
+        const pastels=(mat.motif.pastels&&mat.motif.pastels.length?mat.motif.pastels.slice(0,2):["sage","butter"]);
         const count=Math.max(2,Math.min(5,mat.motif.count||3));
         const heroObs=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null;
+        const supObs=(supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.4)*1.5}:null;
         const ixm=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
         for(let i=0;i<count;i++){
           const img=archAssetImgs.current[shapes[i%shapes.length]]; if(!img) continue;
-          const [fx,fy]=spots[i%spots.length];
-          const sz=0.10*Math.min(w,h);
+          const [fx,fy,rot,szMul]=spots[i%spots.length];
+          const sz=0.14*Math.min(w,h)*szMul; // (T7) larger so motifs read as deliberate botanicals
           const box={x:fx*w-sz/2,y:fy*h-sz/2,w:sz,h:sz};
-          if(ixm(box,heroObs)) continue; // never crowd the hero
+          if(ixm(box,heroObs)||ixm(box,supObs)) continue; // never crowd hero/caption
           const base=ARCHETYPE_COLORS[pastels[i%pastels.length]]||ARCHETYPE_COLORS.sage;
-          const deep=mixHex(base,B.burnham,0.22); // deepen so it reads on ivory
+          const deep=mixHex(base,B.burnham,0.30); // (T7) deepen more so it reads composed, not a ghost blob
           const tinted=tintedAccessory(img,deep);
-          if(tinted) containDraw(ctx,tinted,box.x+sz/2,box.y+sz/2,sz,sz,0.92);
+          const cx=box.x+sz/2, cy=box.y+sz/2;
+          if(tinted){ ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot*Math.PI/180); ctx.translate(-cx,-cy); containDraw(ctx,tinted,cx,cy,sz,sz,0.92); ctx.restore(); }
         }
       }
       // Shared overlay-layer draw (motifs + any user accessories). Motifs are tinted
