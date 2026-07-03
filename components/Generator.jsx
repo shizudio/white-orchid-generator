@@ -1088,19 +1088,32 @@ function measureHeroLines(ctx, words, register, size, maxW){
 // fillStyle + shadow before calling. register ∈ {serif, heavySans}.
 function drawHeroText(ctx, str, opts){
   const {x, y, maxW, maxH, align="left", register="serif", caps=false,
-         start=120, minSize=28, leading=1.02} = opts;
+         start=120, minSize=28, leading=1.02, exactSize=null} = opts;
   const src=caps? stripHeroMarkers(str).toUpperCase() : str;
   const words= caps
     ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
     : heroWords(str);
   const lr=Math.max(0.95,Math.min(1.10,leading));
-  let size=Math.max(start,minSize), fit=null;
-  while(size>=minSize){
-    fit=measureHeroLines(ctx,words,register,size,maxW);
-    if(fit.lineCount*size*lr<=maxH) break;
-    size-=2;
+  let size, fit;
+  if(exactSize!=null){
+    // The reflow engine already computed the fitting size (incl. word-width floor);
+    // draw at exactly that size so measurement and paint never diverge.
+    size=exactSize; fit=measureHeroLines(ctx,words,register,size,maxW);
+  }else{
+    size=Math.max(start,minSize);
+    while(size>=minSize){
+      fit=measureHeroLines(ctx,words,register,size,maxW);
+      if(fit.lineCount*size*lr<=maxH) break;
+      size-=2;
+    }
   }
   const lineHeight=size*lr;
+  // Clamp to the box height: never draw a line below maxH (controlled truncation, not
+  // an edge crop). The reflow engine sizes the box inside the safe margins.
+  if(fit && fit.lines.length*lineHeight>maxH){
+    const maxLines=Math.max(1,Math.floor(maxH/lineHeight));
+    fit={...fit,lines:fit.lines.slice(0,maxLines),lineCount:Math.min(fit.lineCount,maxLines)};
+  }
   // Draw.
   ctx.textBaseline="alphabetic";
   fit.lines.forEach((lineWords,li)=>{
@@ -1140,6 +1153,124 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
   ctx.letterSpacing="0px";
   ctx.restore();
   return wpx;
+}
+
+/* ═══ REFLOW + COLLISION ENGINE (Commit 3) ══════════════════════════════════════
+   The single render path places editorial role boxes from materialized state, then
+   calls this deterministic pass to de-collide them against each other's ACTUAL
+   measured sizes + the known photo/card/mask/motif boxes. Priority (spec §-derived):
+     hero > support > microLabel > logo > motifs.
+   Rules:
+   - Hero is measured (shrink-to-fit its box W×H, MIN_FONT_PX floored); its ACTUAL
+     drawn height (usedH) is what lower elements avoid — not the authored box height.
+   - Support reflows BELOW the hero's real bottom (+ a gap) if the authored support
+     box overlaps the hero; it then shrinks within its MIN floor; if it still can't
+     fit above the bottom safe margin its lines are trimmed by the draw (slice(0,3)).
+   - microLabel (eyebrow) moves ABOVE the hero if it collides; if no room it drops.
+   - Boxes never exceed the safe margins (nothing renders outside except declared
+     bleeds — none here). Photo/card/mask/motif boxes are OBSTACLES text avoids.
+   Returns adjusted {heroBox,supBox,labelBox} + fitted sizes + flooredRoles for audit.
+   Pure over ctx measurement — reimplements no app maths; uses measureHeroLines/
+   MIN_FONT_PX/fitText-style shrink already in this module. */
+function reflowEditorial(ctx, a){
+  const { w, h, S, sm, register, caps, heroText, supportText, eyebrow,
+          heroCapFrac, heroToSupport, cardBox, maskBox, photoRegion, motifLayers } = a;
+  const safeTop=sm.t*h, safeBot=(1-sm.b)*h, safeL=sm.l*w, safeR=(1-sm.r)*w;
+  const clampY=(y)=>Math.max(safeTop,Math.min(safeBot,y));
+  const intersects=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+  let heroBox=a.heroBox?{...a.heroBox}:null;
+  let supBox=a.supBox?{...a.supBox}:null;
+  let labelBox=a.labelBox?{...a.labelBox}:null;
+  const flooredRoles=[];
+  // Obstacles the hero itself should avoid overlapping (photo/card/mask). If the hero
+  // box overlaps a photo obstacle, shrink its WIDTH to the clear side (never draw the
+  // hero on top of the photo unless full-bleed, which doesn't reach here).
+  const photoObstacle = cardBox||maskBox||photoRegion||null;
+  if(heroBox && photoObstacle && intersects(heroBox,photoObstacle)){
+    // Prefer the wider clear band: left of, or right of, the obstacle.
+    const leftW=Math.max(0,photoObstacle.x-heroBox.x);
+    const rightClear=Math.max(0,(heroBox.x+heroBox.w)-(photoObstacle.x+photoObstacle.w));
+    if(leftW>=rightClear && leftW>0.18*w){ heroBox.w=Math.min(heroBox.w, photoObstacle.x-heroBox.x-Math.min(w,h)*0.02); }
+    else if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+Math.min(w,h)*0.02; heroBox.w=(heroBox.x+heroBox.w)-nx; heroBox.x=nx; }
+    // else: obstacle spans the hero width → the hero keeps its box; vertical reflow
+    // below still separates the caption. (A full-width photo above/below is fine.)
+  }
+  // ── Measure the hero at its target size, shrink-to-fit W×H, MIN floored. ──
+  let heroStart=Math.max(24,(heroCapFrac||0.3)*h*1.35);
+  const heroMin=minFloor("headline",h,heroStart,38*S);
+  let heroPx=heroMin, heroUsedH=0, heroLineH=0;
+  if(heroText && heroBox){
+    const words = caps
+      ? stripHeroMarkers(heroText).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
+      : heroWords(heroText);
+    const lr=register==="serif"?1.02:1.05;
+    // Word-width floor: canvas can't break inside a word, so a single word wider than
+    // the box would crop at the edge. Compute the largest size at which the WIDEST
+    // word still fits heroBox.w — the hero may shrink BELOW the height-based min to
+    // honour this (spec: nothing crops at the canvas edge). This kills the "SEPTEMBER"
+    // clipped-at-right-edge bug on long content in a narrow hero box.
+    const widestWordFits=(size)=>{ let ok=true; for(const wt of words){ ctx.font=heroFont(register,size,wt.italic); if(ctx.measureText(wt.text).width>heroBox.w){ ok=false; break; } } return ok; };
+    let size=Math.max(heroStart,heroMin);
+    let hitFloor=false;
+    while(size>=heroMin){
+      const fit=measureHeroLines(ctx,words,register,size,heroBox.w);
+      if(fit.lineCount*size*lr<=heroBox.h && widestWordFits(size)){ heroPx=size; heroLineH=size*lr; heroUsedH=fit.lineCount*heroLineH; break; }
+      size-=2;
+    }
+    if(size<heroMin){
+      // Height/width still not satisfied at the min: keep shrinking (below the min)
+      // ONLY as far as needed for the widest word to fit, so nothing crops. Cap the
+      // absolute floor at a hard legibility minimum so we never vanish.
+      hitFloor=true;
+      const hardFloor=Math.max(14,0.02*h);
+      size=heroMin;
+      while(size>hardFloor && !widestWordFits(size)) size-=2;
+      heroPx=size; heroLineH=size*lr;
+      const fit=measureHeroLines(ctx,words,register,size,heroBox.w); heroUsedH=fit.lineCount*heroLineH;
+      flooredRoles.push({label:"Headline"});
+    }
+    // Clamp the hero's drawn height to its box so no line spills below it (the box is
+    // itself inside the safe margins). If the fitted text is taller than the box, trim
+    // to the number of lines that fit — a controlled truncation, never an edge crop.
+    if(heroLineH>0 && heroUsedH>heroBox.h){ const maxLines=Math.max(1,Math.floor(heroBox.h/heroLineH)); heroUsedH=maxLines*heroLineH; }
+  }
+  const heroBottom = heroBox ? heroBox.y+Math.max(heroUsedH,0) : safeTop;
+  const gap = Math.max(h*0.03, heroPx*0.4);
+  // ── microLabel (eyebrow): must sit clear of the hero. If it overlaps the hero,
+  //    move it ABOVE the hero (its own height above heroBox.y); if no room, drop it. ──
+  let labelSize = labelBox ? Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h) : 0;
+  if(labelBox){
+    labelSize=Math.min(labelSize,labelBox.h);
+    const lb={x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelSize*1.4};
+    if(heroBox && intersects(lb,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
+      const above=heroBox.y-labelSize*1.5;
+      if(above>=safeTop) labelBox={...labelBox,y:above};
+      else labelBox=null; // no room above → drop the eyebrow (lowest text priority after support)
+    }
+  }
+  // ── support: reflow below the hero's REAL bottom if it overlaps the hero. Then
+  //    clamp to the bottom safe margin; shrink target size to fit; floor + audit. ──
+  let supStart=Math.max(0.02*h,(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8));
+  let supMin=minFloor("body",h,supStart,24*S);
+  if(supBox){
+    // If support overlaps the hero (their authored boxes collide), push it below.
+    if(heroBox && intersects(supBox,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
+      supBox={...supBox,y:clampY(heroBottom+gap)};
+    }
+    // Never below the bottom safe margin; keep at least min-height room.
+    if(supBox.y+supBox.h>safeBot) supBox={...supBox,h:Math.max(supMin*1.3,safeBot-supBox.y)};
+    // Avoid a photo obstacle: if support overlaps the card/mask, clip its width to the
+    // clear side (same logic as the hero).
+    if(photoObstacle && intersects(supBox,photoObstacle)){
+      const leftW=Math.max(0,photoObstacle.x-supBox.x);
+      const rightClear=Math.max(0,(supBox.x+supBox.w)-(photoObstacle.x+photoObstacle.w));
+      if(leftW>=rightClear && leftW>0.18*w) supBox={...supBox,w:Math.min(supBox.w,photoObstacle.x-supBox.x-Math.min(w,h)*0.02)};
+      else if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+Math.min(w,h)*0.02; supBox={...supBox,x:nx,w:(supBox.x+supBox.w)-nx}; }
+    }
+    if(supBox.h<supMin*1.3) flooredRoles.push({label:"Body text"});
+  }
+  return { heroBox, supBox, labelBox, heroStart:Math.max(heroStart,heroMin), heroMin,
+           heroPx, labelSize, supStart, supMin, flooredRoles };
 }
 
 function sampleOverallLuminance(source){
@@ -2324,13 +2455,19 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.__woSetArchetype = (id, content = {}) => {
-      applyArchetype(id === "none" ? null : id);
+      // Set copy + postType FIRST so materialization writes roles for the right
+      // postType and the eyebrow/register reflect the actual copy.
       if (content.headline !== undefined) setHeadline(content.headline);
       if (content.subtext !== undefined) setSubtext(content.subtext);
       if (content.attribution !== undefined) setAttribution(content.attribution);
       if (content.dateText !== undefined) setDateText(content.dateText);
       if (content.postType) setPostType(content.postType);
       if (content.dimensionId) setDimensionId(content.dimensionId);
+      materializeArchetype(id === "none" ? null : id, {
+        postType: content.postType || postType,
+        attribution: content.attribution ?? attribution,
+        subtext: content.subtext ?? subtext,
+      });
     };
     window.__woArchAudit = () => auditRef.current;
     window.__woArchFontMeta = () => fontMetaRef.current;
@@ -2742,9 +2879,66 @@ export default function App() {
     const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
     const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
-    // Effective text layout: spec resolution rule (user override → master → per-format default + master relative tweaks).
-    const layout=resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim);
+    // ── MATERIALIZED VISUAL STATE (Commit 2 — single render path) ──
+    // `mat` is the resolved editorial-visual intent for THIS render, read from
+    // first-class state (photoTreatment/photoFrame/heroRegister/microLabel + the
+    // materialized role geometry) — NOT forked on archetypeId. The calibration board
+    // (opts.archOverride) supplies a TEMPORARY materialized state without touching
+    // React state, exactly per the client ruling. `provArch` is the provenance
+    // archetype used only to cascade materialized geometry into non-master formats'
+    // safe zones (resolveTextLayout) — the renderer never branches its layout on it.
+    const overrideArch = opts.archOverride && ARCHETYPES_BY_ID[opts.archOverride] ? ARCHETYPES_BY_ID[opts.archOverride] : null;
+    const provArch = overrideArch || (archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null);
+    // Effective text layout: spec resolution rule (user override → master → per-format
+    // default + master relative tweaks); when an archetype is the provenance, its
+    // materialized role geometry cascades per-format (Commit 1).
+    const layout=resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim,provArch);
     const sm=fmt.safe||{t:0.08,b:0.08,l:0.08,r:0.08};
+    // Resolve the materialized visual bundle for this render.
+    let mat;
+    if(overrideArch){
+      // Calibration board: temporary materialized state for an arbitrary archetype at
+      // THIS dim, with per-cell content (no React state touched).
+      const om=materializeArchetypeLayout(overrideArch,dimId);
+      const cc=opts.calibrationContent||null;
+      const attrCC=cc&&cc.attribution!=null?cc.attribution:attribution;
+      const subCC=cc&&cc.subtext!=null?cc.subtext:subtext;
+      const shortAttr=om.roles.microLabel&&attrCC&&attrCC.length<=28&&subCC;
+      let frame=om.photoFrame||{type:"none"};
+      if(frame.type==="card") frame={...frame,rotationDeg:(postType==="photo_logo"||overrideArch.suitedPostTypes?.includes("photo_logo"))?3:0};
+      mat={
+        roles:{ // per-dim role boxes (fractions → px) clamped later
+          hero:om.roles.hero,support:om.roles.support,microLabel:om.roles.microLabel,
+        },
+        photoRegion:om.photoRegion, register:om.register, caps:om.caps, usesDateAsHero:om.usesDateAsHero,
+        photoTreatment:om.photoTreatment, photoFrame:frame, fullBleed:om.fullBleed, thinBorder:om.thinBorder,
+        heroCapFrac:om.heroCapFrac, heroToSupport:om.heroToSupport, leading:om.leading, leadingBody:om.leadingBody,
+        palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
+        motif:om.motif,
+      };
+    }else{
+      // Live materialized state. `editorial` is true when the design carries role
+      // geometry + a hero register (materialized archetype OR a manual edit of one) —
+      // NOT keyed on archetypeId. Legacy designs (no roles) render the stacked path.
+      const rolesGeom=layout.roles||null;
+      const editorial=!!(rolesGeom&&heroRegister);
+      // provArch supplies the numeric spec targets (cap frac / ratio) + fullBleed/
+      // thinBorder/photoRegion shape. When the user has fully detached (edited copy on
+      // a legacy design) provArch is null → non-editorial.
+      const specNums=provArch?materializeArchetypeLayout(provArch,dimId):null;
+      mat={
+        roles: editorial?rolesGeom:null,
+        photoRegion: specNums?specNums.photoRegion:null,
+        register: heroRegister||"serif", caps: !!(specNums?.caps),
+        usesDateAsHero: !!(specNums?.usesDateAsHero),
+        photoTreatment, photoFrame: photoFrame||{type:"none"},
+        fullBleed: !!(specNums?.fullBleed), thinBorder: !!(specNums?.thinBorder),
+        heroCapFrac: specNums?.heroCapFrac||0.3, heroToSupport: specNums?.heroToSupport||8,
+        leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
+        palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
+        gridAnchor: specNums?.gridAnchor||"edge", motif:null,
+      };
+    }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
     // let (not const): FRAME-AWARE COMPOSITION (Commit 2) may snap the text block
     // off the frame-shape boundary onto the solid background below.
@@ -2958,25 +3152,26 @@ export default function App() {
       frameLayers.forEach(l=>drawFrameLayer(ctx,fcv,overlayImgs.current[l.assetId],mediaObj,w,h,resolveT(l),imgT));
     }
 
-    // ═══ ARCHETYPE RENDER PATH (Commit 3) ═══════════════════════════════════
-    // When an archetype is active, layout resolves from ARCHETYPES (§2) instead of
-    // the legacy FORMAT_LAYOUTS text zones. Format safe zones STILL clamp every
-    // role box (spec format-design §1.0); MIN_FONT_PX still floors; drawBackdrop /
-    // harmonizer still guarantee contrast. Content maps to roles: headline→hero
-    // (dateText→hero for big_number), subtext/attribution→support, logo→logo slot.
-    // The elements rail keeps working because manual edits write the same override
-    // state — but the archetype path derives its boxes from the spec, not the
-    // legacy text-zone, so we render here and RETURN before the legacy branches.
-    // opts.archOverride (Commit 4 calibration board) renders an ARBITRARY archetype
-    // offscreen without touching live state — the board loops all 12 through here.
-    const effArchId = opts.archOverride && ARCHETYPES_BY_ID[opts.archOverride] ? opts.archOverride : archetypeId;
-    const archActive = effArchId && ARCHETYPES_BY_ID[effArchId] && !hasFrame;
-    if(archActive){
-      const arch=ARCHETYPES_BY_ID[effArchId];
-      const el=resolveArchetypeElements(arch,dimId);
-      const pal=arch.palette||{};
+    // ═══ SINGLE RENDER PATH — EDITORIAL MODE (Commit 2 / 3) ═════════════════════
+    // The parallel archetype layout branch is GONE. When the design carries
+    // materialized editorial state (mat.editorial: role geometry + a hero register —
+    // written by materializeArchetype, then EDITABLE by every manual tool), this one
+    // path renders positioned hero/support/label from that state and calls the SAME
+    // painters (applyDuotone/card/petal-mask/motifs/drawHeroText/microLabel) keyed on
+    // mat.photoTreatment / mat.photoFrame — NOT on archetypeId. Legacy designs (no
+    // materialized roles) fall through to the stacked postType branches unchanged.
+    // Manual tools work by construction: colour picks set textColorId (honoured
+    // below), overlay adds append layers (no re-seed → no layout jump), drags rewrite
+    // roles, inspector edits stick. The reflow engine (Commit 3) then de-collides the
+    // measured boxes.
+    if(mat.editorial && !hasFrame){
+      const pal=mat.palette||{};
       const fieldColor=(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
-      const inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
+      // Ink resolves for contrast against the FIELD (solid) unless the user forced a
+      // colour. textColorId!=="auto" is honoured here so the manual text-colour picker
+      // applies on materialized designs (the client's exact bug).
+      let inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
+      if(textColorId&&textColorId!=="auto") inkColor=B[textColorId]||inkColor;
       // Clamp a role box (fractions) into this format's safe margins, in px.
       const clampBox=(b)=>{
         if(!b) return null;
@@ -2986,75 +3181,61 @@ export default function App() {
         const bh2=Math.min((b.h??0.2),1-sm.b-y0);
         return {x:x0*w,y:y0*h,w:Math.max(0.05*w,bw2*w),h:Math.max(0.03*h,bh2*h)};
       };
-      // 1. Base field or full-bleed photo.
-      if(arch.fullBleed && mediaObj){
+      const treatOf=id=>PHOTO_TREATMENTS[id]||PHOTO_TREATMENTS.none;
+      const frame=mat.photoFrame||{type:"none"};
+      // 1. Base field or full-bleed photo (photoTreatment materialized as state).
+      if(mat.fullBleed && mediaObj){
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
-        if(arch.thinBorder){
-          const p=clampBox(el.photo)||{x:0.03*w,y:0.03*h,w:0.94*w,h:0.94*h};
+        if(mat.thinBorder){
+          const p=clampBox(mat.photoRegion)||{x:0.03*w,y:0.03*h,w:0.94*w,h:0.94*h};
           ctx.save(); ctx.beginPath(); ctx.rect(p.x,p.y,p.w,p.h); ctx.clip();
           drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
-          const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,p.x,p.y,p.w,p.h);
+          treatOf(mat.photoTreatment)(ctx,p.x,p.y,p.w,p.h);
           ctx.restore();
         }else{
           drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
-          const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,0,0,w,h);
+          treatOf(mat.photoTreatment)(ctx,0,0,w,h);
         }
       }else{
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
       }
-      // 2. Special composite (photo split / card / motifs / petal window).
       const drawSplitPhoto=(box)=>{
         if(!mediaObj||!box) return;
         ctx.save(); ctx.beginPath(); ctx.rect(box.x,box.y,box.w,box.h); ctx.clip();
         ctx.translate(box.x,box.y);
         drawPhotoFramed(ctx,mediaObj,box.w,box.h,effImgTFor(box.w,box.h,true));
         ctx.restore();
-        const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,box.x,box.y,box.w,box.h);
+        treatOf(mat.photoTreatment)(ctx,box.x,box.y,box.w,box.h);
       };
-      if(arch.special==="floatedCard"){
-        const c=clampBox(el.card);
+      // 2. Photo frame (card / petal window) or plain split — keyed on materialized
+      //    photoFrame, not archetype. A `cardBox`/`maskBox` is returned so the reflow
+      //    engine (Commit 3) can de-collide text against the photo geometry.
+      let cardBox=null, maskBox=null;
+      if(frame.type==="card"){
+        const c=clampBox(frame.box); cardBox=c;
         if(c){
-          const r=Math.max(0.06,Math.min(0.14,arch.cardRadiusFrac||0.10))*c.w;
-          const rot=(arch.suitedPostTypes.includes("photo_logo")||postType==="photo_logo")&&!arch.fullBleed?( (parseInt(effArchId.length+ (headline||"").length)%2)?-3:3 ):0; // ±2–4° only on photo-moment (spec §5.4)
+          const r=Math.max(0.06,Math.min(0.14,frame.radiusFrac||0.10))*c.w;
+          const rot=frame.rotationDeg||0;   // ±2–4° only on photo-moment (spec §5.4)
           ctx.save();
           ctx.translate(c.x+c.w/2,c.y+c.h/2); if(rot) ctx.rotate(rot*Math.PI/180); ctx.translate(-(c.x+c.w/2),-(c.y+c.h/2));
-          // thin ivory/ink border card
           const rr=(x,y,ww,hh,rad)=>{ctx.beginPath();ctx.moveTo(x+rad,y);ctx.arcTo(x+ww,y,x+ww,y+hh,rad);ctx.arcTo(x+ww,y+hh,x,y+hh,rad);ctx.arcTo(x,y+hh,x,y,rad);ctx.arcTo(x,y,x+ww,y,rad);ctx.closePath();};
           const bpad=Math.max(2,0.01*Math.min(w,h));
-          ctx.fillStyle=inkColor; rr(c.x-bpad,c.y-bpad,c.w+bpad*2,c.h+bpad*2,r+bpad); ctx.fill();
+          ctx.fillStyle=(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke); rr(c.x-bpad,c.y-bpad,c.w+bpad*2,c.h+bpad*2,r+bpad); ctx.fill();
           ctx.save(); rr(c.x,c.y,c.w,c.h,r); ctx.clip();
           if(mediaObj){ ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,effImgTFor(c.w,c.h,true)); ctx.restore();
-            const treat=PHOTO_TREATMENTS[arch.photoTreatment]||PHOTO_TREATMENTS.none; treat(ctx,c.x,c.y,c.w,c.h);
+            treatOf(mat.photoTreatment)(ctx,c.x,c.y,c.w,c.h);
           }else{ ctx.fillStyle=withAlpha(B.celadon,1); ctx.fillRect(c.x,c.y,c.w,c.h); }
           ctx.restore();
           ctx.restore();
         }
-      }else if(arch.special==="motifField"){
-        // 2–5 flat pastel motifs scattered to the corners/margins (spec §2.11),
-        // never behind the hero. Deterministic placement so exports are stable.
-        const shapes=["shape-1","shape-2","shape-3","acc-spark"].map(id=>archAssetImgs.current[id]).filter(Boolean);
-        const pastels=(arch.motifPastels||["sage","butter"]).map(k=>ARCHETYPE_COLORS[k]||B.celadon);
-        const count=Math.max(2,Math.min(5,arch.motifCount||3));
-        const spots=[[0.10,0.12],[0.88,0.16],[0.14,0.86],[0.86,0.84],[0.90,0.50]];
-        for(let i=0;i<count && shapes.length;i++){
-          const img=shapes[i%shapes.length], col=pastels[i%pastels.length];
-          const [fx,fy]=spots[i%spots.length];
-          const sz=Math.min(w,h)*0.09; // ≤10% of min(W,H)
-          const tinted=tintedAccessory(img,col);
-          if(tinted) containDraw(ctx,tinted,fx*w,fy*h,sz,sz,0.9);
-        }
-      }else if(arch.special==="petalWindow"){
-        // Orchid mask photo window (§2.12): duotone INSIDE the mask only, on a
-        // generous solid field. Mask area target 22–42% of canvas.
-        const m=clampBox(el.mask);
+      }else if(frame.type==="petalMask"){
+        const m=clampBox(frame.box); maskBox=m;
         const orchid=archAssetImgs.current["orchid-petal"];
         if(m && mediaObj && orchid){
           const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
           const octx=oc.getContext("2d");
-          // paint photo into a temp, then keep only inside the mask via source-in.
           octx.save(); octx.translate(m.x+m.w/2,m.y+m.h/2);
           const scale=Math.max(m.w,m.h);
-          // draw silhouette solid
           for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
           octx.globalCompositeOperation="source-in";
           octx.translate(-(m.x+m.w/2),-(m.y+m.h/2));
@@ -3062,58 +3243,71 @@ export default function App() {
           drawPhotoFramed(octx,mediaObj,m.w,m.h,effImgTFor(m.w,m.h,true)); octx.restore();
           octx.globalCompositeOperation="source-over";
           octx.restore();
-          // duotone the masked photo (inside mask only) then blit.
           applyDuotone(octx,m.x,m.y,m.w,m.h,{strength:1});
           ctx.drawImage(oc,0,0);
         }else if(m && orchid){
-          // no photo → draw the orchid as a solid accent mark on the field.
           const tinted=tintedAccessory(orchid,ARCHETYPE_COLORS.terracotta);
           if(tinted) containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,Math.max(m.w,m.h),Math.max(m.w,m.h),0.9);
         }
-      }else if(el.photo){
-        // Plain split/side photo archetypes (editorial_split, portrait_credential).
-        drawSplitPhoto(clampBox(el.photo));
+      }else if(mat.photoRegion && !mat.fullBleed){
+        // Plain split/side photo (editorial_split, portrait_credential materialized).
+        drawSplitPhoto(clampBox(mat.photoRegion));
       }
-      // 3. Text roles. hero register + caps per archetype; support = caption.
-      const heroBox=clampBox(el.hero);
-      const supBox=clampBox(el.support);
-      const labelBox=clampBox(el.microLabel);
-      // Content mapping: headline→hero (dateText→hero for big_number),
-      // subtext/attribution→support. A short attribution becomes the eyebrow
-      // (micro-label) when BOTH a support line (subtext) and a label slot exist.
-      const isBigNum=arch.usesDateAsHero;
-      // Calibration board (Commit 4) may inject per-cell content without touching
-      // state; fall back to the live copy fields otherwise.
+      // Motifs are materialized as ordinary OVERLAY LAYERS now — they render in the
+      // shared topLayers block below, so nothing motif-specific happens here.
+      // 3. Text roles — positioned. hero via drawHeroText; support = caption; label =
+      //    eyebrow. The REFLOW ENGINE (Commit 3) adjusts these measured boxes to
+      //    de-collide before the final draw.
+      let heroBox=clampBox(mat.roles?.hero);
+      let supBox=clampBox(mat.roles?.support);
+      let labelBox=clampBox(mat.roles?.microLabel);
+      const isBigNum=mat.usesDateAsHero;
       const cc=opts.calibrationContent||null;
       const ccHeadline=cc&&cc.headline!=null?cc.headline:headline;
       const ccSubtext=cc&&cc.subtext!=null?cc.subtext:subtext;
       const ccAttribution=cc&&cc.attribution!=null?cc.attribution:attribution;
       const ccDateText=cc&&cc.dateText!=null?cc.dateText:dateText;
       const heroFinal = isBigNum ? (ccDateText||ccHeadline||"") : (ccHeadline || "");
-      const supportText = ccSubtext || ccAttribution || (isBigNum?ccHeadline:"") || "";
-      // Hero register: heavySans is the ≤1-in-3 poster register; "either" and the
-      // serif default both render serif here (heavySans is opt-in per archetype).
-      const register = arch.heroRegister==="heavySans" ? "heavySans" : "serif";
-      // Solid field → fixed ink; photo (fullBleed) → resolve for contrast.
+      const eyebrow = mat.microLabelText || (labelBox && mat.roles?.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28 ? ccAttribution : "");
+      // support text: subtext, else attribution (if not already used as the eyebrow),
+      // else the headline (for big_number where the date is the hero).
+      const supportText = ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "";
+      const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
-      if(arch.fullBleed && mediaObj && heroBox){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
+      if(mat.fullBleed && mediaObj && heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
+
+      // ── REFLOW + COLLISION ENGINE (Commit 3) ──────────────────────────────────
+      // Measure each role at its target size, then deterministically de-collide:
+      // priority hero > support > microLabel > logo > motifs. Overlapping lower-
+      // priority elements move below the hero (or shrink to their MIN floor); nothing
+      // renders outside the safe margins. Returns adjusted boxes + fitted sizes.
+      const reflow = reflowEditorial(ctx, {
+        w, h, S, sm, register, caps: mat.caps||isBigNum,
+        heroBox, supBox, labelBox, cardBox, maskBox,
+        photoRegion: (mat.photoRegion&&!mat.fullBleed)?clampBox(mat.photoRegion):null,
+        heroText: heroFinal, supportText, eyebrow,
+        heroCapFrac: mat.heroCapFrac, heroToSupport: mat.heroToSupport,
+        leading: register==="serif"?1.02:1.05, leadingBody: mat.leadingBody||1.32,
+        motifLayers: overlayLayers.filter(l=>l.motif),
+      });
+      heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
+
       let usedH=0;
-      const eyebrow=(labelBox && arch.elements.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28) ? ccAttribution : "";
-      if(eyebrow){
+      // eyebrow (micro-label)
+      if(eyebrow && labelBox){
         ctx.save(); ctx.fillStyle=heroInk;
-        const lblSize=Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h);
-        drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,Math.min(lblSize,labelBox.h),{align:el.microLabel.align||"left",tracking:0.08});
+        const lblSize=Math.min(reflow.labelSize, labelBox.h);
+        drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08});
         ctx.restore();
       }
       // hero
-      if(heroFinal){
+      if(heroFinal && heroBox){
         beginText(); ctx.fillStyle=heroInk;
-        const heroStart=Math.max(24, (arch.scaleRatio?.heroCapFrac||0.3)*h*1.35);
-        const heroMin=minFloor("headline",h,heroStart,38*S);
         const hr=drawHeroText(ctx,heroFinal,{
           x:heroBox.x,y:heroBox.y,maxW:heroBox.w,maxH:heroBox.h,
-          align:el.hero.align|| (arch.gridAnchor==="center-column"?"left":"left"),
-          register, caps:arch.caps||isBigNum, start:heroStart, minSize:heroMin,
+          align:mat.roles?.hero?.align||"left",
+          register, caps:mat.caps||isBigNum, start:reflow.heroStart, minSize:reflow.heroMin,
+          exactSize:reflow.heroPx,
           leading: register==="serif"?1.02:1.05,
         });
         endText();
@@ -3121,90 +3315,69 @@ export default function App() {
         fontMeta.headline=hr.size;
         setTextBounds(hr.usedH);
       }
-      // support / caption (much smaller — the hero:support ratio does the work).
+      // support / caption
       if(supportText && supBox){
         beginText(); ctx.fillStyle=heroInk;
-        const capH=fontMeta.headline||heroBox.h*0.5;
-        const supStart=Math.max(0.02*h, capH/(arch.scaleRatio?.heroToSupport||8));
-        const supMin=minFloor("body",h,supStart,24*S);
-        const sf=fitText(ctx,supportText,s=>`400 ${s}px ${F.body}`,supStart,supBox.w,supBox.h,1.32,supMin);
+        const sf=fitText(ctx,supportText,s=>`400 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
         ctx.font=`400 ${sf.size}px ${F.body}`;
-        drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,el.support.align||"left");
+        drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,mat.roles?.support?.align||"left");
         fontMeta.subtext=sf.size;
         endText();
       }
-      // logo (same guard as legacy — avoids text + focal band). CONTRAST-AWARE
-      // VARIANT (Commit 3): on a SOLID archetype field, auto-pick the readable logo
-      // colour (green on a light ivory/pastel field, ivory on a dark green field) so
-      // the wordmark never vanishes ivory-on-ivory — unless the user chose a variant.
-      // Photo-bleed archetypes keep the existing photo-region contrast handling.
+      // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
+      // unless the user chose one; photo-bleed keeps photo-region contrast handling.
       let logoOpts={};
-      if(!logoVariantTouched && !arch.fullBleed){
+      if(!logoVariantTouched && !mat.fullBleed){
         const swap=readableLogoForField(hexLuminance(fieldColor));
         if(swap) logoOpts={logoImg:swap.img,inkLum:swap.inkLum};
       }
       putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
-      // audit + drop info (reuse the same accumulators the legacy path fills).
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
         let contrast=null; const tb=textBoundsRef.current;
         if(tb&&tb.w>0&&tb.h>0) contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},heroInk);
-        // ── ARCHETYPE-DRIFT SIGNAL (Commit 3) ──────────────────────────────────
-        // Measured deviations from THIS archetype's spec targets, surfaced to
-        // runLocalAudit so it can advise (advice-first) when a design drifts. All
-        // values are what the render actually produced (fontMeta, boxes), plus the
-        // archetype's documented floors, so the audit reimplements no layout maths.
         const heroPx=fontMeta.headline||0, supPx=fontMeta.subtext||0;
         const heroSupportRatio=(heroPx&&supPx)?heroPx/supPx:null;
-        // Hero centroid as canvas fractions (from the resolved hero box).
         const heroCentroid=heroBox?{x:(heroBox.x+heroBox.w/2)/w,y:(heroBox.y+heroBox.h/2)/h}:null;
-        // Whitespace estimate: fraction of canvas NOT covered by text/photo/card/
-        // mask role boxes (a coarse proxy — role boxes are the "occupied" area).
-        const occ=[heroBox,supBox,labelBox,
-          arch.special==="floatedCard"?clampBox(el.card):null,
-          arch.special==="petalWindow"?clampBox(el.mask):null,
-          (arch.fullBleed||el.photo)?(arch.fullBleed?{x:0,y:0,w,h}:clampBox(el.photo)):null,
+        const occ=[heroBox,supBox,labelBox,cardBox,maskBox,
+          (mat.fullBleed||mat.photoRegion)?(mat.fullBleed?{x:0,y:0,w,h}:clampBox(mat.photoRegion)):null,
         ].filter(Boolean);
         const occArea=occ.reduce((a,b)=>a+(b.w*b.h),0);
         const whitespaceFrac=Math.max(0,Math.min(1,1-occArea/(w*h)));
-        // Warmth-device count (spec §0 / anti-pattern #20): the archetype's own
-        // special composite is 1 device; any user-added frame/overlay/script layer
-        // stacks on top. Multicolor logotype is exempt (not counted here).
-        const specialDevice=(arch.special==="floatedCard"||arch.special==="motifField"||arch.special==="petalWindow")?1:0;
-        const extraLayerDevices=topLayers.filter(l=>["frame","overlay","lineart","outline"].includes(l.mode||"frame")).length;
+        // Warmth-device count: the materialized frame/motif set is 1 device; a user-
+        // added frame/overlay/lineart/outline (NON-motif) stacks on top.
+        const specialDevice=(frame.type==="card"||frame.type==="petalMask"||overlayLayers.some(l=>l.motif))?1:0;
+        const extraLayerDevices=topLayers.filter(l=>!l.motif&&["frame","overlay","lineart","outline"].includes(l.mode||"frame")).length;
         const warmthDevices=specialDevice+extraLayerDevices;
-        // Palette adjacency (spec §3 / anti-pattern #13): flag two SATURATED pastels
-        // adjacent (bg field + accent). Our pastel ids are ARCHETYPE_COLORS keys.
-        const palAccent=arch.palette?.accent, palBg=arch.palette?.bg;
-        const bgIsPastel=PASTEL_IDS.includes(palBg);
-        const accentIsPastel=PASTEL_IDS.includes(palAccent);
-        const pastelClash=bgIsPastel&&accentIsPastel&&palAccent!==palBg;
+        const provPal=provArch?.palette||{};
+        const palAccent=provPal.accent, palBg=provPal.bg;
+        const pastelClash=PASTEL_IDS.includes(palBg)&&PASTEL_IDS.includes(palAccent)&&palAccent!==palBg;
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
-          zoneContrast:contrast,flooredRoles:[],dropped:[...dropped],logo:{...auditLogo},
+          zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
           archetypeDrift:{
             heroSupportRatio, heroWords:(stripHeroMarkers(heroFinal||"").trim().split(/\s+/).filter(Boolean).length),
-            supportFloor:(arch.scaleRatio?.heroToSupport||8),
-            heroCentroid, centerExclude:!!arch.centerExclude,
-            whitespaceFrac, whitespaceTarget:(typeof arch.whitespace==="number"?arch.whitespace:null), fullBleed:!!arch.fullBleed,
+            supportFloor:(mat.heroToSupport||8),
+            heroCentroid, centerExclude:!!(provArch?.centerExclude),
+            whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash,
           },
         };
       }
-      // top overlay layers still draw (unlikely on archetype designs, but keep it
-      // consistent — a user could add an accessory). Fall through to the shared
-      // topLayers block by NOT returning until after it.
+      // Shared overlay-layer draw (motifs + any user accessories). Motifs are tinted
+      // from ARCHETYPE_COLORS (pastel keys); user accessories keep their B tinting.
       const _octail = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
       topLayers.forEach(layer=>{
-        const img=overlayImgs.current[layer.assetId]; if(!img) return;
+        const img=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId]; if(!img) return;
         const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
+        if(layer.motif){ const col=ARCHETYPE_COLORS[t.colorId]||B.celadon; const tinted=tintedAccessory(img,col); drawOverlayLayer(ctx,tinted||img,w,h,t); return; }
         if(layer.mode==="outline"){drawOutlineLayer(ctx,_octail,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);return;}
         if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
         if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
       });
-      return; // archetype path complete — skip legacy postType branches.
+      return; // single-path editorial render complete.
     }
 
     if(postType==="photo_logo"){
