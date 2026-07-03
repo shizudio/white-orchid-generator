@@ -10,3 +10,6 @@ dist
 *.psd
 *.bak
 .gstack/
+
+# generated preview exports (local only)
+generated/

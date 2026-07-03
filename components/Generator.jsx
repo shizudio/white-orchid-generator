@@ -576,7 +576,7 @@ const ARCHETYPES = [
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
     special:"petalWindow", maskAreaFrac:0.30, // 22–42% of canvas
-    perDim:{ story:{mask:{x:0.30,y:0.14,w:0.44,h:0.30},hero:{x:0.06,y:0.50,w:0.84,h:0.24},support:{x:0.06,y:0.78,w:0.60,h:0.08},microLabel:{x:0.06,y:0.45,w:0.60,h:0.04}} },
+    perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.28},hero:{x:0.06,y:0.52,w:0.84,h:0.24},support:{x:0.06,y:0.80,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
 ];
 const ARCHETYPES_BY_ID=Object.fromEntries(ARCHETYPES.map(a=>[a.id,a]));
@@ -904,17 +904,48 @@ function applyDuotone(ctx, x, y, w, h, opts={}){
   const color=opts.color||"#254E48"; // burnham
   ctx.save();
   ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  // (§3.5) FIRST reduce the photo's own saturation so the deep-green `color` pass
+  // has room to READ. Without this, an already-green grass photo swallows the wash
+  // and the duotone looks like it "didn't apply" (the client's timid-duotone bug).
+  // Scale the desat with strength so quiet washes stay light.
+  ctx.globalCompositeOperation="saturation";
+  ctx.globalAlpha=0.30+0.35*s; // 30–65% toward neutral
+  ctx.fillStyle="#808080";
+  ctx.fillRect(x,y,w,h);
+  // (§3.1) luminance-preserving deep-green hue pass.
   ctx.globalCompositeOperation="color";
   ctx.globalAlpha=alpha;
   ctx.fillStyle=color;
   ctx.fillRect(x,y,w,h);
-  // Contrast-preservation pass: a light multiply of the same hue in shadows only
-  // would muddy; instead re-assert a hair of contrast via a very light overlay of
-  // the ink so the green reads as duotone not tint. (Bounded, ≤0.06.)
-  ctx.globalCompositeOperation="overlay";
-  ctx.globalAlpha=0.06;
+  // Deepen the wash into the shadows with a light multiply so the green is
+  // unambiguous, not a faint tint. Bounded so highlights keep detail (§3.1).
+  ctx.globalCompositeOperation="multiply";
+  ctx.globalAlpha=0.10+0.14*s; // 0.10–0.24
   ctx.fillStyle=color;
   ctx.fillRect(x,y,w,h);
+  ctx.restore();
+}
+
+// (§3.3) STRONG duotone for §2.4 full-bleed heroes + §2.12 petal windows: grayscale
+// first, then a green `multiply` shadow pass + ivory `screen` highlight pass. This is
+// the unmistakably-green, high-contrast treatment (≤1-in-8 posts) — the correct fix
+// for the "full-bleed duotone too timid / reads full-colour" client bug.
+function applyStrongDuotone(ctx, x, y, w, h, opts={}){
+  const green=opts.color||"#254E48", ivory=opts.ivory||"#F5F6E7";
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+  // Full desaturate to a grayscale base.
+  ctx.globalCompositeOperation="saturation";
+  ctx.globalAlpha=1; ctx.fillStyle="#808080"; ctx.fillRect(x,y,w,h);
+  // Green shadow pass (multiply) — pulls the darks deep green.
+  ctx.globalCompositeOperation="multiply";
+  ctx.globalAlpha=0.55; ctx.fillStyle=green; ctx.fillRect(x,y,w,h);
+  // Ivory highlight pass (screen) — lifts the lights to warm paper, keeping contrast.
+  ctx.globalCompositeOperation="screen";
+  ctx.globalAlpha=0.34; ctx.fillStyle=ivory; ctx.fillRect(x,y,w,h);
+  // A final hue lock so mid-tones sit on-brand green, not neutral gray.
+  ctx.globalCompositeOperation="color";
+  ctx.globalAlpha=0.40; ctx.fillStyle=green; ctx.fillRect(x,y,w,h);
   ctx.restore();
 }
 
@@ -1004,8 +1035,8 @@ const PHOTO_TREATMENTS = {
   duotoneLift:   (ctx,x,y,w,h)=>{ applyDuotone(ctx,x,y,w,h,{strength:0.5}); applySoftLift(ctx,x,y,w,h,{strength:0.5}); },
   // §3.8 childcare default: near-full-color film grain, light desat.
   filmGrain:     (ctx,x,y,w,h)=>{ applyFilmGrain(ctx,x,y,w,h,{strength:0.5,desat:0.10}); },
-  // §2.12 petal window: strong-ish duotone inside the mask.
-  duotoneStrong: (ctx,x,y,w,h)=>{ applyDuotone(ctx,x,y,w,h,{strength:1}); },
+  // §2.4 full-bleed + §2.12 petal window: unmistakably-green strong duotone (§3.3).
+  duotoneStrong: (ctx,x,y,w,h)=>{ applyStrongDuotone(ctx,x,y,w,h); },
   // §2.5 floated card / already-art-directed: near-full color, faint grain only.
   cleanGrain:    (ctx,x,y,w,h)=>{ applyFilmGrain(ctx,x,y,w,h,{strength:0.2,desat:0.05}); },
   // No treatment (documentary clean).
@@ -2625,11 +2656,11 @@ export default function App() {
   const archAssetImgs = useRef({});
   useEffect(() => {
     let cancelled = false;
-    const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
-    if (!arch) return;
-    // Preload the FULL special-asset set once any archetype is active, so the
-    // calibration board (Commit 4) — which renders all 12 offscreen — always has the
-    // orchid mask + motif shapes ready, not just the assets the live archetype needs.
+    // Preload the FULL special-asset set ON MOUNT (not gated on an active archetype), so
+    // the petal mask + motif shapes are ALWAYS ready — the calibration board (Commit 4)
+    // renders all 12 archetypes offscreen even with no archetype applied, and the §2.11
+    // motif field / §2.12 petal window must not render blank because the asset hadn't
+    // loaded yet (the "motifs invisible / empty petal window" bug).
     const wanted = new Set(["orchid-petal","shape-1","shape-2","shape-3","acc-spark"]);
     const need = [...wanted].filter(id => !archAssetImgs.current[id]);
     if (!need.length) return;
@@ -3223,6 +3254,22 @@ export default function App() {
         let y0=Math.max(sm.t,Math.min(1-sm.b-bh2,(b.y??sm.t)));
         return {x:x0*w,y:y0*h,w:bw2*w,h:bh2*h};
       };
+      // Bleed-aware box for SIDE/SPLIT photos (§2.2 editorial_split, §2.10
+      // portrait_credential): a photo block authored to touch a canvas edge must
+      // BLEED to the true edge (0 / 1), not float inside the safe margin — a "true
+      // split" per spec. Only edges the box actually reaches (within 1.5%) bleed;
+      // the seam edge stays where authored. This fixes the floating-photo-column
+      // bug (photo had ivory gutters on every side instead of reaching the frame).
+      const bleedBox=(b)=>{
+        if(!b) return null;
+        const EPS=0.015;
+        let x0=b.x??0, y0=b.y??0, x1=x0+(b.w??0), y1=y0+(b.h??0);
+        if(x0<=EPS) x0=0;
+        if(x1>=1-EPS) x1=1;
+        if(y0<=EPS) y0=0;
+        if(y1>=1-EPS) y1=1;
+        return {x:x0*w,y:y0*h,w:(x1-x0)*w,h:(y1-y0)*h};
+      };
       const treatOf=id=>PHOTO_TREATMENTS[id]||PHOTO_TREATMENTS.none;
       const frame=mat.photoFrame||{type:"none"};
       // 1. Base field or full-bleed photo (photoTreatment materialized as state).
@@ -3290,7 +3337,7 @@ export default function App() {
           // a faint tinted rectangle. Knock everything outside the flower back out with a
           // destination-in pass of the orchid silhouette, so only the flower survives.
           // (Fixes the sage-green rectangle regression behind the petal window.)
-          applyDuotone(octx,m.x,m.y,m.w,m.h,{strength:1});
+          applyStrongDuotone(octx,m.x,m.y,m.w,m.h);
           octx.save();
           octx.globalCompositeOperation="destination-in";
           octx.translate(m.x+m.w/2,m.y+m.h/2);
@@ -3303,7 +3350,9 @@ export default function App() {
         }
       }else if(mat.photoRegion && !mat.fullBleed){
         // Plain split/side photo (editorial_split, portrait_credential materialized).
-        drawSplitPhoto(clampBox(mat.photoRegion));
+        // BLEED to the true canvas edge (§2.2 / §2.10 true split) — never a floating
+        // column inside the safe margin. Text avoids the SAME bled block below.
+        drawSplitPhoto(bleedBox(mat.photoRegion));
       }
       // Motifs are materialized as ordinary OVERLAY LAYERS now — they render in the
       // shared topLayers block below, so nothing motif-specific happens here.
@@ -3343,7 +3392,7 @@ export default function App() {
       const reflow = reflowEditorial(ctx, {
         w, h, S, sm, register, caps: mat.caps||isBigNum,
         heroBox, supBox, labelBox, cardBox, maskBox,
-        photoRegion: (mat.photoRegion&&!mat.fullBleed)?clampBox(mat.photoRegion):null,
+        photoRegion: (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         heroText: heroFinal, supportText, eyebrow,
         heroCapFrac: mat.heroCapFrac, heroToSupport: mat.heroToSupport,
         leading: register==="serif"?1.02:1.05, leadingBody: mat.leadingBody||1.32,
@@ -3426,7 +3475,10 @@ export default function App() {
         let boxOverlaps=0;
         for(let i=0;i<textRoles.length;i++)for(let j=i+1;j<textRoles.length;j++) if(ix(textRoles[i],textRoles[j])) boxOverlaps++;
         // Text vs photo obstacle (card/mask/split) — a real collision unless fullBleed.
-        const photoObs=cardBox||maskBox||(mat.photoRegion&&!mat.fullBleed?clampBox(mat.photoRegion):null);
+        // Use bleedBox for split/side photos: that is the box ACTUALLY DRAWN (bled to the
+        // canvas edge) and the SAME box reflow de-collided text against. clampBox (pulled
+        // into the text-safe margin) would over-report an overlap the render never shows.
+        const photoObs=cardBox||maskBox||(mat.photoRegion&&!mat.fullBleed?bleedBox(mat.photoRegion):null);
         if(!mat.fullBleed && photoObs) for(const t of textRoles) if(ix(t,photoObs)) boxOverlaps++;
         // Margin crop: any drawn text box outside the safe rect (tolerance 0.5%).
         const tolX=0.005*w,tolY=0.005*h;
@@ -3444,13 +3496,39 @@ export default function App() {
           },
         };
       }
+      // ── DIRECT MOTIF FIELD (§2.11) ── When the materialized bundle carries a motif
+      // set (motif_field archetype) and there are no live overlay-layer motifs to draw
+      // it (e.g. the calibration board / any pure-override render), scatter the flat
+      // shapes here so motifs are RELIABLY visible — the client's "motifs invisible"
+      // bug. Pastel fill is DEEPENED ~22% toward burnham + given a hairline ink edge so
+      // the shape reads on an ivory field without becoming candy. Kept to the margins/
+      // corners, never over the hero (spec §2.11 guardrail).
+      if(mat.motif && !overlayLayers.some(l=>l.motif)){
+        const spots=[[0.11,0.13],[0.88,0.15],[0.13,0.87],[0.87,0.85],[0.90,0.50]];
+        const shapes=["shape-1","shape-2","shape-3","acc-spark"];
+        const pastels=(mat.motif.pastels&&mat.motif.pastels.length?mat.motif.pastels:["sage","butter"]);
+        const count=Math.max(2,Math.min(5,mat.motif.count||3));
+        const heroObs=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null;
+        const ixm=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+        for(let i=0;i<count;i++){
+          const img=archAssetImgs.current[shapes[i%shapes.length]]; if(!img) continue;
+          const [fx,fy]=spots[i%spots.length];
+          const sz=0.10*Math.min(w,h);
+          const box={x:fx*w-sz/2,y:fy*h-sz/2,w:sz,h:sz};
+          if(ixm(box,heroObs)) continue; // never crowd the hero
+          const base=ARCHETYPE_COLORS[pastels[i%pastels.length]]||ARCHETYPE_COLORS.sage;
+          const deep=mixHex(base,B.burnham,0.22); // deepen so it reads on ivory
+          const tinted=tintedAccessory(img,deep);
+          if(tinted) containDraw(ctx,tinted,box.x+sz/2,box.y+sz/2,sz,sz,0.92);
+        }
+      }
       // Shared overlay-layer draw (motifs + any user accessories). Motifs are tinted
       // from ARCHETYPE_COLORS (pastel keys); user accessories keep their B tinting.
       const _octail = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
       topLayers.forEach(layer=>{
         const img=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId]; if(!img) return;
         const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
-        if(layer.motif){ const col=ARCHETYPE_COLORS[t.colorId]||B.celadon; const tinted=tintedAccessory(img,col); drawOverlayLayer(ctx,tinted||img,w,h,t); return; }
+        if(layer.motif){ const base=ARCHETYPE_COLORS[t.colorId]||B.celadon; const col=mixHex(base,B.burnham,0.22); const tinted=tintedAccessory(img,col); drawOverlayLayer(ctx,tinted||img,w,h,t); return; }
         if(layer.mode==="outline"){drawOutlineLayer(ctx,_octail,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);return;}
         if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
         if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
