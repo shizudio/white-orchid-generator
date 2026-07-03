@@ -3932,6 +3932,9 @@ export default function App() {
     if (typeof window === "undefined") return;
     window.__woCalibrationBoard = (content, variant) => {
       const V = Number.isInteger(variant) ? variant : 0;
+      // Bare calls must never render an empty design: fall back to the standard
+      // calibration copy (the v1 board content) so every tile shows real type.
+      content = content || { headline: "Freedom to *explore*", subtext: "Every child", attribution: "Ms Chen", dateText: "18 July" };
       const CELL = 360;               // per-archetype tile (ig_square, downscaled)
       const cols = 3, rows = 4, pad = 18, labelH = 26;
       const boardW = cols * CELL + (cols + 1) * pad;
