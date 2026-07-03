@@ -425,8 +425,10 @@ const ARCHETYPES = [
       support:{x:0.06,y:0.60,w:0.70,h:0.08},
       logo:{position:"bottom-right",sizeId:"s"},
     },
-    scaleRatio:{heroCapFrac:0.36,heroToSupport:9},
-    whitespace:0.52, gridAnchor:"edge", centerExclude:true,
+    // (WP-P §7) eased off the poster ceiling — still the largest serif voice, but calmer
+    // (cap 0.36→0.30, ratio 9→6) so it reads editorial-statement, not billboard.
+    scaleRatio:{heroCapFrac:0.30,heroToSupport:6},
+    whitespace:0.54, gridAnchor:"edge", centerExclude:true,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
     // Sanctioned palette variants (spec §3): serif_word is a prime pastel carrier.
     // {bg, ink, accentUse, klass}; one-accent rule preserved (accent = emphasis ink).
@@ -625,8 +627,11 @@ const ARCHETYPES = [
       support:{x:0.08,y:0.66,w:0.60,h:0.06},
       logo:{position:"bottom-right",sizeId:"s"},
     },
-    scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
-    whitespace:0.42, gridAnchor:"edge", centerExclude:false,
+    // (WP-P §7) STATEMENT-TILE CALM — retune to the reference's quiet statement voice:
+    // hero drops from 8× to ~4× caption (calm, not poster), cap-height eased, and the
+    // field breathes airier (whitespace 0.42→0.52). Left-aligned 2–3 line serif statement.
+    scaleRatio:{heroCapFrac:0.13,heroToSupport:4},
+    whitespace:0.52, gridAnchor:"edge", centerExclude:false,
     palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
     // Label+headline is a pastel carrier (spec: mainly on serif/label archetypes).
     variants:[
@@ -724,6 +729,116 @@ const ARCHETYPES = [
     special:"petalWindow", maskAreaFrac:0.40, // (R3b) toward the 35–42% ceiling — signature scale
     perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.28},hero:{x:0.06,y:0.52,w:0.84,h:0.24},support:{x:0.06,y:0.80,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
+  /* ═══ FEED-GRAMMAR ARCHETYPES (WP-P P2 — feed-grammar §2/§3) ══════════════════
+     The four brand-sequence cards the client's reference grids open/close a campaign
+     with, plus the schedule list. They compose through the SAME materialized render
+     path: eyebrow=microLabel(from attribution), hero=headline, caption=support(subtext),
+     pill=badge furniture, mark/lockup=logoUse. Heroes sit at STATEMENT calm (§7:
+     ~3–5× caption, thin serif) with airy whitespace. Accent lives only in the pill. */
+  { // §2.13 Brand Card — the campaign opener (mark + wordmark lockup + italic tagline)
+    id:"brand_card", name:"Brand Card",
+    elements:{
+      // wordmark hero, tagline below; the flower mark draws above via logoUse:"mark".
+      hero:{x:0.12,y:0.40,w:0.76,h:0.20},          // "THE WHITE ORCHID" wordmark
+      support:{x:0.12,y:0.62,w:0.66,h:0.08},        // italic serif tagline
+      logo:{position:"top-left",sizeId:"m"},
+    },
+    scaleRatio:{heroCapFrac:0.11,heroToSupport:3}, // calm wordmark, tagline ~1/3 of it
+    whitespace:0.62, gridAnchor:"edge", centerExclude:false, wordmarkHero:true,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
+    // Two brand fields: the dark opener (grid #1) and the butter/sand opener (grid #2 §6).
+    variants:[
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"field",klass:"dark", logoUse:"lockup"},
+      {bg:"butter",    ink:"burnham",   accentUse:"field",klass:"light",logoUse:"lockup"},
+    ],
+    photoTreatment:"none", heroRegister:"serif", caps:true, logoUse:"lockup",
+    supportRegister:"serifItalic", // italic serif tagline (feed-grammar §2 brand card)
+    suitedPostTypes:["text_post"], frequencyCap:0.08,
+    perDim:{ story:{hero:{x:0.12,y:0.44,w:0.76,h:0.18},support:{x:0.12,y:0.64,w:0.70,h:0.08}} },
+  },
+  { // §2.14 Stat Tile — a giant serif number/ratio on a pastel field
+    id:"stat_tile", name:"Stat Tile",
+    elements:{
+      microLabel:{x:0.10,y:0.16,w:0.60,h:0.05},     // eyebrow "OUR RATIO" / "IN NUMBERS"
+      hero:{x:0.09,y:0.30,w:0.82,h:0.34},           // the stat "1 : 6" / "40"
+      support:{x:0.10,y:0.72,w:0.62,h:0.14},        // light caption, may be multi-line poetic
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    // Big but not oversized (§7): the stat is a hero, caption calm below. cap 0.34, 6×.
+    scaleRatio:{heroCapFrac:0.34,heroToSupport:6}, thirdsX:0.10,
+    whitespace:0.58, gridAnchor:"thirds", centerExclude:true, usesDateAsHero:true,
+    palette:{klass:"light",bg:"celadon",ink:"burnham",accent:"field"},
+    // Celadon (grid #1) and a mint/celadon-family variant (grid #2). Field is the accent.
+    variants:[
+      {bg:"celadon",   ink:"burnham",accentUse:"field",klass:"light"},
+      {bg:"sage",      ink:"burnham",accentUse:"field",klass:"light"},
+    ],
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    suitedPostTypes:["event","text_post"], frequencyCap:0.08,
+    furniture:[ {type:"underline", x:0.10, y:0.205, w:0.08, alpha:0.4} ],
+    perDim:{ story:{hero:{x:0.09,y:0.34,w:0.82,h:0.30},support:{x:0.10,y:0.72,w:0.80,h:0.12}} },
+  },
+  { // §2.15 CTA / Enrolment Card — eyebrow + serif hero + details block + tangerine pill
+    id:"cta_card", name:"Enrolment CTA Card",
+    elements:{
+      microLabel:{x:0.10,y:0.16,w:0.60,h:0.05},     // eyebrow "ENROLMENT"
+      hero:{x:0.09,y:0.26,w:0.80,h:0.24},           // "Now *enrolling*" (roman+italic)
+      support:{x:0.10,y:0.54,w:0.66,h:0.20},        // structured details (multi-line)
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    // Calm serif hero (§7 ~4×); details block sits below; the pill is the single accent.
+    scaleRatio:{heroCapFrac:0.16,heroToSupport:4},
+    whitespace:0.50, gridAnchor:"edge", centerExclude:false,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"softTangerine",klass:"light"},
+    ],
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    suitedPostTypes:["event","text_post"], frequencyCap:0.08,
+    // The TANGERINE PILL is the canonical accent (feed-grammar §4). it.color pins it even
+    // though the hero carries no emphasis accent (§7 ink discipline).
+    furniture:[ {type:"badge", text:"LIMITED PLACES", x:0.10, y:0.84, size:0.022, align:"left", color:"softTangerine"} ],
+    perDim:{ story:{hero:{x:0.09,y:0.30,w:0.82,h:0.20},support:{x:0.10,y:0.56,w:0.80,h:0.18}} },
+  },
+  { // §2.16 Closing Card — the ONLY centred archetype: mark, serif hero, pill, url
+    id:"closing_card", name:"Closing Card",
+    elements:{
+      hero:{x:0.10,y:0.44,w:0.80,h:0.20, align:"center"}, // "Come and *see for yourself*"
+      support:{x:0.10,y:0.90,w:0.80,h:0.05, align:"center"}, // url line
+      logo:{position:"top-center",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.14,heroToSupport:4},
+    whitespace:0.60, gridAnchor:"center-column", centerExclude:false,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"softTangerine"},
+    variants:[
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"softTangerine",klass:"dark", logoUse:"mark"},
+    ],
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark",
+    suitedPostTypes:["text_post"], frequencyCap:0.08,
+    // Centred tangerine pill CTA ("BOOK A VISIT") above the url — the bookend accent.
+    furniture:[ {type:"badge", text:"BOOK A VISIT", x:0.50, y:0.78, size:0.022, align:"center", color:"softTangerine"} ],
+    perDim:{ story:{hero:{x:0.10,y:0.42,w:0.80,h:0.20,align:"center"}} },
+  },
+  { // §2.17 Schedule Tile (grid #2 §6) — eyebrow + serif time rows + light activity + rules
+    id:"schedule_tile", name:"Schedule Tile",
+    elements:{
+      microLabel:{x:0.10,y:0.14,w:0.70,h:0.05},     // eyebrow "A DAY HERE"
+      // The rows are drawn by special:"scheduleRows" from subtext ("2.30 School pick-up |
+      // 3.30 Free play | ...") — hero/support boxes just reserve the list zone.
+      hero:{x:0.10,y:0.24,w:0.80,h:0.62},
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.06,heroToSupport:3},
+    whitespace:0.50, gridAnchor:"edge", centerExclude:false,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"field"},
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",accentUse:"field",klass:"light"},
+    ],
+    photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"none",
+    suitedPostTypes:["event","text_post"], frequencyCap:0.06,
+    special:"scheduleRows",
+    perDim:{ story:{hero:{x:0.10,y:0.22,w:0.80,h:0.66}} },
+  },
 ];
 const ARCHETYPES_BY_ID=Object.fromEntries(ARCHETYPES.map(a=>[a.id,a]));
 const ARCHETYPE_IDS=ARCHETYPES.map(a=>a.id);
@@ -805,6 +920,8 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
     // "lockup"→ the full mark+wordmark lockup (brand/closing cards only)
     // Variant may override the archetype default (V.logoUse); else arch.logoUse; else "url".
     logoUse: V.logoUse || arch.logoUse || "url",
+    supportRegister: arch.supportRegister || null, // "serifItalic" for brand/closing taglines
+    special: arch.special || null,                 // "scheduleRows" etc. (P2 feed cards)
     variantIdx: variantIdx||0, variantCount: (arch.variants?.length||1),
   };
 }
@@ -1470,9 +1587,12 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
       ctx.letterSpacing="0px";
     }else if(it.type==="badge"){
       // (R2a) ACCENT PILL — the one accent as a filled lozenge with a caps label
-      // (Higgsfield "NOW ENROLLING" reference). Skips silently if no accent resolved
-      // (dark/field variants) so it only surfaces the single accent on accent tiles.
-      if(!accent) continue;
+      // (Higgsfield "NOW ENROLLING" reference). On accent tiles it surfaces the resolved
+      // accent; on CTA/closing cards (§2.14/§2.15 dark or ivory field, no emphasis accent)
+      // an explicit it.color pins the tangerine pill — the pill IS the canonical accent
+      // (feed-grammar §4 / §7). Skips silently only when neither is available.
+      const pillFill = it.color || accent;
+      if(!pillFill) continue;
       const bs=(it.size||0.024)*h;
       const padX=bs*0.9, padY=bs*0.55;
       const txt=String(it.text==null?"NOW ENROLLING":it.text).toUpperCase();
@@ -1481,7 +1601,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
       const pillW=tw+padX*2, pillH=bs+padY*2;
       const px0=it.align==="right"?it.x*w-pillW:it.align==="center"?it.x*w-pillW/2:it.x*w;
       const py0=it.y*h-pillH*0.5, rad=pillH*0.5;
-      ctx.globalAlpha=1; ctx.fillStyle=accent;
+      ctx.globalAlpha=1; ctx.fillStyle=pillFill;
       ctx.beginPath();
       ctx.moveTo(px0+rad,py0);
       ctx.arcTo(px0+pillW,py0,px0+pillW,py0+pillH,rad);
@@ -1489,8 +1609,8 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
       ctx.arcTo(px0,py0+pillH,px0,py0,rad);
       ctx.arcTo(px0,py0,px0+pillW,py0,rad);
       ctx.closePath(); ctx.fill();
-      // label ink = higher-contrast pole against the accent fill.
-      ctx.fillStyle = hexLuminance(accent)>0.5 ? "#254E48" : "#F5F6E7";
+      // label ink = higher-contrast pole against the pill fill.
+      ctx.fillStyle = hexLuminance(pillFill)>0.5 ? "#254E48" : "#F5F6E7";
       ctx.textAlign="left"; ctx.textBaseline="alphabetic";
       ctx.fillText(txt, px0+padX, py0+padY+bs*0.82);
       ctx.letterSpacing="0px";
@@ -3410,6 +3530,7 @@ export default function App() {
         heroCapFrac:om.heroCapFrac, heroToSupport:om.heroToSupport, leading:om.leading, leadingBody:om.leadingBody,
         palette:om.palette, microLabelText:shortAttr?attrCC:"", editorial:true, gridAnchor:om.gridAnchor,
         motif:om.motif, furniture:om.furniture, cropDrama:om.cropDrama, logoUse:om.logoUse,
+        supportRegister:om.supportRegister, special:om.special,
       };
     }else{
       // Live materialized state. `editorial` is true when the design carries role
@@ -3433,6 +3554,7 @@ export default function App() {
         palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
         gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
         cropDrama: specNums?.cropDrama||null, logoUse: specNums?.logoUse||null,
+        supportRegister: specNums?.supportRegister||null, special: specNums?.special||null,
       };
     }
     // Text box clamped inside this format's safe margins (spec §1.0 safe zones).
@@ -3845,6 +3967,7 @@ export default function App() {
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
 
       let usedH=0;
+      const isSchedule = mat.special==="scheduleRows";
       // eyebrow (micro-label)
       if(eyebrow && labelBox){
         ctx.save(); ctx.fillStyle=heroInk;
@@ -3852,8 +3975,41 @@ export default function App() {
         drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08});
         ctx.restore();
       }
+      // (P2 §2.17) SCHEDULE ROWS — serif time + light-sans activity separated by hairline
+      // rules (grid #2 "A DAY HERE"). Rows come from the subtext as "time  activity" pairs
+      // split on " | " (or newlines). Renders inside the hero box zone; skips the normal
+      // hero/support draw for this archetype.
+      if(isSchedule && heroBox){
+        const raw=String(ccSubtext||heroFinal||"").trim();
+        const rows=raw.split(/\s*\|\s*|\n+/).map(r=>r.trim()).filter(Boolean).slice(0,8).map(r=>{
+          const m=r.match(/^(\S+)\s+(.+)$/); return m?{t:m[1],a:m[2]}:{t:"",a:r};
+        });
+        if(rows.length){
+          const zx=heroBox.x, zw=heroBox.w, zy=heroBox.y, zh=heroBox.h;
+          const rowH=zh/rows.length;
+          const timeSz=Math.min(rowH*0.42, zw*0.11);
+          const actSz=Math.min(rowH*0.26, zw*0.05);
+          const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009));
+          const timeX=zx, actX=zx+zw*0.38;
+          ctx.save();
+          rows.forEach((r,ri)=>{
+            const cy=zy+rowH*ri+rowH*0.5;
+            // hairline rule below each row (except the last)
+            if(ri<rows.length-1){ ctx.globalAlpha=0.28; ctx.fillStyle=heroInk; ctx.fillRect(zx,zy+rowH*(ri+1)-hair,zw,hair); }
+            ctx.globalAlpha=1; ctx.textBaseline="middle"; ctx.textAlign="left";
+            ctx.fillStyle=heroInk; ctx.font=`400 ${timeSz}px ${F.title}`;
+            ctx.fillText(r.t, timeX, cy);
+            ctx.font=`300 ${actSz}px ${F.body}`; ctx.letterSpacing=`${0.01*actSz}px`;
+            ctx.fillText(r.a, actX, cy);
+            ctx.letterSpacing="0px";
+          });
+          ctx.restore();
+          fontMeta.headline=timeSz; fontMeta.subtext=actSz;
+          setTextBounds(zh);
+        }
+      }
       // hero
-      if(heroFinal && heroBox){
+      if(!isSchedule && heroFinal && heroBox){
         beginText(); ctx.fillStyle=heroInk;
         const hr=drawHeroText(ctx,heroFinal,{
           x:heroBox.x,y:heroBox.y,maxW:heroBox.w,maxH:heroBox.h,
@@ -3873,16 +4029,26 @@ export default function App() {
         setTextBounds(hr.usedH);
       }
       // support / caption
-      if(supportText && supBox){
+      if(!isSchedule && supportText && supBox){
         beginText(); ctx.fillStyle=heroInk;
-        // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
-        // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
-        const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
-        ctx.font=`300 ${sf.size}px ${F.body}`;
-        ctx.letterSpacing=`${0.01*sf.size}px`;
-        drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,mat.roles?.support?.align||"left");
-        ctx.letterSpacing="0px";
-        fontMeta.subtext=sf.size;
+        const supAlign=mat.roles?.support?.align||"left";
+        if(mat.supportRegister==="serifItalic"){
+          // (P2) BRAND/CLOSING TAGLINE — light italic serif ("a school led by children"),
+          // matching the reference lockup taglines. Same ink as hero (§7 ink discipline).
+          const sf=fitText(ctx,supportText,s=>`italic 400 ${s}px ${F.title}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.28,reflow.supMin);
+          ctx.font=`italic 400 ${sf.size}px ${F.title}`;
+          drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
+          fontMeta.subtext=sf.size;
+        }else{
+          // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
+          // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
+          const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+          ctx.font=`300 ${sf.size}px ${F.body}`;
+          ctx.letterSpacing=`${0.01*sf.size}px`;
+          drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
+          ctx.letterSpacing="0px";
+          fontMeta.subtext=sf.size;
+        }
         endText();
       }
       // (T1) ANCHORING FURNITURE — hairline rules / underline / index / counterweight.

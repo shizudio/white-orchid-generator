@@ -146,11 +146,21 @@ const LANDING_ARCHETYPES = [
   { id:'portrait_credential',desc:'a portrait beside a name/title/credential — staff spotlight, new-teacher, testimonial', suits:['photo_logo','event','quote'], klass:'light', cap:0.10, palette:'ivory field, portrait photo + credential stack' },
   { id:'motif_field',       desc:'a solid pastel field warmed by a few flat botanical/geometric motifs — playful values, enrollment', suits:['text_post','quote','event'], klass:'light', cap:0.14, palette:'soft pastel field, 2–3 flat motifs' },
   { id:'petal_window',      desc:'a photo revealed through the orchid/petal mask on a solid field — SIGNATURE, only when the user names the petal/orchid/shape', suits:['photo_logo','texture_text','quote'], klass:'light', cap:0.12, palette:'ivory field, one orchid-mask photo window' },
+  // ── FEED-GRAMMAR CARDS (feed-grammar §2) — brand-sequence tiles. brand/closing carry
+  // the lockup (rare, ≤1-in-8); stat/cta/schedule carry no logo. Accent = the pill only.
+  { id:'brand_card',        desc:'campaign opener: flower mark + THE WHITE ORCHID wordmark + italic tagline on a dark or butter field — brand statement, sequence opener', suits:['text_post'], klass:'dark', cap:0.08, palette:'deep-green or butter field, mark+wordmark lockup, italic tagline' },
+  { id:'stat_tile',         desc:'a giant serif number/ratio ("1 : 6", "40") with an eyebrow + light caption on a celadon field — ratios, class size, numbers', suits:['event','text_post'], klass:'light', cap:0.08, palette:'celadon field, giant serif stat, light caption' },
+  { id:'cta_card',          desc:'enrolment CTA: eyebrow + serif hero ("Now enrolling") + details block + tangerine pill — enrolment, sign-ups, deadlines', suits:['event','text_post'], klass:'light', cap:0.08, palette:'ivory field, serif hero, details, tangerine LIMITED PLACES pill' },
+  { id:'closing_card',      desc:'campaign closer: centred mark + serif hero ("Come and see for yourself") + tangerine pill CTA + url on a dark field — the only centred archetype, sequence closer', suits:['text_post'], klass:'dark', cap:0.08, palette:'deep-green field, centred mark, serif hero, tangerine BOOK A VISIT pill' },
+  { id:'schedule_tile',     desc:'a daily schedule: eyebrow ("A DAY HERE") + serif time rows + light activity lines separated by hairline rules on an ivory field — timetables, a day in the life', suits:['event','text_post'], klass:'light', cap:0.06, palette:'ivory field, serif times + light activities, hairline rules' },
 ];
 const LANDING_ARCH_BY_ID = Object.fromEntries(LANDING_ARCHETYPES.map(a => [a.id, a]));
 // petal_window is doubly gated: the DECOR intent gate (below) AND its ≤1-in-8 cap.
 // It is never suggested in the rotation and never a cap-override fallback target.
-const CAP_SELECTABLE = LANDING_ARCHETYPES.filter(a => a.id !== 'petal_window');
+// petal_window + the logo-bearing bookends (brand/closing) are never silent-fallback
+// targets: they're signature/rare tiles the model must pick deliberately, not a filler.
+const NON_FALLBACK = new Set(['petal_window', 'brand_card', 'closing_card']);
+const CAP_SELECTABLE = LANDING_ARCHETYPES.filter(a => !NON_FALLBACK.has(a.id));
 
 // Recent landing picks (last ~12) — a small in-memory ring so frequency caps are
 // enforced DETERMINISTICALLY server-side. Stateless clients can't be trusted to
@@ -181,6 +191,11 @@ const LANDING_VARIANTS = {
   portrait_credential:[{bg:'whiteSmoke',kind:'ivory'}], // no variants array client-side → base only
   motif_field:       [{bg:'whiteSmoke',kind:'ivory'},{bg:'butter',kind:'pastel'},{bg:'lilac',kind:'pastel'},{bg:'sky',kind:'pastel'}],
   petal_window:      [{bg:'whiteSmoke',kind:'ivory'},{bg:'terracotta',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  brand_card:        [{bg:'burnham',kind:'dark'},{bg:'butter',kind:'pastel'}],
+  stat_tile:         [{bg:'celadon',kind:'pastel'},{bg:'sage',kind:'pastel'}],
+  cta_card:          [{bg:'whiteSmoke',kind:'ivory'}],
+  closing_card:      [{bg:'burnham',kind:'dark'}],
+  schedule_tile:     [{bg:'whiteSmoke',kind:'ivory'}],
 };
 // Recent variant KINDS chosen (parallel to RECENT_PICKS) so pastel-share (~1-in-3 of
 // light picks) and dark-share (25–30%) are enforced deterministically across requests.
