@@ -238,6 +238,46 @@ posts lacked.
 - **Guardrail:** at most **~1-in-8 posts** (a signature move, not a default); one window per post;
   never mask a busy full-color photo without duotone.
 
+### 2.13 Brand Card — **VALIDATED-BY-REFERENCE (feed-grammar §2/§6)**
+The campaign opener/bookend: a flower **mark + THE WHITE ORCHID wordmark lockup** with a light
+**italic serif tagline** ("a school led by children") below, left-aligned mid-tile.
+- **Field:** deep-green (grid #1) OR butter/sand (grid #2). **Logo:** the FULL lockup (the only
+  class of tile that carries it — §2 logo restraint). **Wordmark:** serif caps, tracked, calm
+  (cap ~0.11×H, NOT poster). **Tagline:** italic serif, ~1/3 the wordmark. **Whitespace:** ~62%.
+- **Suits:** brand statement, sequence opener. **Cap:** ~1-in-12 (rare, logo-bearing).
+
+### 2.14 Stat Tile — **VALIDATED-BY-REFERENCE**
+A giant serif **number/ratio** ("1 : 6", "40") is the hero on a pastel field.
+- **Field:** celadon/mint (or a sage sibling). **Eyebrow:** caps tracked top-left ("OUR RATIO").
+  **Hero:** serif stat, cap ~0.34×H (big, not oversized §7), thirds x-anchor. **Caption:** light
+  sans below, may be a poetic multi-line ("one guide, six children — a room that stays quiet").
+- **Accent:** the field (no pill). **Logo:** none. **Suits:** ratios, class size. **Cap:** ~0.08.
+
+### 2.15 Enrolment / CTA Card — **VALIDATED-BY-REFERENCE**
+Eyebrow + serif hero (roman+italic mix, "Now *enrolling*") + a **structured details block** +
+a **tangerine PILL** ("LIMITED PLACES"). The pill is the canonical single accent (§3/§4).
+- **Field:** ivory. **Hero:** serif, calm (~4× caption §7). **Details:** light sans lines
+  (term / ages / location). **Pill:** filled tangerine lozenge, bottom-left. **Logo:** none.
+- **Suits:** enrolment, sign-ups, deadlines. **Cap:** ~0.08.
+
+### 2.16 Closing Card — **VALIDATED-BY-REFERENCE** (the ONLY centred archetype)
+The campaign closer/bookend: a small **centred mark**, a serif hero with italic mix ("Come and
+*see for yourself*"), a **tangerine pill CTA** ("BOOK A VISIT"), and a **url** line — all centred.
+- **Field:** deep-green. **Hero:** serif centred, calm. **Logo:** the mark (small, top). **Accent:**
+  the pill only. **Whitespace:** ~60%. **Suits:** sequence closer. **Cap:** ~0.08.
+
+### 2.17 Schedule Tile — **VALIDATED-BY-REFERENCE (grid #2 §6)**
+A daily schedule: eyebrow ("A DAY HERE") over **rows of serif time + light-sans activity**,
+each row divided by a **hairline rule** (2.30 School pick-up / 3.30 Free play / …).
+- **Field:** ivory. **Times:** serif, calm; **activities:** light sans; **rules:** hairline
+  (~0.28 alpha). Up to ~6–8 rows. **Logo:** none. **Suits:** timetable, a-day-in-the-life. **Cap:** ~0.06.
+
+**Feed-grammar note (WP-P):** §2.13–2.17 are the brand-sequence tiles the client declared the
+target from the two Higgsfield reference grids (`generated/grid-reference.png`,
+`generated/white-orchid-instagram-grid-2.png`). They compose the feed's rhythm with the older
+archetypes. Logo restraint (§2 opener), the tangerine-pill-as-sole-accent rule, warm-grade photo
+default for label-only photo tiles, and calm statement scale (§7) all follow from those grids.
+
 **DROPPED from the drafts** (RESEARCH-only, absent from refs, low priority): overlapping-layered-
 type, monogram-as-hero, edge-hugging-label, caption-as-headline (inverted), marginalia-caption,
 grid-of-fragments (the refs *are* grids, but each *tile* is one archetype — do not generate a
