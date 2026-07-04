@@ -1471,13 +1471,17 @@ function stripHeroMarkers(str){ return String(str||"").replace(/\*([^*]+)\*/g, "
 // Parse a headline into tokens: [{text, italic}], splitting on *emphasis*
 // markers while preserving spaces between words. Whitespace is carried on the
 // tokens so re-measurement with alternating fonts stays correct.
+// (Emphasis fix) SINGLE ITALIC PHRASE RULE (spec §0 one-warmth discipline): only
+// the FIRST *marker pair* renders italic; any further pairs have their markers
+// stripped silently and render roman.
 function parseHeroTokens(str){
   const out=[]; const s=String(str||"");
-  const re=/\*([^*]+)\*/g; let last=0, m;
+  const re=/\*([^*]+)\*/g; let last=0, m, used=false;
   const pushPlain=(txt)=>{ if(txt) out.push({text:txt, italic:false}); };
   while((m=re.exec(s))){
     pushPlain(s.slice(last,m.index));
-    out.push({text:m[1], italic:true});
+    if(!used){ out.push({text:m[1], italic:true}); used=true; }
+    else pushPlain(m[1]);   // 2nd+ emphasis pair: keep the words, drop the italics
     last=m.index+m[0].length;
   }
   pushPlain(s.slice(last));
@@ -1486,6 +1490,9 @@ function parseHeroTokens(str){
 
 // Split hero tokens into WORD tokens (each carries italic + a trailing space
 // flag) so wrapping can measure per-word with the correct (roman|italic) font.
+// (Emphasis fix) Punctuation HUGS the emphasis word: a plain token that starts
+// with punctuation and follows a word with NO intervening space ("*research*.")
+// is glued onto that word, so no space is ever measured/drawn before . , ! ? etc.
 function heroWords(str){
   const words=[];
   for(const tok of parseHeroTokens(str)){
@@ -1522,7 +1529,11 @@ function greedyHeroWrap(ctx, words, register, size, maxW){
     const wtok=words[i];
     ctx.font=heroFont(register,size,wtok.italic);
     const ww=ctx.measureText(wtok.text).width;
-    const addW=(line.length?spaceW(wtok.italic):0)+ww;
+    // (Emphasis fix) A space is measured between words only when the PREVIOUS word
+    // carries a trailing-space flag (default true for legacy callers) — glued
+    // punctuation after an emphasis word contributes no phantom space.
+    const prevSpace=line.length? (line[line.length-1].space!==false) : false;
+    const addW=(prevSpace?spaceW(wtok.italic):0)+ww;
     if(line.length && lineW+addW>maxW){
       lines.push(line); widths.push(lineW); line=[wtok]; lineW=ww;
     }else{
@@ -1566,7 +1577,7 @@ function drawHeroText(ctx, str, opts){
          accentInk=null, baseInk=null, tracking=0} = opts;
   const src=caps? stripHeroMarkers(str).toUpperCase() : str;
   const words= caps
-    ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
+    ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:true}))
     : heroWords(str);
   // (r3 fix #3) ceiling raised to 1.28 so the closing-card serif can breathe with a
   // looser line-gap (client: "font gap a bit tight"); default heroes are unaffected.
@@ -1601,7 +1612,8 @@ function drawHeroText(ctx, str, opts){
     lineWords.forEach((wtok,wi)=>{
       ctx.font=heroFont(register,size,wtok.italic);
       lineW+=ctx.measureText(wtok.text).width;
-      if(wi<lineWords.length-1){ ctx.font=heroFont(register,size,wtok.italic); lineW+=ctx.measureText(" ").width; }
+      // (Emphasis fix) inter-word space only when this word carries the flag.
+      if(wi<lineWords.length-1 && wtok.space!==false){ ctx.font=heroFont(register,size,wtok.italic); lineW+=ctx.measureText(" ").width; }
     });
     let cx= align==="center"? x+(maxW-lineW)/2 : align==="right"? x+maxW-lineW : x;
     const baseY=y+li*lineHeight+size;
@@ -1831,7 +1843,7 @@ function reflowEditorial(ctx, a){
   let heroPx=heroMin, heroUsedH=0, heroLineH=0;
   if(heroText && heroBox){
     const words = caps
-      ? stripHeroMarkers(heroText).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:false}))
+      ? stripHeroMarkers(heroText).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:true}))
       : heroWords(heroText);
     const lr=register==="serif"?1.02:1.05;
     // Word-width floor: canvas can't break inside a word, so a single word wider than
@@ -4223,7 +4235,7 @@ export default function App() {
       const eyebrow = mat.microLabelText || (labelBox && mat.roles?.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28 ? ccAttribution : "");
       // support text: subtext, else attribution (if not already used as the eyebrow),
       // else the headline (for big_number where the date is the hero).
-      const supportText = ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "";
+      const supportText = stripHeroMarkers(ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "");
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
       if(mat.fullBleed && mediaObj && heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
@@ -4369,7 +4381,7 @@ export default function App() {
         // Fit the date on ONE line at ~0.55× the hero (min floor keeps it prominent).
         let dSz=Math.max(20*S,heroSz*0.55);
         ctx.font=`300 ${dSz}px ${F.title}`;
-        while(dSz>14*S && ctx.measureText(ccDateText).width>heroBox.w){ dSz-=2; ctx.font=`300 ${dSz}px ${F.title}`; }
+        while(dSz>14*S && ctx.measureText(dTxt).width>heroBox.w){ dSz-=2; ctx.font=`300 ${dSz}px ${F.title}`; }
         const dGap=Math.max(0.014*h,heroSz*0.18);
         const dH=dGap+dSz*1.28;
         // Room below the hero must hold the date AND (when a caption follows below)
@@ -4713,7 +4725,7 @@ export default function App() {
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
-        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
+        const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
         const preUsed=hf.lines.length*hf.lineHeight;
         const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
@@ -4724,7 +4736,7 @@ export default function App() {
     }else if(postType==="quote"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
-      beginText();const q=headline||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=attribution||subtext;
+      beginText();const q=stripHeroMarkers(headline)||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=stripHeroMarkers(attribution||subtext);
       ctx.fillStyle=frameBgTextColor||tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
       ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
       if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
@@ -4738,7 +4750,7 @@ export default function App() {
       }}
       if(mediaObj&&((!hasFrame&&!photoBox)||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
       beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
-      if(headline){const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
+      if(headline){const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
       if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,mf("date",190*S*scale*fm("heading"),120*S));fontMeta.date=df.size;ctx.font=`300 ${df.size}px ${F.title}`;
         // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
         // above its baseline — advance by that so it clears the title above it.
@@ -4791,7 +4803,7 @@ export default function App() {
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
-        const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
+        const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
         const preUsed=hf.lines.length*hf.lineHeight;
         const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
         if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}

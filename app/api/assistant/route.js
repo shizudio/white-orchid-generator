@@ -455,12 +455,18 @@ function platformForDimension(dimensionId) {
   }
 }
 
+// Copy fields may carry *emphasis* markers (the engine's italic notation) — strip
+// them so the caption writer never echoes literal asterisks into a post caption.
+function stripEmphasisMarkers(s) {
+  return String(s || '').replace(/\*([^*]+)\*/g, '$1');
+}
+
 function captionSourceFacts(d) {
   const facts = [];
-  if (d.headline) facts.push(`Headline: ${d.headline}`);
-  if (d.subtext) facts.push(`Subtext: ${d.subtext}`);
-  if (d.attribution) facts.push(`Attribution/quote source: ${d.attribution}`);
-  if (d.dateText) facts.push(`Date on the design: ${d.dateText}`);
+  if (d.headline) facts.push(`Headline: ${stripEmphasisMarkers(d.headline)}`);
+  if (d.subtext) facts.push(`Subtext: ${stripEmphasisMarkers(d.subtext)}`);
+  if (d.attribution) facts.push(`Attribution/quote source: ${stripEmphasisMarkers(d.attribution)}`);
+  if (d.dateText) facts.push(`Date on the design: ${stripEmphasisMarkers(d.dateText)}`);
   facts.push(`Post type: ${d.postType || 'text_post'}`);
   facts.push(`Has a photo/video: ${d.hasImage ? 'yes' : 'no'}`);
   return facts.join('\n');
