@@ -4708,6 +4708,28 @@ export default function App() {
         // Margin crop: any drawn text box outside the safe rect (tolerance 0.5%).
         const tolX=0.005*w,tolY=0.005*h;
         const outOfMargin=textRoles.some(t=>t.x<sm.l*w-tolX||t.y<sm.t*h-tolY||t.x+t.w>(1-sm.r)*w+tolX||t.y+t.h>(1-sm.b)*h+tolY);
+        // (Crops addendum) SEAM STRADDLE — every text role must render fully within
+        // ONE background zone: for each zone box (split photo band, floated card,
+        // petal mask) a role either clears it entirely or is fully contained — a box
+        // PARTIALLY crossing the zone boundary sits on the seam. Full-bleed tiles
+        // have one zone and are exempt.
+        let seamStraddles=0;
+        if(!mat.fullBleed){
+          const zones=[photoObs,cardBox,maskBox].filter(Boolean);
+          const contains=(z,t)=>t.x>=z.x-tolX&&t.y>=z.y-tolY&&t.x+t.w<=z.x+z.w+tolX&&t.y+t.h<=z.y+z.h+tolY;
+          for(const z of zones) for(const t of textRoles) if(ix(t,z)&&!contains(z,t)) seamStraddles++;
+        }
+        // (Crops addendum) DEGENERATE PHOTO REGION — a split/band photo below 18% of
+        // the canvas reads as a sliver; the format adaptation must restructure or
+        // drop the photo cleanly instead. (Framed card/mask treatments are exempt —
+        // they are deliberately small windows.)
+        const _photoBand=(mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null;
+        const degeneratePhoto=!!(_photoBand && (_photoBand.w*_photoBand.h)<(0.18*w*h));
+        // (Crops addendum) LOGO DOMINANCE — outside the brand bookends the logo must
+        // never be the largest element: flag a drawn lockup taller than ~1.6x the
+        // hero glyph size (the client's banner lockup ran ~2x the headline).
+        const _bookend=archetypeId==="brand_card"||archetypeId==="closing_card"||provArch?.id==="brand_card"||provArch?.id==="closing_card";
+        const logoDominant=!!(!_bookend && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
@@ -4718,6 +4740,7 @@ export default function App() {
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
+            seamStraddles, degeneratePhoto, logoDominant,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
                     photo:photoObs||null, fullBleed:!!mat.fullBleed, sm:{...sm}, postType },
           },
@@ -5202,7 +5225,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0, midcuts = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -5211,12 +5234,13 @@ export default function App() {
             renderScene(c.getContext("2d"), dm.w, dm.h, { dimensionId: dimId, live: false, captureAudit: true, archOverride: id, calibrationContent: cc });
             const dr = auditRef.current?.archetypeDrift || {};
             const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0, mc = dr.midCut || 0;
-            overlaps += o; crops += cr; midcuts += mc;
-            if (o || cr || mc) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, diag: dr._diag || null });
+            const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
+            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld;
+            if (o || cr || mc || sea || dg || ld) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
