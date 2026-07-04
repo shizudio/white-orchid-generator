@@ -91,6 +91,42 @@ function photoDirectiveForArchetype(archetypeId) {
 
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 const WINDOW_MS = 60_000;
+
+// (Commit 3) LANDING PHOTO ATTACH — for photo-led archetypes, pull a suitable image
+// from the Supabase Library so the landing design isn't text-only-plain by default.
+// Uses the admin client directly (no HTTP self-call): query the `images` table,
+// prefer brand-library batch entries (metadata.batch === 'brand-library'), pick a
+// random one, and return a fresh SIGNED URL for the client to apply as the background.
+// GRACEFUL: any failure (empty Library, storage unconfigured, no rows) returns null,
+// so the landing flow proceeds text-only exactly as before. Which archetypes benefit:
+const PHOTO_ATTACH_ARCHETYPES = new Set([
+  'editorial_split', 'floated_card', 'documentary', 'full_bleed_duotone',
+]);
+async function pickLandingPhoto(archetypeId, dimensionId) {
+  if (!PHOTO_ATTACH_ARCHETYPES.has(archetypeId)) return null;
+  try {
+    const supabase = getAdminClient();
+    const { data, error } = await supabase
+      .from('images')
+      .select('storage_path, metadata, source_type')
+      .order('created_at', { ascending: false })
+      .limit(60);
+    if (error || !Array.isArray(data) || !data.length) return null;
+    // Prefer curated brand-library entries; fall back to any Library image.
+    const branded = data.filter(r => (r.metadata && r.metadata.batch) === 'brand-library');
+    const pool = branded.length ? branded : data;
+    if (!pool.length) return null;
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    if (!chosen?.storage_path) return null;
+    const { data: signed, error: sErr } = await supabase.storage
+      .from('images')
+      .createSignedUrl(chosen.storage_path, 60 * 60); // 1h — the client applies it immediately
+    if (sErr || !signed?.signedUrl) return null;
+    return signed.signedUrl;
+  } catch {
+    return null; // Library unavailable → text-only landing, unchanged behaviour
+  }
+}
 const MAX_REQUESTS = 20; // conversational — allow a few more turns/minute than the one-shot planner
 const requestLog = new Map();
 
@@ -676,6 +712,10 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
   }
 
+  // (Commit 3) Landing photo attach URL — set inside the landing block below, returned
+  // separately from the patch so the client applies it as the background image.
+  let landingPhotoUrl = null;
+
   // ── HARD OVERLAY GATE (P1) ──────────────────────────────────────────────────
   // Strip patch.addOverlay unless the user's own words signal decoration intent.
   // Landing: the single message. Editor: the LAST user message (the current turn).
@@ -713,6 +753,15 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // archetype, enforcing pastel-share (~1-in-3 of light) + dark-share (25–30%)
     // deterministically. The client materializes this exact variant.
     patch.archVariant = pickVariant(finalArchetype);
+    // (Commit 3) LANDING PHOTO ATTACH — for photo-led archetypes, attach a suitable
+    // Library image so the landing design isn't text-only-plain by default. Graceful:
+    // null when the Library is empty/unconfigured (the design stays text-only). The URL
+    // is returned separately (imageUrl) — NOT a patch field — so the client applies it as
+    // the background just like a generated/uploaded image, and also sets a photo postType.
+    landingPhotoUrl = await pickLandingPhoto(finalArchetype, designState.dimensionId);
+    if (landingPhotoUrl && (!patch.postType || !['photo_logo', 'texture_text'].includes(patch.postType))) {
+      patch.postType = 'photo_logo';
+    }
   } else if (patch && patch.archetypeId != null && patch.archetypeId !== 'none') {
     // ── EDITOR LAYOUT-CHANGE GUARD (Commit 1) ────────────────────────────────
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
@@ -782,5 +831,7 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     });
   }
 
-  return Response.json({ reply, patch, imageB64: null });
+  // (Commit 3) Include the landing photo URL (if any) so the client applies it as the
+  // background for a photo-led landing design. Null for text-only archetypes / empty Library.
+  return Response.json({ reply, patch, imageB64: null, imageUrl: landingPhotoUrl });
 }

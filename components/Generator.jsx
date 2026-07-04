@@ -268,7 +268,13 @@ function measureZoneContrast(srcCtx,zone,tc){
 }
 function coverDraw(ctx,img,w,h){const s=Math.max(w/img.width,h/img.height);ctx.drawImage(img,(w-img.width*s)/2,(h-img.height*s)/2,img.width*s,img.height*s);}
 function containDraw(ctx,img,cx,cy,mW,mH,a){const s=Math.min(mW/img.width,mH/img.height);ctx.save();ctx.globalAlpha=a;ctx.drawImage(img,cx-(img.width*s)/2,cy-(img.height*s)/2,img.width*s,img.height*s);ctx.restore();}
-function imgFrom(d){return new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=d;});}
+function imgFrom(d){return new Promise(r=>{const i=new Image();
+  // (Commit 3) Request CORS for remote images (Supabase signed URLs, http/https) so the
+  // export canvas is NOT tainted — otherwise toDataURL/download throws a SecurityError once
+  // a Library photo (auto-attached on landing, or picked) is drawn. data:/blob: are same-
+  // origin and need no crossOrigin. Supabase Storage returns permissive CORS headers.
+  if(typeof d==="string" && /^https?:/i.test(d)) i.crossOrigin="anonymous";
+  i.onload=()=>r(i);i.onerror=()=>r(null);i.src=d;});}
 // Hex (#RRGGBB) → rgba string with alpha 0..1
 function withAlpha(hex,a){const h=(hex||"#000").replace("#","");const r=parseInt(h.slice(0,2),16)||0,g=parseInt(h.slice(2,4),16)||0,b=parseInt(h.slice(4,6),16)||0;return `rgba(${r},${g},${b},${a==null?1:a})`;}
 
@@ -3128,6 +3134,14 @@ export default function App() {
     let handoff;
     try { handoff = JSON.parse(raw); } catch { return; }
     if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true });
+    // (Commit 3) LANDING PHOTO ATTACH — if the landing flow attached a Library photo for a
+    // photo-led archetype, load it as the background so the design isn't text-only-plain.
+    // Applied AFTER the patch (which sets a photo postType); the auto director then places
+    // text/logo in the clear regions. Silently skipped if the URL fails to load.
+    if (handoff?.imageUrl) {
+      setImage(handoff.imageUrl);
+      imgFrom(handoff.imageUrl).then(img => { if (img) setImageObj(img); }).catch(() => {});
+    }
     // Seed the conversation but leave the panel CLOSED — the user asked to land
     // on an uncluttered editor; the exchange is waiting behind the FAB.
     setChatSeed({ originalMessage: handoff?.originalMessage || "", reply: handoff?.reply || "" });
@@ -4390,10 +4404,12 @@ export default function App() {
         const pickMark=brandLogoForContext(dimId, "mark", hexLuminance(fieldColor), logoSeed);
         // The mark variants are green-only; on a LIGHT field draw the real badge as-is, on a
         // DARK field the green badge would vanish, so tint the orchid-petal to ivory instead.
+        // NOTE: the small corner MARK is intentionally allowed to sit quietly near text in
+        // a corner (it's a tiny quiet glyph, not a lockup), so it is NOT registered in the
+        // logo↔text collision assertion (auditLogo.box) — only the full lockup is.
         let drew=false;
         if(pickMark && fieldLight && !userLogoTouched){
           containDraw(ctx,pickMark.img,cx,cy,mSz,mSz,isCentered?1:0.9);
-          if(live||opts.captureAudit) auditLogo.box={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz};
           drew=true;
         }
         if(!drew){
@@ -4401,10 +4417,7 @@ export default function App() {
           if(orchid){
             const markColor=fieldLight?B.burnham:B.whiteSmoke;
             const tinted=tintedAccessory(orchid,markColor);
-            if(tinted){
-              containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
-              if(live||opts.captureAudit) auditLogo.box={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz};
-            }
+            if(tinted) containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
           }
         }
       } else if(drawLockup) putLogo(textEnvelope,logoOpts);

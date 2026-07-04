@@ -50,6 +50,8 @@ export default function Home() {
           patch: data.patch || {},
           reply: data.reply || '',
           originalMessage: content,
+          // (Commit 3) a Library photo the landing flow attached for a photo-led archetype.
+          imageUrl: data.imageUrl || null,
         }));
       } catch { /* private mode — the studio still opens, just without seeding */ }
       router.push('/generate');
