@@ -6315,6 +6315,13 @@ export default function App() {
       {postType==="text_post"&&<><In data-wo-role="support" placeholder="Intro line / caption" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id={idPrefix} data-wo-role="hero" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt />{dateText?<In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt />:null}</>}
       {postType==="texture_text"&&<In id={idPrefix} data-wo-role="hero" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
       {postType==="photo_logo"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      {/* (WP-U fix #1) photo_logo / texture_text EDITORIAL designs also render a
+          support line + a date (landing/chat plans set them) — expose both so every
+          drawn role has its own input. */}
+      {["photo_logo","texture_text"].includes(postType) && heroRegister ? <>
+        <In data-wo-role="support" placeholder="Support line (optional)" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt />
+        {dateText ? <In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /> : null}
+      </> : null}
       {/* (WP-U fix #1) EYEBROW — the small caps label was baked at materialization
           (microLabel) and had NO edit field, so it looked uneditable. Shown whenever
           an eyebrow is on the canvas or the archetype carries the role. */}
