@@ -100,6 +100,12 @@ code afterward. Implications, permanent:
   concrete action; setting; lighting; warm grade "forest green, ivory and warm terracotta,
   natural warm Asian skin tones"; camera (medium format/35mm, generous negative space);
   ALWAYS end "No text, no letters, no words, no logos, no UI, no poster, no frame, no layout,
-  no captions. A single full-frame photograph." enhance_prompt: false. Soul v2 payload:
-  {"model":"text2image_soul_v2","style_id":"3db34ab5-3439-4317-9e03-08dc30852e69",...}.
+  no captions. A single full-frame photograph." enhance_prompt: false. VERIFIED Soul
+  payload (live validator, 2026-07-04 — overrides the "public surface" ruling): POST
+  /v1/text2image/soul with a REQUIRED {params:{…}} wrapper; params = { prompt,
+  width_and_height:<enum>, quality:'720p'|'1080p' (we use 1080p; "2k" is rejected),
+  batch_size:1, enhance_prompt:false, seed, soul_id? }. NO style_id / aspect_ratio /
+  flat width+height — the validator 422s on those (aspect_ratio isn't a field;
+  width_and_height is required). soul_id (trained Soul identity) is the consistency
+  mechanism, set via env HIGGSFIELD_SOUL_ID; seed via HIGGSFIELD_SEED (unset = random).
 - Division of labour, final: Higgsfield shoots → OUR archetype engine composes → user edits.
