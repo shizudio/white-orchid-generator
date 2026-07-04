@@ -3271,9 +3271,13 @@ export default function App() {
 
   // A finished branded composition greets first-time users instead of an
   // empty canvas. Subsequent image/template changes still use auto direction.
+  // (WP-U) NEVER clobber a photo another path already applied: the landing
+  // handoff's GENERATED photo decodes in parallel with this greeting sample —
+  // whichever resolved last used to win the race, so a fresh Higgsfield photo
+  // could be silently replaced by the stock sample. Keep-first fixes it.
   useEffect(() => {
     let active=true;
-    imgFrom(SAMPLE_IMAGES[0].full).then(img=>{if(active)setImageObj(img);});
+    imgFrom(SAMPLE_IMAGES[0].full).then(img=>{if(active&&img)setImageObj(prev=>prev||img);});
     return()=>{active=false;};
   }, []);
 
