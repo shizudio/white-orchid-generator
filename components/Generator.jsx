@@ -1070,12 +1070,19 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
   const LOGO_MIN_CONTRAST=1.8; // low bar — the mark is decorative, but must not vanish
   const rank=sizeId=>{
     const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=w*pct;
+    // (WP-U logo-on-photo) On a photo, CORNERS are strongly preferred — they are the
+    // lowest-detail candidates by construction (subjects live in the middle bands).
+    // A flat +1.2 corner bonus plus the existing variance penalty (detail = subject)
+    // means a busy corner still loses to a quiet edge, but a face-adjacent centre
+    // spot never outranks a clean corner.
+    const CORNERS=new Set(["top-left","top-right","bottom-left","bottom-right"]);
     return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{
       const box=boxFor(pos,lSz),region=regionFor(pos);
       const overlapText=exclText&&intersects(exclText,box);
       const overlapFocal=exclFocal&&intersects(exclFocal,box);
       const overlapFrame=exclFrame&&intersects(exclFrame,box);
-      return{id,sizeId,lSz,overlap:overlapText||overlapFocal||overlapFrame,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)};
+      const cornerBonus=(regions&&CORNERS.has(id))?1.2:0;
+      return{id,sizeId,lSz,overlap:overlapText||overlapFocal||overlapFrame,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)+cornerBonus};
     }).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
   };
   // Does the base placement already clear both exclusion zones AND read against the
@@ -3819,7 +3826,53 @@ export default function App() {
           auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
         }
       }
-      containDraw(ctx,drawObj,lx,ly,lSz,lSz,1);
+      // ── (WP-U logo-on-photo) CONTRAST GUARANTEE ──────────────────────────────
+      // When the lockup lands on a photo region, sample the ALREADY-DRAWN canvas
+      // under the final box. If the ink can't hit 3:1 against the sampled backing:
+      //  1. swap to the opposite-ink brand variant when THAT reads (green on light,
+      //     ivory on dark) — the cheapest, cleanest remedy;
+      //  2. otherwise drop a subtle LOCALIZED rounded scrim behind the mark (dark
+      //     scrim under ivory ink / ivory scrim under dark ink) — never a wash.
+      // The post-remedy contrast is recorded for the stress assertion (>= 3:1).
+      let effObj=drawObj, effInkLum=drawInkLum, scrim=null;
+      if(mediaObj){
+        let backing=null;
+        try{
+          const N=12,sc=document.createElement("canvas");sc.width=N;sc.height=N;
+          const sctx=sc.getContext("2d",{willReadFrequently:true});
+          const sx=Math.max(0,_logoBox.x),sy=Math.max(0,_logoBox.y);
+          const sw=Math.min(w-sx,_logoBox.w),sh=Math.min(h-sy,_logoBox.h);
+          if(sw>2&&sh>2){
+            sctx.drawImage(ctx.canvas,sx,sy,sw,sh,0,0,N,N);
+            const d=sctx.getImageData(0,0,N,N).data;let sum=0,sq=0,n=0;
+            for(let i=0;i<d.length;i+=4){const L=getLuminance(d[i],d[i+1],d[i+2]);sum+=L;sq+=L*L;n++;}
+            const mean=n?sum/n:0.3;backing={mean,variance:n?Math.max(0,sq/n-mean*mean):0};
+          }
+        }catch(_){/* canvas tainted / headless — skip, remedy below is best-effort */}
+        if(backing){
+          let cr=contrastRatio(backing.mean,effInkLum);
+          if(cr<3 && !logoVariantTouched){
+            const swap=readableLogoForField(backing.mean);
+            if(swap && contrastRatio(backing.mean,swap.inkLum)>=3){ effObj=swap.img; effInkLum=swap.inkLum; cr=contrastRatio(backing.mean,swap.inkLum); }
+          }
+          if(cr<3){
+            const light=effInkLum>0.5; // ivory ink → dark scrim; green ink → ivory scrim
+            scrim={color:light?B.burnham:B.whiteSmoke,alpha:0.58};
+            cr=contrastRatio(hexLuminance(scrim.color),effInkLum);
+          }
+          if(live||opts.captureAudit){ auditLogo.overPhoto=true; auditLogo.photoContrast=cr; }
+        }
+      }
+      if(scrim){
+        const pad=lSz*0.14, rx=_logoBox.x-pad, ry=_logoBox.y-pad, rw=lSz+pad*2, rh=lSz+pad*2, rad=Math.min(rw,rh)*0.16;
+        ctx.save(); ctx.globalAlpha=scrim.alpha; ctx.fillStyle=scrim.color;
+        ctx.beginPath();
+        ctx.moveTo(rx+rad,ry);
+        ctx.arcTo(rx+rw,ry,rx+rw,ry+rh,rad); ctx.arcTo(rx+rw,ry+rh,rx,ry+rh,rad);
+        ctx.arcTo(rx,ry+rh,rx,ry,rad); ctx.arcTo(rx,ry,rx+rw,ry,rad);
+        ctx.closePath(); ctx.fill(); ctx.restore();
+      }
+      containDraw(ctx,effObj,lx,ly,lSz,lSz,1);
     };
     // Per-dimension resolved text colour (spec §3). Assigned after the text box is
     // known (see zoneTc computation below); until then it defaults to the global tc.
@@ -4792,6 +4845,9 @@ export default function App() {
         // User-pinned logos are explicit intent (and height-capped on wide formats);
         // the dominance assertion guards the AUTO composition only.
         const logoDominant=!!(!_bookend && !userLogoTouched && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
+        // (WP-U logo-on-photo) contrast assertion: a lockup drawn over a photo must
+        // read at >= 3:1 against its sampled backing (post variant-swap/scrim).
+        const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
@@ -4802,7 +4858,8 @@ export default function App() {
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
-            seamStraddles, degeneratePhoto, logoDominant,
+            seamStraddles, degeneratePhoto, logoDominant, logoLowContrast,
+            logoPhotoContrast: auditLogo.overPhoto ? auditLogo.photoContrast : null,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
                     photo:photoObs||null, fullBleed:!!mat.fullBleed, sm:{...sm}, postType },
           },
@@ -5318,7 +5375,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -5328,12 +5385,13 @@ export default function App() {
             const dr = auditRef.current?.archetypeDrift || {};
             const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0, mc = dr.midCut || 0;
             const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
-            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld;
-            if (o || cr || mc || sea || dg || ld) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, diag: dr._diag || null });
+            const ll = dr.logoLowContrast ? 1 : 0;
+            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll;
+            if (o || cr || mc || sea || dg || ld || ll) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
