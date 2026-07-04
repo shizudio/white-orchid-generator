@@ -2724,8 +2724,12 @@ export default function App() {
     });
   };
 
-  // Effective layout for the CURRENT dimension (spec resolution rule).
-  const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim);
+  // Effective layout for the CURRENT dimension (spec resolution rule). The ACTIVE
+  // ARCHETYPE must travel into the resolution (template-revert fix): without it the
+  // non-master resolution falls back to the LEGACY per-format default, which has no
+  // materialized roles.
+  const activeArchForLayout = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
+  const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim,activeArchForLayout);
   // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
   const updateTextLayout = patch => {
     noteManualEdit("text");   // canvas drag / slider / grid / keyboard nudge (Commit 3)
@@ -2733,7 +2737,12 @@ export default function App() {
       setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
     }else{
       setTypeLayoutsByDim(prev=>{
-        const base=prev[dimensionId]?.[postType]||resolveTextLayout(dimensionId,postType,typeLayouts,prev);
+        // (TEMPLATE-REVERT FIX) Seed the per-dim override from the SAME resolution the
+        // render uses — INCLUDING the active archetype. The old call omitted the
+        // archetype, so the first manual drag on a non-master format seeded a legacy
+        // (role-less) base; the render then classified that dim non-editorial and the
+        // WHOLE design flipped to the legacy stacked path (the client's template-revert).
+        const base=prev[dimensionId]?.[postType]||resolveTextLayout(dimensionId,postType,typeLayouts,prev,activeArchForLayout);
         return {...prev,[dimensionId]:{...(prev[dimensionId]||{}),[postType]:{...base,...patch}}};
       });
     }
