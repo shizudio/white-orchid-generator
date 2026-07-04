@@ -1,0 +1,115 @@
+# UX Architecture — One Canvas, Two Inputs, Zero Duplicates
+
+Status: RATIFIED by client (Shina), 2026-07-04. This is the contract for WP-V (the
+editor restructure). WP-T + WP-U ship to staging on the CURRENT layout first; WP-V
+begins only after that is verified live.
+
+## 0. The problem this replaces
+
+The editor grew three parallel control surfaces — left tool panel, AI chat overlay,
+right elements-bubbles rail — with no rule for which surface owns which action.
+Observed pain (client's own usage):
+
+1. No predictable home for an action: some edits panel-only, some AI-only
+   (change image / change caption), and the panel sometimes LOOKS like it should
+   do a thing but can't.
+2. Direct manipulation is broken trust: clicking the logo/caption on the preview
+   does nothing. Every dead click teaches "the canvas is just a picture."
+3. The bubbles rail duplicates the panel → two stale-able views of one state.
+4. The chat overlay covers the exact canvas region being edited.
+5. Panel overload → user defaults to chat for everything (~70–80% of actions),
+   even tweaks where chat is slower.
+
+Target users are non-technical preschool staff who are fluent at PROMPTING, not
+at design tools. The architecture is therefore chat-first.
+
+## 1. The law
+
+> **Say it to change WHAT IT IS. Touch it to change HOW IT LOOKS.
+> One inspector shows WHAT'S SELECTED. Nothing else exists.**
+
+- Semantic / creative intent → chat ("change the photo to kids gardening",
+  "make the caption warmer", "try another layout").
+- Geometric / cosmetic tweaks → direct manipulation on canvas (drag, resize,
+  inline text edit) + the contextual inspector.
+- There is no third surface.
+
+## 2. The four surfaces (total, final)
+
+### 2.1 Chat — the primary rail
+- Docked LEFT column on desktop; canvas sits beside it, never under it.
+  On mobile: chat docks UNDER the canvas.
+- The chat must never overlap/cover the canvas in any state.
+- 3–4 quick-action chips above the composer for the top asks:
+  `Change photo · Rewrite caption · Try another layout · New post`.
+  Chips are DYNAMIC: if the design lacks a caption, a chip reads `+ Add caption`.
+- The landing (generate) flow and the editor are one continuous conversation.
+
+### 2.2 Canvas — fully direct-manipulable
+- EVERY element responds to click/tap: select → inline text edit where text,
+  drag/resize handles, contextual toolbar. Dead clicks are impossible.
+  (Foundation: WP-U item 1, universal click-to-edit.)
+- Empty regions where the layout engine knows an element COULD go render a
+  faint dashed ghost slot on hover/tap: "＋ add text here" (see §3).
+
+### 2.3 Contextual inspector — selection-only
+- NOTHING is shown until an element is selected; then a slim inspector
+  (right side, or floating near selection) shows ONLY that element's
+  properties: colour options, size, variant, delete.
+- Includes a small layer list (the only surviving job of the bubbles rail)
+  for selecting occluded elements — visible only when relevant.
+- The big static left tool panel is DELETED. No fallback drawer. (Client chose
+  the radical option deliberately: staff will never browse; a drawer is
+  clutter returning through the back door.)
+
+### 2.4 Top bar — globals only
+- Format, post type, templates, export, undo. Slim, one row. Nothing per-element.
+
+### 2.5 Deleted outright
+- The right bubbles/elements rail (duplicate of panel state).
+- The floating chat overlay.
+- The static multi-section tool panel.
+
+## 3. The "add what doesn't exist" problem (vocabulary-free)
+
+A selection-only inspector can't add absent elements, and staff don't know the
+word "caption". Three layers, none requiring vocabulary:
+
+1. **Visual `+ Add` menu.** One persistent `+` in the top bar. Opens a gallery
+   of THUMBNAILS (a tile with small text under the headline; a date line; a
+   pill button; a logo) with plain-language labels: "Small text under the
+   title", "Date", "Button", "Logo". Recognition over recall.
+2. **Ghost slots.** Layout engine already knows where a missing role would go;
+   empty region shows dashed "＋ add text here" on hover/tap. (Users already
+   instinctively click the canvas — make empty space clickable too.)
+3. **Forgiving chat + passive teaching.** "add small text at the bottom that
+   says pickup is at 3pm" must Just Work (model maps vague language → role).
+   The AI's confirmation teaches the term back: "Added that as a caption — the
+   small text under your headline. Tap it anytime to edit."
+
+## 4. Parity by architecture, not discipline
+
+The AI already edits designs through the patch schema (lib/design-patch.js).
+RULE: the inspector and all canvas interactions emit THE SAME PATCHES the AI
+emits. One patch pipeline → by construction, anything the AI can do the UI can
+do and vice versa. The "caption uneditable from panel" class of bug becomes
+structurally impossible. This is the load-bearing engineering decision of WP-V;
+do not implement inspector controls as direct state mutations.
+
+## 5. Sequencing
+
+- **Phase 1 (in WP-U, current layout):** universal click-to-edit on canvas;
+  chat repositioned so it never overlaps the canvas.
+- **SHIP GATE:** WP-T + WP-U verified on localhost → staging → client verify.
+- **Phase 2 (WP-V):** delete bubbles rail; panel → contextual inspector;
+  globals → top bar; all UI edits routed through the patch pipeline.
+- **Phase 3 (WP-V or WP-W):** chat promoted to primary left rail with dynamic
+  quick-action chips; `+ Add` gallery; ghost slots; landing+editor unified
+  into one conversation.
+
+## 6. Non-goals
+
+- No fallback tool drawer.
+- No re-introduction of any always-visible per-element controls.
+- Mobile parity is required but mobile-specific redesign beyond "chat under
+  canvas" is out of scope for WP-V.
