@@ -1155,25 +1155,76 @@ const TYPE_TEXT_ROLES={
 const freshFontSizes=()=>({heading:"m",subheading:"m",content:"m",highlight:"m"});
 const fontMultOf=(fontSizes,role)=>FONT_SIZE_STEPS.find(s=>s.id===((fontSizes&&fontSizes[role])||"m"))?.mult??1;
 
-/* ───────── TWO LOGO SYSTEM ───────── */
+/* ───────── TWO LOGO SYSTEM ─────────
+   (Commit 2) Each variant is tagged with a `shape` class + `color` so the render can
+   pick a CONTEXT-APPROPRIATE lockup and ROTATE among suitable candidates (deterministic
+   ring), instead of stamping one mark everywhere. Shapes are read from the SVG viewBox
+   aspect ratios (w/h):
+     "horizontal" — wide mark+wordmark lockup (AR ≳2): p1 (2.24), p2 (7.85, extra-wide),
+                    p-central (2.23), s2 (1.42). Best for wide formats + side slots.
+     "stacked"    — tall mark-above-wordmark (AR ≲0.7): p3, p3f. Best for square/tall.
+     "square"     — near-1:1 composed lockup: p4 (1.15), s1 (1.15).
+     "mark"       — mark-only glyph/badge (AR≈1, no wordmark): p-circle, p-bg. Small corners.
+   `color` ("green"|"ivory") drives dark/light field contrast (ivory on dark, green on light). */
 const LOGO_VARIANTS = [
   // Primary
-  { id:"p1-green",  label:"Primary 1",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-1-green.svg" },
-  { id:"p1-ivory",  label:"Primary 1",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-1-ivory.svg" },
-  { id:"p2-green",  label:"Primary 2",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-2-green.svg" },
-  { id:"p2-ivory",  label:"Primary 2",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-2-ivory.svg" },
-  { id:"p3-green",  label:"Primary 3",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-3-green.svg" },
-  { id:"p3-ivory",  label:"Primary 3",  group:"primary",  color:"ivory", src:"/assets/logos/primary/primary-3-flat-ivory.svg" },
-  { id:"p3f-green", label:"Primary 3 Flat", group:"primary", color:"green", src:"/assets/logos/primary/primary-3-flat-green.svg" },
-  { id:"p4",        label:"Primary 4",  group:"primary",  color:"green", src:"/assets/logos/primary/primary-4.svg" },
-  { id:"p-central", label:"Central",    group:"primary",  color:"green", src:"/assets/logos/primary/primary-central-green.svg" },
-  { id:"p-circle",  label:"Circle",     group:"primary",  color:"green", src:"/assets/logos/primary/primary-circle.svg" },
-  { id:"p-bg",      label:"With BG",    group:"primary",  color:"green", src:"/assets/logos/primary/primary-bg-green.svg" },
+  { id:"p1-green",  label:"Primary 1",  group:"primary",  color:"green", shape:"horizontal", src:"/assets/logos/primary/primary-1-green.svg" },
+  { id:"p1-ivory",  label:"Primary 1",  group:"primary",  color:"ivory", shape:"horizontal", src:"/assets/logos/primary/primary-1-ivory.svg" },
+  { id:"p2-green",  label:"Primary 2",  group:"primary",  color:"green", shape:"horizontal", wide:true, src:"/assets/logos/primary/primary-2-green.svg" },
+  { id:"p2-ivory",  label:"Primary 2",  group:"primary",  color:"ivory", shape:"horizontal", wide:true, src:"/assets/logos/primary/primary-2-ivory.svg" },
+  { id:"p3-green",  label:"Primary 3",  group:"primary",  color:"green", shape:"stacked", src:"/assets/logos/primary/primary-3-green.svg" },
+  { id:"p3-ivory",  label:"Primary 3",  group:"primary",  color:"ivory", shape:"stacked", src:"/assets/logos/primary/primary-3-flat-ivory.svg" },
+  { id:"p3f-green", label:"Primary 3 Flat", group:"primary", color:"green", shape:"stacked", src:"/assets/logos/primary/primary-3-flat-green.svg" },
+  { id:"p4",        label:"Primary 4",  group:"primary",  color:"green", shape:"square", src:"/assets/logos/primary/primary-4.svg" },
+  { id:"p-central", label:"Central",    group:"primary",  color:"green", shape:"horizontal", src:"/assets/logos/primary/primary-central-green.svg" },
+  { id:"p-circle",  label:"Circle",     group:"primary",  color:"green", shape:"mark", src:"/assets/logos/primary/primary-circle.svg" },
+  { id:"p-bg",      label:"With BG",    group:"primary",  color:"green", shape:"mark", src:"/assets/logos/primary/primary-bg-green.svg" },
   // Secondary
-  { id:"s1-green",  label:"Secondary 1", group:"secondary", color:"green", src:"/assets/logos/secondary/secondary-1-green.svg" },
-  { id:"s1-ivory",  label:"Secondary 1", group:"secondary", color:"ivory", src:"/assets/logos/secondary/secondary-1-ivory.svg" },
-  { id:"s2-green",  label:"Secondary 2", group:"secondary", color:"green", src:"/assets/logos/secondary/secondary-2-green.svg" },
+  { id:"s1-green",  label:"Secondary 1", group:"secondary", color:"green", shape:"square", src:"/assets/logos/secondary/secondary-1-green.svg" },
+  { id:"s1-ivory",  label:"Secondary 1", group:"secondary", color:"ivory", shape:"square", src:"/assets/logos/secondary/secondary-1-ivory.svg" },
+  { id:"s2-green",  label:"Secondary 2", group:"secondary", color:"green", shape:"horizontal", src:"/assets/logos/secondary/secondary-2-green.svg" },
 ];
+
+// (Commit 2) CONTEXT-AWARE BRAND LOGO SELECTION + ROTATION. Given the render format, the
+// logo SLOT (corner-mark vs a lockup beside/above text), the FIELD luminance, and a
+// deterministic seed, pick a suitable variant id — mapping SHAPE by format/slot and COLOR
+// by field, then ROTATING among the suitable candidates so consecutive designs don't
+// repeat the same lockup. Archetype logoUse pins a CLASS (mark|lockup), never a file; a
+// user's explicit pick (logoVariantTouched) still wins upstream of this.
+//   slot: "mark" → mark-only glyph (small corner); "lockup" → full mark+wordmark.
+// Returns a LOGO_VARIANTS id. Falls back to a sane default if nothing matches.
+const WIDE_FORMAT_IDS = new Set(["twitter","facebook","banner"]);
+function pickBrandLogo({ dimId, slot, fieldLum, seed = 0 }) {
+  const wantColor = fieldLum != null && fieldLum <= 0.5 ? "ivory" : "green";
+  // Preferred SHAPE order per context (first = best fit); we filter to these, then rank.
+  let shapePref;
+  if (slot === "mark") shapePref = ["mark", "square", "stacked"];         // small corner glyph
+  else if (WIDE_FORMAT_IDS.has(dimId)) shapePref = ["horizontal", "square"]; // wide → wide lockup
+  else shapePref = ["stacked", "square", "horizontal"];                    // square/tall → stacked
+  // Candidate pool: right shape family, prefer the wanted colour but allow the other
+  // colour when a shape has no variant in that colour (only some have ivory).
+  const inShape = (v) => shapePref.includes(v.shape);
+  let pool = LOGO_VARIANTS.filter(v => inShape(v) && v.color === wantColor);
+  if (!pool.length) pool = LOGO_VARIANTS.filter(inShape);
+  if (!pool.length) pool = LOGO_VARIANTS.slice();
+  // On wide formats prefer the extra-wide p2 lockup first (best fill), else keep order.
+  const rank = (v) => {
+    let s = shapePref.indexOf(v.shape); if (s < 0) s = 9;
+    // extra-wide bonus on wide formats
+    if (WIDE_FORMAT_IDS.has(dimId) && v.wide) s -= 0.5;
+    // colour match bonus
+    if (v.color === wantColor) s -= 0.25;
+    return s;
+  };
+  pool = pool.slice().sort((a, b) => rank(a) - rank(b));
+  // Keep only the best-ranked shape tier so rotation stays within equally-suitable options,
+  // then rotate deterministically by seed (like the palette rotation ring).
+  const bestRank = rank(pool[0]);
+  const tier = pool.filter(v => rank(v) <= bestRank + 0.75);
+  const ring = tier.length ? tier : pool;
+  const idx = ((seed % ring.length) + ring.length) % ring.length;
+  return ring[idx].id;
+}
 
 // Contrast ratio helper (WCAG relative luminance)
 function getLuminance(r,g,b){
@@ -3310,15 +3361,16 @@ export default function App() {
      lazily; the render simply skips the swap until the counterpart image is ready. */
   const logoVariantImgs = useRef({});
   useEffect(() => {
-    if (!selectedLogoVariant) return;
-    // Load the OTHER colour variants in this logo's family (same group+label).
-    const family = LOGO_VARIANTS.filter(v => v.group === selectedLogoVariant.group && v.label === selectedLogoVariant.label);
+    // (Commit 2) Cache ALL variant images up front so context-aware selection + rotation
+    // can blit ANY suitable lockup/mark at draw time (not just the active family's colour
+    // twin). Cheap: 14 small SVGs, loaded once, lazily skipped until ready.
     let cancelled = false;
-    Promise.all(family.filter(v => !logoVariantImgs.current[v.id]).map(v =>
+    Promise.all(LOGO_VARIANTS.filter(v => !logoVariantImgs.current[v.id]).map(v =>
       imgFrom(v.src).then(img => { if (img) logoVariantImgs.current[v.id] = img; })
     )).then(() => { if (!cancelled && archetypeId) draw(); });
     return () => { cancelled = true; };
   }, [selectedLogoId, selectedLogoVariant, archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const _logoInkLum = (color) => color === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64);
   // Resolve the readable logo variant for a field of luminance `fieldLum`: green on
   // light fields, ivory on dark (spec §3 / the known ivory-on-ivory nit). Returns
   // {img, inkLum} using the cached family images, or null to keep the current logo.
@@ -3329,7 +3381,18 @@ export default function App() {
     const match = LOGO_VARIANTS.find(v => v.group === selectedLogoVariant.group && v.label === selectedLogoVariant.label && v.color === wantColor);
     const img = match && logoVariantImgs.current[match.id];
     if (!img) return null; // not loaded yet → no swap this frame
-    return { img, inkLum: wantColor === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64) };
+    return { img, inkLum: _logoInkLum(wantColor) };
+  };
+  // (Commit 2) CONTEXT-AWARE brand logo for a render: pick a suitable variant (shape by
+  // format/slot, colour by field) and rotate deterministically by `seed`. Returns
+  // {img, inkLum, id} using the cached images, or null when the pick isn't loaded yet
+  // (the caller then falls back to the current logo). `slot` is "mark" | "lockup".
+  const brandLogoForContext = (dimId, slot, fieldLum, seed) => {
+    const id = pickBrandLogo({ dimId, slot, fieldLum, seed });
+    const v = LOGO_VARIANTS.find(x => x.id === id);
+    const img = v && logoVariantImgs.current[v.id];
+    if (!img) return null;
+    return { img, inkLum: _logoInkLum(v.color), id: v.id };
   };
 
   /* ── Reset reframe when a new photo/video loads ── */
@@ -4294,28 +4357,54 @@ export default function App() {
       const markPos = provArch?.elements?.logo?.position || "bottom-right";
       const wantMark = logoUse==="mark" && !userLogoTouched;
       const drawLockup = userLogoTouched || logoUse==="lockup";
+      // (Commit 2) DETERMINISTIC ROTATION SEED — stable for a given design, but varies
+      // across archetype / palette variant / copy so consecutive designs don't repeat the
+      // same lockup. Mirrors the palette rotation ring's determinism.
+      const _archIdx=Math.max(0,ARCHETYPE_IDS.indexOf(archetypeId||provArch?.id||""));
+      const _hashStr=String((heroFinal||"")+"|"+(supportText||""));
+      let _copyHash=0; for(let _i=0;_i<_hashStr.length;_i++){ _copyHash=((_copyHash<<5)-_copyHash+_hashStr.charCodeAt(_i))|0; }
+      const logoSeed=Math.abs(_archIdx*7 + (mat.variantIdx||0)*3 + (_copyHash%97));
       let logoOpts={};
+      // (Commit 2) CONTEXT-AWARE VARIANT + ROTATION for the auto (non-user-pinned) lockup.
+      // Pick a shape suited to this format/slot, coloured for the field, rotated by seed —
+      // replacing the old same-family colour swap. A user's explicit pick (logoVariantTouched)
+      // still wins (this whole branch is skipped then). Falls back to the colour swap when the
+      // picked variant image isn't cached yet.
       if(!logoVariantTouched && !mat.fullBleed){
-        const swap=readableLogoForField(hexLuminance(fieldColor));
-        if(swap) logoOpts={...logoOpts,logoImg:swap.img,inkLum:swap.inkLum};
+        const pick=brandLogoForContext(dimId, "lockup", hexLuminance(fieldColor), logoSeed);
+        if(pick) logoOpts={...logoOpts,logoImg:pick.img,inkLum:pick.inkLum};
+        else { const swap=readableLogoForField(hexLuminance(fieldColor)); if(swap) logoOpts={...logoOpts,logoImg:swap.img,inkLum:swap.inkLum}; }
       }
       if(wantMark){
-        // Small tinted orchid mark, corner-anchored (or centred for closing_card via its
-        // logo.position). Readable ink: ivory on dark fields, deep green on light.
-        const orchid=archAssetImgs.current["orchid-petal"];
-        if(orchid){
-          const fieldLight=hexLuminance(fieldColor)>0.5;
-          const markColor=fieldLight?B.burnham:B.whiteSmoke;
-          const tinted=tintedAccessory(orchid,markColor);
-          if(tinted){
-            // Size from the archetype's logo sizeId: brand card lockup ("m") reads larger
-            // and centred; solid-tile corner marks stay small ("s") and quiet.
-            const markSizeId=provArch?.elements?.logo?.sizeId||"s";
-            const mSz=w*(markSizeId==="m"?0.13:markSizeId==="l"?0.16:0.072);
-            const isCentered=/center/.test(markPos);
-            const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
-            const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
-            containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
+        // (Commit 2) MARK SLOT — prefer a real mark-only brand variant (circle/bg badge),
+        // coloured for the field (ivory on dark, green on light) and rotated by seed, so the
+        // corner mark ALTERNATES instead of always the same tinted orchid-petal glyph. Falls
+        // back to the tinted orchid-petal when no mark image is cached (or the pick is a
+        // green-only mark on a dark field, where the tinted glyph reads better).
+        const markSizeId=provArch?.elements?.logo?.sizeId||"s";
+        const mSz=w*(markSizeId==="m"?0.13:markSizeId==="l"?0.16:0.072);
+        const isCentered=/center/.test(markPos);
+        const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
+        const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
+        const fieldLight=hexLuminance(fieldColor)>0.5;
+        const pickMark=brandLogoForContext(dimId, "mark", hexLuminance(fieldColor), logoSeed);
+        // The mark variants are green-only; on a LIGHT field draw the real badge as-is, on a
+        // DARK field the green badge would vanish, so tint the orchid-petal to ivory instead.
+        let drew=false;
+        if(pickMark && fieldLight && !userLogoTouched){
+          containDraw(ctx,pickMark.img,cx,cy,mSz,mSz,isCentered?1:0.9);
+          if(live||opts.captureAudit) auditLogo.box={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz};
+          drew=true;
+        }
+        if(!drew){
+          const orchid=archAssetImgs.current["orchid-petal"];
+          if(orchid){
+            const markColor=fieldLight?B.burnham:B.whiteSmoke;
+            const tinted=tintedAccessory(orchid,markColor);
+            if(tinted){
+              containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
+              if(live||opts.captureAudit) auditLogo.box={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz};
+            }
           }
         }
       } else if(drawLockup) putLogo(textEnvelope,logoOpts);
