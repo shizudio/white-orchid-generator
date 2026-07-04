@@ -4326,20 +4326,41 @@ export default function App() {
       // draws past the bottom safe margin (skipped when there is no room).
       if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox &&
          (mat.photoRegion || mat.fullBleed || (cardBox||maskBox))){
-        const _safeBotD=(1-sm.b)*h;
-        const dStart=Math.max(20*S,(fontMeta.headline||heroBox.h*0.4)*0.55);
-        const dGap=Math.max(0.014*h,(fontMeta.headline||0)*0.18);
-        const dTop=heroBox.y+usedH+dGap;
-        const dRoom=_safeBotD-dTop;
-        if(dRoom>22*S){
-          beginText(); ctx.fillStyle=heroInk;
-          const df=fitText(ctx,ccDateText,s=>`300 ${s}px ${F.title}`,Math.min(dStart,dRoom/1.15),heroBox.w,dRoom,1.05,Math.min(20*S,dRoom/1.3));
-          ctx.font=`300 ${df.size}px ${F.title}`;
-          const dAlign=(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left";
-          drawTextLines(ctx,df.lines.slice(0,1),heroBox.x,dTop+df.size,heroBox.w,df.size*1.05,dAlign);
-          fontMeta.date=df.size;
-          usedH+=dGap+df.size*1.28; // the caption nudge + audit envelope see the date
-          endText();
+        const _safeTopD=sm.t*h, _safeBotD=(1-sm.b)*h;
+        const heroSz=fontMeta.headline||heroBox.h*0.4;
+        // Obstacle + floor awareness: the date must never reach a photo band/card/mask
+        // (the same obstacles reflow de-collides text against) nor squeeze the caption
+        // past its floor. floor = the bottom safe margin, or the top of a full-width
+        // photo band sitting below the hero (editorial_split / portrait story bands).
+        const _dObs=cardBox||maskBox||((mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null);
+        let dFloor=_safeBotD;
+        if(_dObs && _dObs.w>=0.8*(1-sm.l-sm.r)*w && _dObs.y>heroBox.y) dFloor=Math.min(dFloor,_dObs.y-0.02*h);
+        // Fit the date on ONE line at ~0.55× the hero (min floor keeps it prominent).
+        let dSz=Math.max(20*S,heroSz*0.55);
+        ctx.font=`300 ${dSz}px ${F.title}`;
+        while(dSz>14*S && ctx.measureText(ccDateText).width>heroBox.w){ dSz-=2; ctx.font=`300 ${dSz}px ${F.title}`; }
+        const dGap=Math.max(0.014*h,heroSz*0.18);
+        const dH=dGap+dSz*1.28;
+        // Room below the hero must hold the date AND (when a caption follows below)
+        // still leave the caption its minimum height above the floor.
+        const supBelow=!!(supportText && supBox && supBox.y>=heroBox.y-0.01*h);
+        const supNeed=supBelow?(reflow.supMin*1.5+dGap):0;
+        const dAlign=(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left";
+        const dTextW=ctx.measureText(ccDateText).width;
+        const dX=dAlign==="center"?heroBox.x+(heroBox.w-dTextW)/2:dAlign==="right"?heroBox.x+heroBox.w-dTextW:heroBox.x;
+        const clearOfObs=(rect)=>!_dObs||!(rect.x<_dObs.x+_dObs.w&&rect.x+rect.w>_dObs.x&&rect.y<_dObs.y+_dObs.h&&rect.y+rect.h>_dObs.y);
+        const drawDate=(dy)=>{ beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
+          drawTextLines(ctx,[ccDateText],heroBox.x,dy+dSz,heroBox.w,dSz*1.05,dAlign);
+          fontMeta.date=dSz; endText(); };
+        const belowTop=heroBox.y+usedH+dGap;
+        const belowRect={x:dX,y:belowTop,w:dTextW,h:dSz*1.28};
+        if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
+          drawDate(belowTop);
+          usedH+=dH; // the caption nudge + audit envelope see the date
+        }else if(mat.fullBleed && heroBox.y-_safeTopD>=dSz*1.6){
+          // Full-bleed whisper tiles keep their caption low — overlay the date ABOVE
+          // the hero on the photo instead (the reference "date overlay" treatment).
+          drawDate(heroBox.y-dSz*1.6);
         }
       }
       const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
