@@ -2693,6 +2693,7 @@ export default function App() {
   const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim);
   // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
   const updateTextLayout = patch => {
+    noteManualEdit("text");   // canvas drag / slider / grid / keyboard nudge (Commit 3)
     if(dimensionId===MASTER_DIM){
       setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
     }else{
@@ -2714,6 +2715,7 @@ export default function App() {
   // pins the logo globally (userLogoTouched); on any OTHER format it writes a
   // per-dimension override (logoByDim) so it does NOT leak onto the other formats.
   const placeLogo = (patch) => {
+    noteManualEdit("logo");   // manual logo placement (Commit 3)
     const nextPos=patch.position??logoPosition, nextSize=patch.sizeId??logoSize;
     if(patch.position!=null)setLogoPosition(patch.position);
     if(patch.sizeId!=null)setLogoSize(patch.sizeId);
@@ -2797,6 +2799,21 @@ export default function App() {
   // when no fails remain, rounds exhausted, or an identical fix would repeat (loop
   // guard). Audit "apply" flows are EXCLUDED — those are already user-reviewed.
   const harmonizeRef = useRef({ armed: false, rounds: 0, applied: [] });
+  // ── MANUAL-EDIT HARMONIZER (Commit 3) ──
+  // Manual design-affecting edits (inspector/rail picks, canvas drags, colour/
+  // backdrop/logo changes — the same state paths applyDesignPatch touches) get the
+  // SAME silent accessibility pass the AI path runs, debounced ~600ms after the
+  // LAST edit so a drag gesture is never fought mid-move. On the FIRST edit of a
+  // burst we stash a pre-edit snapshot; if the pass finds severity-fail fixes, that
+  // snapshot becomes ONE undo entry and the fixes fold into it (amendUndo) — a
+  // single undo reverts the user's edit and the fix together. `touched` records
+  // WHICH elements the burst moved so the pass never relocates what the user just
+  // placed (geometry fixes apply only to non-user-touched elements; colour/backdrop
+  // fixes are always allowed).
+  const MANUAL_HARMONIZE_DEBOUNCE_MS = 600;
+  const manualHarmRef = useRef({ pending: false, timer: null, snap: null, touched: null });
+  const [manualHarmTick, setManualHarmTick] = useState(0);
+  useEffect(() => () => { const m = manualHarmRef.current; if (m.timer) clearTimeout(m.timer); }, []);
   // (Photo-first) The scene prompt + originating message that produced a landing
   // design, so the chat's "Try another design" chip can regenerate a fresh photo
   // and rotate the archetype variant. Shape: { scene, message } | null.
@@ -2821,6 +2838,18 @@ export default function App() {
     image, imgT: JSON.parse(JSON.stringify(imgT)),
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
+
+  // Record one manual design-affecting edit. First edit of a burst stashes the
+  // pre-edit snapshot (closure state — the caller invokes this BEFORE its setter);
+  // every edit within the debounce window resets the timer and tags the element it
+  // touched ("text" | "logo" | "colour" | "overlay").
+  const noteManualEdit = (tag) => {
+    const m = manualHarmRef.current;
+    if (!m.pending) { m.pending = true; m.snap = snapshotApplyableState(); m.touched = new Set(); }
+    if (tag) m.touched.add(tag);
+    if (m.timer) clearTimeout(m.timer);
+    m.timer = setTimeout(() => { m.timer = null; setManualHarmTick(t => t + 1); }, MANUAL_HARMONIZE_DEBOUNCE_MS);
+  };
 
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
   // unification). This is a ONE-SHOT write of concrete per-element values into the
@@ -3608,6 +3637,7 @@ export default function App() {
   }, [loadImage]);
 
   const selectLibraryImage = async (item) => {
+    noteManualEdit("photo");   // manual background swap (Commit 3)
     setImage(item.full);
     setImageObj(await imgFrom(item.full));
   };
@@ -3616,6 +3646,7 @@ export default function App() {
   const selectFromLibrary = async (img) => {
     setShowLibPicker(false);
     if (!img.url) return;
+    noteManualEdit("photo");   // manual background swap (Commit 3)
     setImage(img.url);
     setImageObj(await imgFrom(img.url));
   };
@@ -4888,6 +4919,10 @@ export default function App() {
       headline, subtext, attribution, dateText,
       selectedLogoId, logoPosition, logoSize, userLogoTouched,
       JSON.stringify(fontSizes), JSON.stringify(logoByDim), JSON.stringify(typeLayoutsByDim),
+      // (Commit 3) master-dim text drags live in typeLayouts — without it the cache
+      // served STALE findings after a canvas drag, so the manual harmonizer saw an
+      // old clean audit and never repaired a fresh text↔logo collision.
+      JSON.stringify(typeLayouts), archetypeId, archVariant,
       overlayLayers.map(l => l.assetId + (l.mode || "frame")).join(","),
       !!(imageObj || videoObj), image,
     ]);
@@ -4902,7 +4937,7 @@ export default function App() {
     if (typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };
     return findings;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderScene, W, H, dimensionId, postType, archetypeId, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
+  }, [renderScene, W, H, dimensionId, postType, archetypeId, archVariant, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayouts, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
 
   // Sweep EVERY format's contrast audit off-screen. The live runLocalAudit only
   // reflects the current dimension; an AI design can be legible on Square yet fail
@@ -5120,9 +5155,10 @@ export default function App() {
     if (typeof window === "undefined") return;
     window.__woReproStep = (step, arg) => {
       if (step === "archetype") materializeArchetype(arg || "petal_window", { postType, attribution, subtext });
-      else if (step === "textColor") setTextColorId(arg || "tangerine");   // manual colour pick
-      else if (step === "addOverlay") { const asset = DEFAULT_OVERLAYS.find(o=>o.id===(arg||"acc-spark")); if (asset) { const t=suggestPlacement(asset.kind,asset.ratio,W,H); setOverlayLayers(prev=>[...prev.filter(l=>l.assetId!==asset.id),{uid:"ol_"+Math.random().toString(36).slice(2),assetId:asset.id,mode:"overlay",master:t,byDim:{}}]); } }
+      else if (step === "textColor") { noteManualEdit("colour"); setTextColorId(arg || "tangerine"); }   // manual colour pick
+      else if (step === "addOverlay") { const asset = DEFAULT_OVERLAYS.find(o=>o.id===(arg||"acc-spark")); if (asset) { noteManualEdit("overlay"); const t=suggestPlacement(asset.kind,asset.ratio,W,H); setOverlayLayers(prev=>[...prev.filter(l=>l.assetId!==asset.id),{uid:"ol_"+Math.random().toString(36).slice(2),assetId:asset.id,mode:"overlay",master:t,byDim:{}}]); } }
       else if (step === "dragHero") updateTextLayout({ x: arg?.x ?? 0.12, y: arg?.y ?? 0.20 });   // = canvas drag
+      else if (step === "placeLogo") placeLogo(arg || { position: "top-left" });   // = logo grid click (Commit 3 verification)
       return step;
     };
     // Read the current live design fingerprint (hero geometry + colour + overlay count).
@@ -5131,10 +5167,13 @@ export default function App() {
       heroXY: { x: (typeLayouts[postType]?.x), y: (typeLayouts[postType]?.y), w: (typeLayouts[postType]?.width) },
       hasRoles: !!(typeLayouts[postType]?.roles),
       overlayCount: overlayLayers.length, motifCount: overlayLayers.filter(l=>l.motif).length,
+      logoPosition, userLogoTouched, undoDepth: aiUndoStack.length,   // (Commit 3 verification)
+      bgColor, headline, subtext,
     });
-    return () => { try { delete window.__woReproStep; delete window.__woReproState; } catch {} };
+    window.__woUndo = () => { undoLastAiChange(); return "undone"; };   // (Commit 3 verification)
+    return () => { try { delete window.__woReproStep; delete window.__woReproState; delete window.__woUndo; } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [postType, attribution, subtext, archetypeId, textColorId, heroRegister, photoTreatment, photoFrame, typeLayouts, overlayLayers, W, H]);
+  }, [postType, attribution, subtext, archetypeId, textColorId, heroRegister, photoTreatment, photoFrame, typeLayouts, overlayLayers, W, H, logoPosition, userLogoTouched, aiUndoStack, bgColor, headline]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
      Fires after an AI patch's render commits. runLocalAudit identity changes on
@@ -5189,9 +5228,13 @@ export default function App() {
     for (const f of fails) {
       // Drop conflicting global colour flips (see conflict guard above); keep the
       // fix's other fields (e.g. a per-zone backdropMode band) if present.
-      const fix = flipConflict && f.fix.textColorId
+      let fix = flipConflict && f.fix.textColorId
         ? Object.fromEntries(Object.entries(f.fix).filter(([k]) => k !== "textColorId"))
         : f.fix;
+      // (Commit 3) GEOMETRY RESTRAINT — when this sequence was armed by a manual
+      // burst that touched the LOGO, never move/resize the logo the user just
+      // placed; colour/backdrop fixes still apply.
+      if (h.avoidLogoGeo) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
       if (!Object.keys(fix).length) continue;
       const key = f.id + ":" + JSON.stringify(fix);
       if (h.applied.includes(key)) continue;
@@ -5208,6 +5251,60 @@ export default function App() {
     applyDesignPatch(fixPatch, { amendUndo: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runLocalAudit, auditAllFormats, fontsLoaded]);
+
+  /* ── MANUAL-EDIT HARMONIZE PASS (Commit 3) ───────────────────────────────────
+     Fires once per manual-edit burst, MANUAL_HARMONIZE_DEBOUNCE_MS after the last
+     edit (noteManualEdit). Runs the SAME sweep as the AI pass and takes ONLY
+     severity-fail fixes (contrast flips / backdrop bands / collision relocations).
+     Restraint: geometry fixes never touch an element the user just placed — if the
+     burst moved the LOGO, logoPosition/logoSize fixes are dropped (colour fixes
+     remain); dragged TEXT is never moved by any fix (no finding produces text
+     geometry). When fixes exist, the burst's PRE-EDIT snapshot is pushed as one
+     undo entry, the fixes apply with { amendUndo:true } into it, and the AI
+     harmonizer is armed for its bounded follow-up rounds — so a single undo
+     reverts the user's edit plus every folded fix. Fully silent. */
+  useEffect(() => {
+    if (!manualHarmTick) return;
+    const m = manualHarmRef.current;
+    if (!m.pending) return;
+    m.pending = false;
+    const touched = m.touched || new Set();
+    const snap = m.snap; m.snap = null;
+    if (!snap) return;
+
+    const collected = [];
+    for (const pf of auditAllFormats()) for (const f of pf.findings) collected.push(f);
+    for (const f of runLocalAudit()) collected.push(f);
+    const seen = new Set();
+    const fails = collected.filter(f => {
+      if (!(f.severity === "fail" && f.fix && typeof f.fix === "object")) return false;
+      const k = f.id + ":" + JSON.stringify(f.fix);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    if (!fails.length) return;
+
+    // Same global colour-flip conflict guard as the AI pass.
+    const tcVotes = new Set(fails.map(f => f.fix.textColorId).filter(Boolean));
+    const flipConflict = tcVotes.size > 1;
+    const avoidLogoGeo = touched.has("logo");
+    const fixPatch = {};
+    for (const f of fails) {
+      let fix = f.fix;
+      if (flipConflict && fix.textColorId) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "textColorId"));
+      if (avoidLogoGeo) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
+      Object.assign(fixPatch, fix);
+    }
+    if (!Object.keys(fixPatch).length) return;
+
+    // ONE undo entry: pre-edit snapshot first, fixes folded into it.
+    setAiUndoStack(prev => [snap, ...prev].slice(0, AI_UNDO_DEPTH));
+    setPreAiState(snap);
+    harmonizeRef.current = { armed: true, rounds: 1, applied: fails.map(f => f.id + ":" + JSON.stringify(f.fix)), avoidLogoGeo };
+    applyDesignPatch(fixPatch, { amendUndo: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualHarmTick]);
 
   // Render the CURRENT dimension off-screen and return a downscaled JPEG data URL
   // (longest side ~768px, quality 0.8) for the vision audit — reuses renderScene
@@ -5768,7 +5865,7 @@ export default function App() {
     <>
       <div style={{display:"flex",gap:10}}>
         {BG_OPTIONS.map(b=>(
-          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>setBgColor(b.id)} title={b.label} style={{
+          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>{noteManualEdit("colour");setBgColor(b.id);}} title={b.label} style={{
             width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
             background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
             border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
@@ -5905,14 +6002,14 @@ export default function App() {
       <EditorSubhead label="Text backdrop" summary={{auto:"Auto",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
       <div style={{display:"flex",gap:6}}>
         {[{id:"auto",l:"Auto"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
-          <button key={o.id} aria-pressed={on} onClick={()=>setBackdropMode(o.id)} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
+          <button key={o.id} aria-pressed={on} onClick={()=>{noteManualEdit("colour");setBackdropMode(o.id);}} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
             style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
         );})}
       </div>
       <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto flips the text colour first, then adds a solid brand band only where the photo is too busy.</div>
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
       <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
-        {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>setTextColorId(option.id)} title={option.label}
+        {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>{noteManualEdit("colour");setTextColorId(option.id);}} title={option.label}
           style={{position:"relative",width:38,height:38,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:hexLuminance(color)>0.55?B.jet:B.whiteSmoke,fontFamily:F.subtitle,fontSize:option.id==="auto"?9:0,fontWeight:800}}>{option.id==="auto"&&"AUTO"}</button>;})}
       </div>
       <div style={{fontSize:11,color:B.ash,marginTop:7,fontFamily:F.body,lineHeight:1.45}}>
@@ -5934,7 +6031,7 @@ export default function App() {
           const isSel = selectedLogoId===v.id;
           const isAuto = suggestedColor===v.color && !isSel && imageObj;
           return (
-            <button key={v.id} aria-pressed={isSel} onClick={()=>{setSelectedLogoId(v.id);setLogoVariantTouched(true);}}
+            <button key={v.id} aria-pressed={isSel} onClick={()=>{noteManualEdit("logo");setSelectedLogoId(v.id);setLogoVariantTouched(true);}}
               title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
               style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
               <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
