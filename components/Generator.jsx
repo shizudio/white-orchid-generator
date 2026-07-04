@@ -1690,7 +1690,7 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
    `ink` is the resolved field ink; `accent` is the resolved accent hex (or null);
    `avoid` is a list of px boxes the furniture must not overprint (hero/support/label/
    photo) — any item intersecting is skipped so we never clutter or collide (#15/#16). */
-function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
+function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
   if(!Array.isArray(items)||!items.length) return;
   const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
   const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009)); // 0.5–1px @ common sizes
@@ -1776,6 +1776,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent){
       ctx.textAlign="left"; ctx.textBaseline="alphabetic";
       ctx.fillText(txt, px0+padX, py0+padY+bs*0.82);
       ctx.letterSpacing="0px";
+      if(onDrawn) onDrawn("pill", {x:px0, y:py0, w:pillW, h:pillH});
     }
   }
   ctx.restore();
@@ -2537,6 +2538,10 @@ export default function App() {
   const previewRef = useRef(null);
   const imgRef = useRef(null);
   const textBoundsRef = useRef(null);
+  // (WP-U fix #1) Per-ROLE drawn boxes from the last live editorial render
+  // ({hero,support,eyebrow,date,pill} in export px) so canvas hit-testing can map a
+  // click on ANY text role to its own inspector input — not just the hero/header.
+  const roleBoundsRef = useRef(null);
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
   const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
@@ -2624,6 +2629,9 @@ export default function App() {
   const [photoTreatment, setPhotoTreatment] = useState("none");
   const [photoFrame, setPhotoFrame] = useState({ type: "none" });
   const [microLabel, setMicroLabel] = useState("");
+  // (WP-U fix #1) User override for the accent PILL/badge label (archetype furniture).
+  // "" = the archetype's authored badge text; non-empty = the user's own label.
+  const [pillText, setPillText] = useState("");
   const [heroRegister, setHeroRegister] = useState("");   // "" = legacy caps-sans hero
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
@@ -2777,16 +2785,25 @@ export default function App() {
   // prefer the inspector's copy of the primary input; if the inspector is not
   // mounted (e.g. very narrow desktop where the rail is hidden) we fall back to
   // the left-column input so accessibility focus never dead-ends.
-  const focusPrimaryText = () => {
+  const focusTextField = (role = "hero") => {
     setContentOpen(true);
     selectElement("text");
     // Panels animate in; wait a frame so the input is mounted + focusable.
     setTimeout(() => {
-      const el = document.getElementById("wo-text-primary-inspector")
+      // (WP-U fix #1) Focus the input that OWNS the clicked role — support/caption,
+      // eyebrow, date and pill each carry a data-wo-role tag on their input. Prefer
+      // the inspector's copy; fall back to the left column, then to the primary.
+      const insp = document.querySelector(".wo-inspector");
+      const byRole = role && role !== "hero"
+        ? (insp && insp.querySelector(`[data-wo-role~="${role}"]`)) || document.querySelector(`[data-wo-role~="${role}"]`)
+        : null;
+      const el = byRole
+              || document.getElementById("wo-text-primary-inspector")
               || document.getElementById("wo-text-primary");
-      if (el) { el.focus({ preventScroll:true }); el.scrollIntoView({ behavior:"smooth", block:"center" }); }
+      if (el) { el.focus({ preventScroll:true }); try { el.select && el.select(); } catch(_){} el.scrollIntoView({ behavior:"smooth", block:"center" }); }
     }, 70);
   };
+  const focusPrimaryText = () => focusTextField("hero");
 
   /* ── ELEMENTS RAIL + CONTEXTUAL INSPECTOR selection orchestration (Commit 2) ──
      selectElement() is the single entry point for selecting one design element
@@ -2870,7 +2887,7 @@ export default function App() {
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
     // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
     // patch that materializes an archetype reverts cleanly as one action.
-    photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, heroRegister,
+    photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
     typeLayouts: JSON.parse(JSON.stringify(typeLayouts)),
     userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
     typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
@@ -2973,6 +2990,7 @@ export default function App() {
     setLogoVariantTouched(false);
     setHeroRegister(mat.register);
     setMicroLabel(mat.microLabel);
+    setPillText("");   // fresh materialization → the archetype's authored pill label
     setPhotoTreatment(mat.photoTreatment);
     setPhotoFrame(mat.photoFrame);
     setTypeLayouts(prev => ({
@@ -3156,6 +3174,7 @@ export default function App() {
     setPhotoTreatment(s.photoTreatment || "none");
     setPhotoFrame(s.photoFrame || { type: "none" });
     setMicroLabel(s.microLabel || "");
+    setPillText(s.pillText || "");
     setHeroRegister(s.heroRegister || "");
     if (s.typeLayouts) setTypeLayouts(s.typeLayouts);
     setSelectedLogoId(s.selectedLogoId);
@@ -3274,6 +3293,7 @@ export default function App() {
     window.__woArchAudit = () => auditRef.current;
     window.__woArchFontMeta = () => fontMetaRef.current;
     window.__woArchTextBounds = () => textBoundsRef.current;
+    window.__woRoleBounds = () => roleBoundsRef.current;   // (WP-U fix #1) per-role hit boxes
     window.__woArchetypeIds = ARCHETYPE_IDS;
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
@@ -3740,6 +3760,7 @@ export default function App() {
     // shape boundary and prefers the clear solid-bg region (Commit 2c).
     let frameBox=null;
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
+    if(live)roleBoundsRef.current=null;     // (WP-U fix #1) reset per live render; editorial branch repopulates
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
@@ -4306,6 +4327,8 @@ export default function App() {
 
       let usedH=0;
       let _midCut=0;   // (Crops ext) count of any mid-copy cut that reached the canvas
+      // (WP-U fix #1) per-role drawn boxes for click-to-edit hit-testing (live only).
+      const _roleB = live ? {} : null;
       const isSchedule = mat.special==="scheduleRows";
       // eyebrow (micro-label) — fit-or-drop inside its panel width (crops ext):
       // shrinks until the tracked caps fit labelBox.w; if impossible, the eyebrow
@@ -4317,6 +4340,7 @@ export default function App() {
         eyebrowDrawnW=drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08,maxW:labelBox.w,minSize:Math.max(12*S,lblSize*0.55)});
         ctx.restore();
         if(eyebrowDrawnW==null){ dropped.push("Eyebrow"); labelBox=null; }
+        else if(_roleB) _roleB.eyebrow={x:labelBox.x,y:labelBox.y-lblSize*0.5,w:Math.max(eyebrowDrawnW||0,labelBox.w*0.4),h:lblSize*1.8};
       }
       // (P2 §2.17) SCHEDULE ROWS — serif time + light-sans activity separated by hairline
       // rules (grid #2 "A DAY HERE"). Rows come from the subtext as "time  activity" pairs
@@ -4351,6 +4375,7 @@ export default function App() {
           ctx.restore();
           fontMeta.headline=timeSz; fontMeta.subtext=actSz;
           setTextBounds(zh);
+          if(_roleB) _roleB.support={x:zx,y:zy,w:zw,h:zh}; // schedule rows edit via the Details field
         }
       }
       // (Bug B fix) FULL-BLEED TEXT LEGIBILITY — the editorial branch draws hero/support
@@ -4411,6 +4436,7 @@ export default function App() {
         fontMeta.headline=hr.size;
         if(hr.truncated) _midCut++;   // (Crops ext) a clamped hero = a mid-copy cut
         setTextBounds(hr.usedH);
+        if(_roleB) _roleB.hero={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(hr.usedH,hr.size||0)};
       }
       // ── PROMINENT DATE LINE (photo-first c) ──────────────────────────────────
       // Dated events on PHOTO-LED archetypes used to DROP dateText entirely (only
@@ -4560,7 +4586,9 @@ export default function App() {
         }
         if(!supUsedH) supUsedH=fontMeta.subtext||supBox.h*0.4;
         endText();
+        if(_roleB && !dropped.includes("Details")) _roleB.support={x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)};
       }
+      if(_roleB && dateDrawn) _roleB.date=dateDrawn;
       // (T1) ANCHORING FURNITURE — hairline rules / underline / index / counterweight.
       // Drawn after text so the avoid-list uses each role's ACTUAL drawn box; any
       // furniture item that would overprint hero/support/label/photo is skipped inside
@@ -4575,7 +4603,14 @@ export default function App() {
           cardBox, maskBox,
           (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         ].filter(Boolean);
-        drawFurniture(ctx, mat.furniture, w, h, sm, heroInk, avoid, accentInk);
+        // (WP-U fix #1) A user-edited pill label overrides the archetype's authored
+        // badge text; drawFurniture reports each drawn text piece so the pill becomes
+        // a click-editable role like hero/support/eyebrow.
+        const furnItems = pillText
+          ? mat.furniture.map(it => (it && it.type === "badge") ? { ...it, text: pillText } : it)
+          : mat.furniture;
+        drawFurniture(ctx, furnItems, w, h, sm, heroInk, avoid, accentInk,
+          _roleB ? (role, box) => { _roleB[role] = box; } : null);
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
@@ -4827,6 +4862,7 @@ export default function App() {
         if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
         if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
       });
+      if(live) roleBoundsRef.current=_roleB; // (WP-U fix #1) publish per-role hit boxes
       return; // single-path editorial render complete.
     }
 
@@ -5011,7 +5047,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes]);
+  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -5605,6 +5641,24 @@ export default function App() {
     }
     const bounds=textBoundsRef.current;
     const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
+    // (WP-U fix #1) PER-ROLE hit-testing — a click on the caption/support, eyebrow,
+    // date line or pill selects the text element AND focuses that role's OWN input
+    // (via onPanEnd → focusTextField(role)), so every text role is click-editable,
+    // not just the header. Small roles are tested before the (larger) hero box.
+    const rb=roleBoundsRef.current;
+    if(rb){
+      const rPad=10;
+      for(const role of ["pill","eyebrow","date","support","hero"]){
+        const b=rb[role]; if(!b) continue;
+        if(px>=b.x-rPad&&px<=b.x+b.w+rPad&&py>=b.y-rPad&&py<=b.y+b.h+rPad){
+          setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
+          setInspectorEl("text");
+          dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
+          try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
+          return;
+        }
+      }
+    }
     if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
       setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
       // Canvas convergence: selecting text opens its inspector (tap → focus copy
@@ -5686,7 +5740,7 @@ export default function App() {
   const onPanEnd = () => {
     const d = dragRef.current;
     // A tap (not a drag) inside the text block opens the Content editor.
-    if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusPrimaryText();
+    if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusTextField(d.role||"hero");
     dragRef.current = null;
   };
   const setZoom = (z) => setPhotoT(t => ({ ...t, zoom:z }));
@@ -5799,7 +5853,7 @@ export default function App() {
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
     postType, archetypeId, archVariant, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
-    photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, heroRegister,
+    photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, pillText, heroRegister,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
@@ -5854,6 +5908,7 @@ export default function App() {
     setPhotoTreatment(s.photoTreatment || "none");
     setPhotoFrame(s.photoFrame || { type: "none" });
     setMicroLabel(s.microLabel || "");
+    setPillText(s.pillText || "");
     setHeroRegister(s.heroRegister || "");
     setHeadline(s.headline || "");
     setSubtext(s.subtext || "");
@@ -6092,11 +6147,22 @@ export default function App() {
   // would break focusPrimaryText and accessibility.
   const renderTextPanel = (idPrefix="wo-text-primary") => (
     <>
-      {postType==="quote"&&<><Area id={idPrefix} placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-      {postType==="event"&&<><In id={idPrefix} placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-      {postType==="text_post"&&<><In placeholder="Intro line" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id={idPrefix} placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-      {postType==="texture_text"&&<In id={idPrefix} placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
-      {postType==="photo_logo"&&<><In id={idPrefix} placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      {postType==="quote"&&<><Area id={idPrefix} data-wo-role="hero" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In data-wo-role="support" placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
+      {postType==="event"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In data-wo-role="support" placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
+      {postType==="text_post"&&<><In data-wo-role="support" placeholder="Intro line / caption" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id={idPrefix} data-wo-role="hero" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt />{dateText?<In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt />:null}</>}
+      {postType==="texture_text"&&<In id={idPrefix} data-wo-role="hero" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
+      {postType==="photo_logo"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      {/* (WP-U fix #1) EYEBROW — the small caps label was baked at materialization
+          (microLabel) and had NO edit field, so it looked uneditable. Shown whenever
+          an eyebrow is on the canvas or the archetype carries the role. */}
+      {(microLabel || (heroRegister && typeLayouts[postType]?.roles?.microLabel)) ?
+        <In data-wo-role="eyebrow" placeholder="Eyebrow (small caps label)" maxLength={28}
+          value={microLabel || ((attribution && attribution.length<=28) ? attribution : "")}
+          onChange={e=>setMicroLabel(e.target.value)} mt /> : null}
+      {/* (WP-U fix #1) PILL — the accent badge label (archetype furniture) is now editable. */}
+      {(()=>{const badge=archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.furniture||[]).find(f=>f&&f.type==="badge"):null;
+        return badge ? <In data-wo-role="pill" placeholder="Pill label (e.g. NOW ENROLLING)" maxLength={30}
+          value={pillText || badge.text || ""} onChange={e=>setPillText(e.target.value)} mt /> : null;})()}
       <EditorSubhead label="Typography" summary="Editorial auto-fit" />
       <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
