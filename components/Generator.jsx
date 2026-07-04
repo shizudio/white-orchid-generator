@@ -3254,7 +3254,16 @@ export default function App() {
     // places the archetype's text/logo in the photo's clear regions.
     if (handoff?.imageUrl) {
       setImage(handoff.imageUrl);
-      imgFrom(handoff.imageUrl).then(img => { if (img) setImageObj(img); }).catch(() => {});
+      imgFrom(handoff.imageUrl).then(img => {
+        if (!img) return;
+        setImageObj(img);
+        // (WP-U) RE-ARM the silent harmonizer once the landing photo actually lands:
+        // the patch-time pass ran BEFORE the photo, so photo-dependent repairs
+        // (explicit logo over the caption band, zone contrast) never fired. The
+        // setImageObj render commit re-runs the harmonizer effect (imageObj is in
+        // its dependency chain), so arming here is enough.
+        harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
+      }).catch(() => {});
     }
     // Seed the conversation but leave the panel CLOSED — the user asked to land
     // on an uncluttered editor; the exchange is waiting behind the FAB.
@@ -3830,7 +3839,14 @@ export default function App() {
     // spec default; a per-dim user override wins), then run the focal+text-aware
     // guard against THIS dimension's geometry so the mark clears both the face and
     // the copy. Deferred until the text box is known so the guard can exclude it.
-    const logoBase=resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,logoPosition,logoSize);
+    // (WP-U) CALIBRATION/STRESS renders (opts.archOverride) must be DETERMINISTIC:
+    // a live user/harmonizer logo pin must not leak into the offscreen matrix (it
+    // made the stress result depend on whatever design was open). Override renders
+    // use the per-format spec-default logo state.
+    const _calibRender=!!opts.archOverride;
+    const effUserLogoTouched=_calibRender?false:userLogoTouched;
+    const effLogoByDim=_calibRender?{}:logoByDim;
+    const logoBase=resolveLogoBase(dimId,postType,effUserLogoTouched,effLogoByDim,logoPosition,logoSize);
     const logoFocal=mediaObj?estimateFocalPoint(mediaObj):null;
     // The logo's actual ink luminance drives the contrast score (Failure 3): an
     // ivory mark over white clothing scores low and gets relocated; green over the
@@ -4748,8 +4764,8 @@ export default function App() {
       // mark. Photo tiles stay logo-free (logoUse:"none"). The mark is the orchid-petal
       // glyph tinted to the field's readable ink — small, quiet, corner-anchored.
       const markPos = provArch?.elements?.logo?.position || "bottom-right";
-      const wantMark = logoUse==="mark" && !userLogoTouched;
-      const drawLockup = userLogoTouched || logoUse==="lockup";
+      const wantMark = logoUse==="mark" && !effUserLogoTouched;
+      const drawLockup = effUserLogoTouched || logoUse==="lockup";
       // (Commit 2) DETERMINISTIC ROTATION SEED — stable for a given design, but varies
       // across archetype / palette variant / copy so consecutive designs don't repeat the
       // same lockup. Mirrors the palette rotation ring's determinism.
@@ -4787,7 +4803,7 @@ export default function App() {
         // a corner (it's a tiny quiet glyph, not a lockup), so it is NOT registered in the
         // logo↔text collision assertion (auditLogo.box) — only the full lockup is.
         let drew=false;
-        if(pickMark && fieldLight && !userLogoTouched){
+        if(pickMark && fieldLight && !effUserLogoTouched){
           containDraw(ctx,pickMark.img,cx,cy,mSz,mSz,isCentered?1:0.9);
           drew=true;
         }
@@ -4810,7 +4826,7 @@ export default function App() {
       else if(logoUse==="lockup"){ /* archetype lockup w/o user touch handled below */ }
       // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
       // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
-      if(logoUse==="lockup" && !userLogoTouched) putLogo(textEnvelope,{...logoOpts});
+      if(logoUse==="lockup" && !effUserLogoTouched) putLogo(textEnvelope,{...logoOpts});
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
@@ -4892,7 +4908,7 @@ export default function App() {
         const _bookend=archetypeId==="brand_card"||archetypeId==="closing_card"||provArch?.id==="brand_card"||provArch?.id==="closing_card";
         // User-pinned logos are explicit intent (and height-capped on wide formats);
         // the dominance assertion guards the AUTO composition only.
-        const logoDominant=!!(!_bookend && !userLogoTouched && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
+        const logoDominant=!!(!_bookend && !effUserLogoTouched && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
         // (WP-U logo-on-photo) contrast assertion: a lockup drawn over a photo must
         // read at >= 3:1 against its sampled backing (post variant-swap/scrim).
         const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3);
@@ -5235,7 +5251,12 @@ export default function App() {
     const c = canvasRef.current;
     if (c) { try { renderScene(c.getContext("2d"), W, H, { dimensionId, live: true }); } catch { /* keep last snapshot */ } }
     const findings = computeLocalAudit(auditRef.current);
-    localAuditCacheRef.current = { sig, findings };
+    // (WP-U) Only CACHE a result computed from a real render: before the canvas
+    // mounts (or when the render kept a stale/null snapshot) an EMPTY findings
+    // list would be cached under the current signature and served to the silent
+    // harmonizer forever after — the landing logo-over-caption repair never ran
+    // because of exactly this poisoning.
+    if (c && auditRef.current) localAuditCacheRef.current = { sig, findings };
     if (typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };
     return findings;
     // eslint-disable-next-line react-hooks/exhaustive-deps
