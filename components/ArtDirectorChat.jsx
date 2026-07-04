@@ -36,10 +36,11 @@ const HISTORY_KEY = 'wo-editor-chat';
 // no spurious dot for an exchange already read.
 const SEEN_KEY = 'wo-editor-chat-seen';
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, open, setOpen, seed }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, onTryAnother, canTryAnother, open, setOpen, seed }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [regenerating, setRegenerating] = useState(false); // "Try another design" in flight
   const [error, setError] = useState('');
   const [hydrated, setHydrated] = useState(false);
   const [seenCount, setSeenCount] = useState(0); // messages the user has seen (panel opened)
@@ -206,6 +207,23 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     setMessages(prev => prev.map((m, i) => i >= idx ? { ...m, undoIndex: null } : m));
   }
 
+  // (Generation-first, Commit 3) "Try another design" — regenerate a whole new
+  // composition from the same brief. onTryAnother() runs the generate→poll→
+  // reconstruct pipeline and resolves { ok }. Shows an in-flight note and a soft
+  // failure line; on success the editor already holds the new design.
+  async function handleTryAnother() {
+    if (regenerating || typeof onTryAnother !== 'function') return;
+    setRegenerating(true);
+    setError('');
+    setMessages(prev => [...prev, { role: 'assistant', content: 'Composing another design from your brief…' }]);
+    let res;
+    try { res = await onTryAnother(); } catch { res = { ok: false }; }
+    setRegenerating(false);
+    setMessages(prev => [...prev, res?.ok
+      ? { role: 'assistant', content: 'Here’s a different take — still fully editable. Try another if you like.' }
+      : { role: 'assistant', content: 'I couldn’t compose another one just now. Your current design is unchanged — you can keep editing or try again.' }]);
+  }
+
   // Unread = messages appended while the panel was closed. Never negative; only
   // meaningful when closed (opening zeroes it via the effect above).
   const unread = !open && hydrated ? Math.max(0, messages.length - seenCount) : 0;
@@ -271,6 +289,27 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             )}
             {error && <p className="ad-error" role="alert">{error}</p>}
           </div>
+
+          {canTryAnother && (
+            <div className="ad-try-another-row" style={{ padding: '0 12px 8px', display: 'flex' }}>
+              <button
+                type="button"
+                onClick={handleTryAnother}
+                disabled={regenerating || loading}
+                title="Generate a completely different design from the same request"
+                style={{
+                  fontFamily: 'var(--font-syne, sans-serif)', fontSize: 12, fontWeight: 600,
+                  letterSpacing: '0.03em', color: 'var(--fg, #254E48)', cursor: regenerating ? 'default' : 'pointer',
+                  background: 'color-mix(in srgb, var(--tw-celadon, #B4D6C0) 30%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--tw-celadon-deep, #8bbfa0) 45%, transparent)',
+                  borderRadius: 18, padding: '7px 14px', width: '100%', minHeight: 40,
+                  opacity: regenerating ? 0.6 : 1, transition: 'opacity 140ms',
+                }}
+              >
+                {regenerating ? 'Composing…' : '✦ Try another design'}
+              </button>
+            </div>
+          )}
 
           <form className="ad-input-row" onSubmit={e => { e.preventDefault(); send(); }}>
             <textarea

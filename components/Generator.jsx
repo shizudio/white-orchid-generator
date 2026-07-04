@@ -2797,6 +2797,10 @@ export default function App() {
   // when no fails remain, rounds exhausted, or an identical fix would repeat (loop
   // guard). Audit "apply" flows are EXCLUDED — those are already user-reviewed.
   const harmonizeRef = useRef({ armed: false, rounds: 0, applied: [] });
+  // (Photo-first) The scene prompt + originating message that produced a landing
+  // design, so the chat's "Try another design" chip can regenerate a fresh photo
+  // and rotate the archetype variant. Shape: { scene, message } | null.
+  const [genBrief, setGenBrief] = useState(null);
   const snapshotApplyableState = () => ({
     postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
@@ -3133,11 +3137,19 @@ export default function App() {
     try { sessionStorage.removeItem("wo-landing-plan"); } catch { /* ignore */ }
     let handoff;
     try { handoff = JSON.parse(raw); } catch { return; }
+    // (Photo-first) The landing plan is always a design PATCH (archetype + copy) our
+    // ENGINE composes. When a photo-led archetype was chosen and Higgsfield was
+    // configured, the landing flow also GENERATED a bare on-brand photo and passes
+    // it as imageUrl (a data URL); otherwise imageUrl may be a Library fallback photo.
     if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true });
-    // (Commit 3) LANDING PHOTO ATTACH — if the landing flow attached a Library photo for a
-    // photo-led archetype, load it as the background so the design isn't text-only-plain.
-    // Applied AFTER the patch (which sets a photo postType); the auto director then places
-    // text/logo in the clear regions. Silently skipped if the URL fails to load.
+    // Remember the scene prompt + originating message so the chat's "Try another
+    // design" chip can regenerate a fresh photo and rotate the archetype variant.
+    if (handoff?.scenePrompt || handoff?.originalMessage) {
+      setGenBrief({ scene: handoff.scenePrompt || "", message: handoff.originalMessage || "" });
+    }
+    // LANDING PHOTO — apply the generated (or Library-fallback) photo as the
+    // background so the composed design isn't text-only-plain. The auto director
+    // places the archetype's text/logo in the photo's clear regions.
     if (handoff?.imageUrl) {
       setImage(handoff.imageUrl);
       imgFrom(handoff.imageUrl).then(img => { if (img) setImageObj(img); }).catch(() => {});
@@ -3516,6 +3528,50 @@ export default function App() {
     // Re-arm the harmonizer so the just-applied AI photo gets accessibility passes
     // (the folded fixes join this same undo entry via amendUndo).
     if (opts.harmonize === true) harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
+  };
+
+  // (Photo-first) "Try another design" — regenerate a fresh on-brand PHOTO from
+  // the same scene prompt AND rotate the archetype's palette variant, so the user
+  // gets a visibly different composition. Drives the photo start-job/poll pipeline;
+  // applies the new photo as the background and cycles the variant. NEVER throws.
+  const regenerateDesign = async () => {
+    if (!genBrief) return { ok: false, reason: 'no-brief' };
+    // Rotate the archetype palette variant for visible variety (mirrors the picker
+    // re-click). Safe no-op when the current archetype has ≤1 variant.
+    try {
+      if (archetypeId) {
+        const arch = ARCHETYPES_BY_ID[archetypeId];
+        const count = arch?.variants?.length || 1;
+        if (count > 1) materializeArchetype(archetypeId, { variant: (archVariant + 1) % count });
+      }
+    } catch { /* variant rotation is best-effort */ }
+
+    const scene = genBrief.scene || genBrief.message || "";
+    if (!scene) return { ok: true }; // variant rotated but no scene to regen a photo from
+    try {
+      const startRes = await fetch('/api/design-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene, dimensionId }),
+      });
+      const start = await startRes.json().catch(() => ({}));
+      if (start.unconfigured || start.failed || !start.jobId) return { ok: false, reason: 'unavailable' };
+      const qs = new URLSearchParams({ jobId: start.jobId }).toString();
+      const deadline = Date.now() + 75_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 3000));
+        let poll;
+        try { poll = await (await fetch(`/api/design-generate?${qs}`)).json(); } catch { continue; }
+        if (poll.status === 'pending') continue;
+        if (poll.status === 'done' && poll.imageDataUrl) {
+          await applyGeneratedImage(poll.imageDataUrl, { harmonize: true });
+          return { ok: true };
+        }
+        return { ok: false, reason: 'failed' };
+      }
+      return { ok: false, reason: 'timeout' };
+    } catch {
+      return { ok: false, reason: 'error' };
+    }
   };
 
   const loadFile = useCallback(async (file) => {
@@ -6350,6 +6406,8 @@ export default function App() {
         onApplyPatch={(patch) => applyDesignPatch(patch, { harmonize: true })}
         onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
         onUndo={undoLastAiChange}
+        onTryAnother={regenerateDesign}
+        canTryAnother={!!genBrief}
         open={chatOpen}
         setOpen={setChatOpen}
         seed={chatSeed}

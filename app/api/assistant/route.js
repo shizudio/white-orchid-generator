@@ -1,6 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
-import { generatePhoto } from '@/lib/higgsfield';
+import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -145,6 +145,20 @@ const DECOR_INTENT = /\b(frame[sd]?|framing|petal\w*|orchid\w*|shape[sd]?|decora
 
 function wantsDecoration(text) {
   return DECOR_INTENT.test(String(text || ''));
+}
+
+// (Photo-first) Belt-and-braces guard: strip brand/design/text words from a
+// model-written scenePrompt so the photographer brief never nudges the diffusion
+// model to render type or a poster. The lib prompt builder adds the grade, camera
+// and "no text" rules; this only removes words that shouldn't be in a photo brief.
+const SCENE_BANNED = /\b(the white orchid|white orchid|instagram|poster|headline|caption|subtitle|tagline|logo|wordmark|text|typography|type|font|layout|design|graphic|banner|title|copy|cta|button|pill)\b/gi;
+function sanitizeScenePrompt(s) {
+  return String(s || '')
+    .replace(SCENE_BANNED, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.])/g, '$1')
+    .trim()
+    .slice(0, 600);
 }
 
 // ── EDITOR LAYOUT-INTENT GATE (Commit 1) ─────────────────────────────────────
@@ -623,7 +637,14 @@ VARIETY (important — the studio has felt repetitive):
 - CHOOSE the postType, bgColor and dimensionId that best fit the REQUEST'S INTENT, and vary them meaningfully between requests. Not everything is an Instagram square on the same background. Let the archetype's palette guide the bgColor (an archetype seeds its own field colour, so you can leave bgColor null to accept it, or set one that suits).
   - A quote / saying → "quote" type. A hiring / announcement / reminder → "text_post" or "event". A dated happening → "event". A photo-led moment → "photo_logo" or "texture_text".
 - OVERLAYS / FRAMES: NEVER add an overlay (addOverlay) unless the user explicitly names the treatment — "frame", "petal", "orchid shape", "cut-out", "overlay". An invite, open house, celebration or festive post is NOT a reason to add one. Default is always NO overlay.
-- AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.`
+- AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.
+
+PHOTO (scenePrompt) — when the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), ALSO write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
+  • ONE scene, ONE subject with a concrete action, a setting, and lighting.
+  • The subject is an average ~10-year-old Asian child (or a small still-life of plants/objects) in a bright, calm early-education setting.
+  • Example shape (do NOT copy verbatim — fit it to the request): "an average ten-year-old Asian child painting with watercolours at a pale oak table, absorbed and quietly happy, bright soft natural daylight".
+  • HARD RULE: scenePrompt must contain NO brand name, NO tagline, NO copy, and NO design/layout words (never "poster", "text", "headline", "logo", "caption", "Instagram", "White Orchid"). It describes only a real photograph. The studio adds the grade, camera and "no text" rules itself.
+  • Leave scenePrompt NULL for text-only archetypes (serif_word, manifesto, quote_margin, motif_field, stat_tile, brand_card, closing_card, schedule_tile) — those are solid-field designs with no photo.`
     : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).
 
 ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.`;
@@ -715,6 +736,10 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // (Commit 3) Landing photo attach URL — set inside the landing block below, returned
   // separately from the patch so the client applies it as the background image.
   let landingPhotoUrl = null;
+  // (Photo-first) A photographer brief for the post's photo, returned so the client
+  // starts a Higgsfield photo job (the photo it composes the design over). Null for
+  // text-only landing designs and every editor turn.
+  let landingScenePrompt = null;
 
   // ── HARD OVERLAY GATE (P1) ──────────────────────────────────────────────────
   // Strip patch.addOverlay unless the user's own words signal decoration intent.
@@ -753,14 +778,24 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // archetype, enforcing pastel-share (~1-in-3 of light) + dark-share (25–30%)
     // deterministically. The client materializes this exact variant.
     patch.archVariant = pickVariant(finalArchetype);
-    // (Commit 3) LANDING PHOTO ATTACH — for photo-led archetypes, attach a suitable
-    // Library image so the landing design isn't text-only-plain by default. Graceful:
-    // null when the Library is empty/unconfigured (the design stays text-only). The URL
-    // is returned separately (imageUrl) — NOT a patch field — so the client applies it as
-    // the background just like a generated/uploaded image, and also sets a photo postType.
-    landingPhotoUrl = await pickLandingPhoto(finalArchetype, designState.dimensionId);
-    if (landingPhotoUrl && (!patch.postType || !['photo_logo', 'texture_text'].includes(patch.postType))) {
+    // (Photo-first) Is the resolved archetype photo-led? Only those want a generated
+    // background photo (scenePrompt); text-only archetypes stay solid-field.
+    const archIsPhotoLed = PHOTO_ATTACH_ARCHETYPES.has(finalArchetype) || PHOTO_LED.has(finalArchetype);
+    if (archIsPhotoLed && (!patch.postType || !['photo_logo', 'texture_text'].includes(patch.postType))) {
       patch.postType = 'photo_logo';
+    }
+    // Keep the model's scenePrompt only for photo-led archetypes; sanitise it of any
+    // brand/design words that would make the diffusion model render text (belt-and-
+    // braces over the prompt rule). Returned separately so the client starts a
+    // Higgsfield PHOTO job for it (photo-first pipeline); it is NOT an applied field.
+    if (archIsPhotoLed && typeof patch.scenePrompt === 'string' && patch.scenePrompt.trim()) {
+      landingScenePrompt = sanitizeScenePrompt(patch.scenePrompt);
+    }
+    // LIBRARY FALLBACK — when Higgsfield is NOT configured (no scene generation path)
+    // OR the model gave no scene, attach a Library image so a photo-led design isn't
+    // text-only-plain. Graceful: null when the Library is empty/unconfigured.
+    if (archIsPhotoLed && (!landingScenePrompt || !higgsfieldConfigured())) {
+      landingPhotoUrl = await pickLandingPhoto(finalArchetype, designState.dimensionId);
     }
   } else if (patch && patch.archetypeId != null && patch.archetypeId !== 'none') {
     // ── EDITOR LAYOUT-CHANGE GUARD (Commit 1) ────────────────────────────────
@@ -792,6 +827,9 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // applyDesignPatch (which would ignore it anyway — it's not in PATCH_CHANGE_KEYS).
   const imagePrompt = typeof patch.imagePrompt === 'string' && patch.imagePrompt.trim() ? patch.imagePrompt.trim() : null;
   if ('imagePrompt' in patch) delete patch.imagePrompt;
+  // scenePrompt is a photo-first side-effect trigger (returned separately, above),
+  // never an applied design field — strip it before the patch reaches the client.
+  if ('scenePrompt' in patch) delete patch.scenePrompt;
 
   if (imagePrompt) {
     // Derive a negative-space directive from the design's archetype (the patch's
@@ -831,7 +869,8 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     });
   }
 
-  // (Commit 3) Include the landing photo URL (if any) so the client applies it as the
-  // background for a photo-led landing design. Null for text-only archetypes / empty Library.
-  return Response.json({ reply, patch, imageB64: null, imageUrl: landingPhotoUrl });
+  // (Photo-first) Return the landing photo URL (Library fallback) AND the scenePrompt
+  // (photographer brief) so the client can start a Higgsfield photo job for photo-led
+  // designs. Both null for text-only archetypes / editor turns.
+  return Response.json({ reply, patch, imageB64: null, imageUrl: landingPhotoUrl, scenePrompt: landingScenePrompt });
 }

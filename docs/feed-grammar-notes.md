@@ -87,3 +87,19 @@ Client brief with it: "bright, airy, luminous, and all ~10-year-old Asian childr
 - INK DISCIPLINE: max 1-2 font colours per poster; if 2, they occupy DIFFERENT hierarchy
   levels (e.g. deep-green hero + muted eyebrow), never two colours at the same level.
   Kills accent-coloured emphasis words entirely — accent lives ONLY in the pill/CTA.
+
+## 8. ARCHITECTURE TRUTH — how the reference grids were actually made (2026-07-04)
+The client's reference grids were NOT full-design diffusion generations. Higgsfield (Soul v2)
+produced ONLY bare photographs from photographer-brief prompts containing ZERO brand/design/
+text words; ALL composition (logo, Romie/Syne type, colour panels, pills) was composited in
+code afterward. Implications, permanent:
+- Diffusion models here are PHOTOGRAPHERS, never DESIGNERS. Asking Soul for "a post/design/
+  layout" yields garbled text-wall mockups (verified twice). Never build a design-pass or
+  layout-extraction pipeline against Soul output.
+- Photo prompt template (client's, verbatim structure): lead with "photograph"; ONE subject +
+  concrete action; setting; lighting; warm grade "forest green, ivory and warm terracotta,
+  natural warm Asian skin tones"; camera (medium format/35mm, generous negative space);
+  ALWAYS end "No text, no letters, no words, no logos, no UI, no poster, no frame, no layout,
+  no captions. A single full-frame photograph." enhance_prompt: false. Soul v2 payload:
+  {"model":"text2image_soul_v2","style_id":"3db34ab5-3439-4317-9e03-08dc30852e69",...}.
+- Division of labour, final: Higgsfield shoots → OUR archetype engine composes → user edits.

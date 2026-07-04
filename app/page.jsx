@@ -16,46 +16,114 @@ const EXAMPLES = [
 // the starting design. Keep in sync with components/Generator.jsx.
 const HANDOFF_KEY = 'wo-landing-plan';
 
+// Staged progress copy for the photo-generation wait (~20–45s). Advanced on a
+// timer so the wait reads as intentional craft rather than a hang.
+const GEN_STAGES = [
+  'Composing your design…',
+  'Finding the right photo…',
+  'Setting the type and colour…',
+  'Almost there…',
+];
+// Poll budget for the photo generation before we hand off text-only: ~70s of GET
+// polls at a 3s cadence. Higgsfield photo gens run ~20–45s.
+const GEN_POLL_INTERVAL_MS = 3_000;
+const GEN_POLL_MAX_MS = 75_000;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 export default function Home() {
   const router = useRouter();
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState('');        // staged progress line during photo gen
   const [note, setNote] = useState('');
   const textareaRef = useRef(null);
+  const stageTimerRef = useRef(null);
+
+  // Generate the post's background PHOTO from a scenePrompt via the start-job/poll
+  // pipeline. Returns a photo data URL, or null to signal the caller to fall back
+  // (Library photo / solid-field). NEVER throws.
+  async function generateScenePhoto(scene, dimensionId = 'ig_square') {
+    let start;
+    try {
+      const res = await fetch('/api/design-generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene, dimensionId }),
+      });
+      start = await res.json().catch(() => ({}));
+      if (!res.ok) return null;
+    } catch { return null; }
+    if (start.unconfigured || start.failed || !start.jobId) return null;
+
+    const qs = new URLSearchParams({ jobId: start.jobId }).toString();
+    const deadline = Date.now() + GEN_POLL_MAX_MS;
+    while (Date.now() < deadline) {
+      await sleep(GEN_POLL_INTERVAL_MS);
+      let poll;
+      try {
+        const res = await fetch(`/api/design-generate?${qs}`);
+        poll = await res.json().catch(() => ({}));
+      } catch { continue; } // transient — keep polling within the budget
+      if (poll.status === 'pending') continue;
+      if (poll.status === 'done' && poll.imageDataUrl) return poll.imageDataUrl;
+      return null; // failed / nsfw → fall back
+    }
+    return null; // timed out → fall back
+  }
+
+  function startStageTicker() {
+    let i = 0;
+    setStage(GEN_STAGES[0]);
+    stageTimerRef.current = setInterval(() => {
+      i = Math.min(i + 1, GEN_STAGES.length - 1);
+      setStage(GEN_STAGES[i]);
+    }, 9_000);
+  }
+  function stopStageTicker() {
+    if (stageTimerRef.current) { clearInterval(stageTimerRef.current); stageTimerRef.current = null; }
+    setStage('');
+  }
 
   async function submit(text) {
     const content = String(text ?? message).trim();
     if (!content || loading) return;
     setLoading(true);
     setNote('');
+    startStageTicker();
     try {
+      // 1. Get the design PLAN (archetype + copy + optional scenePrompt) — our
+      //    engine composes the post; the photo (if any) is generated next.
       const response = await fetch('/api/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          context: 'landing',
-          messages: [{ role: 'user', content }],
-          designState: {},
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: 'landing', messages: [{ role: 'user', content }], designState: {} }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        // 503 / any error → friendly note, skip link still works.
+        stopStageTicker();
         setNote(data.error || "AI isn't set up yet. You can still open the studio below.");
         setLoading(false);
         return;
       }
+      // 2. If photo-led, GENERATE the background photo (Higgsfield). Fall back to any
+      //    Library photo the plan attached, else stay text-only (solid field).
+      let imageUrl = data.imageUrl || null;
+      if (data.scenePrompt) {
+        const photo = await generateScenePhoto(data.scenePrompt);
+        if (photo) imageUrl = photo;
+      }
+      // 3. Hand off the composed design + photo to the editor.
       try {
         sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
           patch: data.patch || {},
           reply: data.reply || '',
           originalMessage: content,
-          // (Commit 3) a Library photo the landing flow attached for a photo-led archetype.
-          imageUrl: data.imageUrl || null,
+          scenePrompt: data.scenePrompt || null,
+          imageUrl,
         }));
       } catch { /* private mode — the studio still opens, just without seeding */ }
       router.push('/generate');
     } catch {
+      stopStageTicker();
       setNote("I couldn't reach the AI just now. You can still open the studio below.");
       setLoading(false);
     }
@@ -137,7 +205,7 @@ export default function Home() {
             }}>
               <img src="/assets/logos/ds/logo-circle.png" alt="" className="wo-generating-orchid"
                 style={{ width: 24, height: 24, objectFit: 'contain' }} />
-              <span>Designing your starting point<span className="wo-dots" aria-hidden="true">…</span></span>
+              <span>{stage || 'Designing your starting point'}<span className="wo-dots" aria-hidden="true">…</span></span>
             </div>
           )}
 
