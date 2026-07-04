@@ -478,9 +478,12 @@ const ARCHETYPES = [
   { // §2.3 Big Number / Date
     id:"big_number", name:"Big Number / Date",
     elements:{
-      microLabel:{x:0.33,y:0.18,w:0.60,h:0.05},
-      hero:{x:0.30,y:0.26,w:0.62,h:0.44},        // the numeral/date
-      support:{x:0.33,y:0.72,w:0.60,h:0.08},
+      microLabel:{x:0.33,y:0.16,w:0.60,h:0.05},
+      hero:{x:0.30,y:0.24,w:0.62,h:0.40},        // the numeral/date
+      // (Commit 1) taller caption box so a real 2–3 line invite line fits WITHOUT
+      // spilling past the bottom margin or wrapping onto the logo (the square
+      // caption↔logo overlap + bottom clip on long landing copy).
+      support:{x:0.33,y:0.66,w:0.60,h:0.20},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.44,heroToSupport:9}, thirdsX:0.34,
@@ -503,7 +506,20 @@ const ARCHETYPES = [
       // only on accent variants (skipped on the dark variant). One-accent rule holds.
       {type:"badge", text:"NOW ENROLLING", x:0.06, y:0.875, size:0.022, align:"left"},
     ],
-    perDim:{ banner:{hero:{x:0.06,y:0.14,w:0.40,h:0.62},microLabel:{x:0.06,y:0.10,w:0.40,h:0.10},support:{x:0.50,y:0.30,w:0.44,h:0.40}} },
+    // (Commit 1) WIDE + BANNER perDim rebuilt so the caption never lands under the
+    // right-hand logo lockup (the client's banner/twitter collision). The date hero
+    // sits LEFT (thirds), the eyebrow + caption stack in the SAME left/centre column
+    // directly under it, and the whole RIGHT band (≥0.62) is kept clear for the logo
+    // lockup + the enrolling pill. On the 3:1 banner the caption drops just under the
+    // hero (still left of centre) so mid-right `m` logo has its own clear zone.
+    perDim:{
+      // twitter (16:9) / facebook (1.91:1) — hero left-of-centre, caption stacked below.
+      wide:{ microLabel:{x:0.08,y:0.16,w:0.52,h:0.06}, hero:{x:0.08,y:0.26,w:0.52,h:0.40}, support:{x:0.08,y:0.70,w:0.52,h:0.18} },
+      // banner (3:1) — everything in the left ~56%; right 44% reserved for the logo.
+      // Caption capped ABOVE the y:0.875 "NOW ENROLLING" pill so a two-line caption
+      // never overprints the badge on the short 500px band.
+      banner:{ microLabel:{x:0.06,y:0.09,w:0.50,h:0.10}, hero:{x:0.06,y:0.20,w:0.50,h:0.44}, support:{x:0.06,y:0.66,w:0.50,h:0.12} },
+    },
   },
   { // §2.4 Full-Bleed Duotone + Whisper Caption
     id:"full_bleed_duotone", name:"Full-Bleed Duotone",
@@ -521,7 +537,10 @@ const ARCHETYPES = [
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:true,
     suitedPostTypes:["photo_logo","texture_text"], frequencyCap:0.12, logoUse:"none", // (P1) full-bleed photo: no logo
     cropDrama:1.22, // (T8) full-bleed hero wants the most dramatic crop
-    perDim:{ story:{hero:{x:0.06,y:0.66,w:0.70,h:0.14}} },
+    // (Commit 1) Story: lift the whisper hero + caption so both sit comfortably above
+    // the 9:16 bottom safe margin (0.20) — the base support y0.84 pushed the caption's
+    // last line off the bottom on long copy.
+    perDim:{ story:{hero:{x:0.06,y:0.60,w:0.80,h:0.12}, support:{x:0.06,y:0.73,w:0.62,h:0.05}} },
   },
   { // §2.5 Floated Photo Card on Solid Field
     id:"floated_card", name:"Floated Photo Card",
@@ -596,7 +615,10 @@ const ARCHETYPES = [
       {type:"underline", x:0.12, y:0.205, w:0.11},
       {type:"counterweight", x:0.12, y:0.90},
     ],
-    perDim:{ banner:{hero:{x:0.06,y:0.18,w:0.88,h:0.56}} },
+    // (Commit 1) Story: shorter hero + a small caption box lifted clear of the bottom
+    // margin so a long body/url line sits at a modest size instead of a big single line
+    // crossing the 9:16 bottom safe margin.
+    perDim:{ banner:{hero:{x:0.06,y:0.18,w:0.88,h:0.56}}, story:{hero:{x:0.12,y:0.22,w:0.76,h:0.44},support:{x:0.12,y:0.70,w:0.72,h:0.05}} },
   },
   { // §2.8 Documentary Photo Moment
     id:"documentary", name:"Documentary Photo Moment",
@@ -677,7 +699,10 @@ const ARCHETYPES = [
     ],
     photoTreatment:"duotone", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","event","quote"], frequencyCap:0.10,
-    perDim:{ story:{photo:{x:0,y:0,w:1,h:0.52},hero:{x:0.06,y:0.60,w:0.84,h:0.22},support:{x:0.06,y:0.84,w:0.84,h:0.10},microLabel:{x:0.06,y:0.55,w:0.84,h:0.04}} },
+    // (Commit 1) Story: pull the text block up tight under the photo band and shorten the
+    // hero so hero + gap + caption all fit between the band and the bottom safe margin
+    // (the hero's descenders were touching the caption on long copy).
+    perDim:{ story:{photo:{x:0,y:0,w:1,h:0.50},hero:{x:0.06,y:0.55,w:0.84,h:0.12},support:{x:0.06,y:0.70,w:0.84,h:0.05},microLabel:{x:0.06,y:0.515,w:0.84,h:0.03}} },
   },
   { // §2.11 Motif-Warmed Solid Field
     id:"motif_field", name:"Motif-Warmed Field",
@@ -731,7 +756,9 @@ const ARCHETYPES = [
     photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
     special:"petalWindow", maskAreaFrac:0.40, // (R3b) toward the 35–42% ceiling — signature scale
-    perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.28},hero:{x:0.06,y:0.52,w:0.84,h:0.24},support:{x:0.06,y:0.80,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
+    // (Commit 1) Story: hero shortened + caption lifted so the hero can't reach the
+    // caption on long copy (the story hero↔caption overlap).
+    perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.26},hero:{x:0.06,y:0.50,w:0.84,h:0.18},support:{x:0.06,y:0.74,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
   /* ═══ FEED-GRAMMAR ARCHETYPES (WP-P P2 — feed-grammar §2/§3) ══════════════════
      The four brand-sequence cards the client's reference grids open/close a campaign
@@ -862,8 +889,12 @@ const archetypeFormatClass=(dimId)=> dimId==="ig_square"?"square"
 function resolveArchetypeElements(arch,dimId){
   const base=arch.elements||{};
   const pd=arch.perDim||{};
-  // perDim keys are dimension ids (story/banner) for precision; fall back none.
-  const ov=pd[dimId]||null;
+  // perDim keys are dimension IDs (story/banner) for precision; when none exists for
+  // this exact dim, fall back to its FORMAT CLASS key (Commit 1). This lets a single
+  // `wide` override serve BOTH twitter (16:9) and facebook (1.91:1) — the two wide
+  // formats the square-authored boxes clipped/collided on — without authoring each id
+  // twice. Precedence: exact dimId → format class → square base.
+  const ov=pd[dimId]||pd[archetypeFormatClass(dimId)]||null;
   const out={};
   for(const k of Object.keys(base)) out[k]={...base[k]};
   if(ov) for(const k of Object.keys(ov)) out[k]={...(out[k]||{}),...ov[k]};
@@ -3510,12 +3541,17 @@ export default function App() {
       // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
       // exclusion)? Only meaningful with a photo + a real explicit placement (the
       // guard already reshuffles non-explicit bases away from the focal band).
+      // (Commit 1) Retain the FINAL drawn logo box for the collision assertion so a
+      // logo↔caption overlap (the banner/twitter bug) is caught permanently, not just
+      // in the live focal check. Captured on every captureAudit render, not only live.
+      const _logoBox={x:lx-lSz/2,y:ly-lSz/2,w:lSz,h:lSz};
+      if(live||opts.captureAudit) auditLogo.box=_logoBox;
       if(live){
         auditLogo.explicit=!!logoBase.explicit;
         auditLogo.overlapsText=!!place.overlapsText;
         if(logoFocal){
           const fr=LOGO_FOCAL_RADIUS*Math.min(w,h),fcx=(logoFocal.fx??0.5)*w,fcy=(logoFocal.fy??0.42)*h;
-          const lb={x:lx-lSz/2,y:ly-lSz/2,w:lSz,h:lSz};
+          const lb=_logoBox;
           auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
         }
       }
@@ -4130,14 +4166,36 @@ export default function App() {
         fontMeta.headline=hr.size;
         setTextBounds(hr.usedH);
       }
+      const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
+      // (Commit 1) SURGICAL POST-HERO NUDGE. reflow de-collides against the hero's
+      // PRE-measured height; drawHeroText's real usedH can be a few px taller, leaving the
+      // caption on the hero's descenders on tall Story crops (portrait_credential /
+      // petal_window / full_bleed). Only when the caption box top is INSIDE the drawn hero,
+      // push it down to just clear the hero — clamped so it never crosses the bottom safe
+      // margin (the margin-bounded line count then truncates if needed). Never resizes the
+      // hero and never touches side-split layouts (caption above/beside the hero).
+      if(!isSchedule && supportText && supBox && heroBox && usedH>0 && supBox.y>=heroBox.y-0.01*h){
+        const _sB=(1-sm.b)*h, _sT=sm.t*h;
+        const heroBot=heroBox.y+usedH;
+        const clearGap=Math.max(0.012*h, 0.10*(fontMeta.headline||0));
+        if(supBox.y<heroBot+clearGap*0.5){
+          const ny=Math.max(_sT, Math.min(heroBot+clearGap, _sB-reflow.supMin*1.3));
+          if(ny>supBox.y) supBox={...supBox, y:ny};
+        }
+        // Whatever the placement, keep the caption box's BOTTOM inside the safe margin so
+        // the margin-bounded line count (below) truncates to what actually fits — a caption
+        // pushed low by the nudge must never define a box that reaches past the margin.
+        if(supBox.y+supBox.h>_sB) supBox={...supBox, h:Math.max(reflow.supMin*1.1, _sB-supBox.y)};
+      }
       // support / caption
+      let supUsedH=0; // (Commit 1) actual drawn caption height for the avoid-list/envelope
       if(!isSchedule && supportText && supBox){
         beginText(); ctx.fillStyle=heroInk;
         const supAlign=mat.roles?.support?.align||"left";
         if(mat.supportRegister==="serifItalic"){
           // (P2) BRAND/CLOSING TAGLINE — light italic serif ("a school led by children"),
           // matching the reference lockup taglines. Same ink as hero (§7 ink discipline).
-          const sf=fitText(ctx,supportText,s=>`italic 400 ${s}px ${F.title}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.28,reflow.supMin);
+          const sf=fitText(ctx,supportText,s=>`italic 400 ${s}px ${F.title}`,reflowSupStart,supBox.w,supBox.h,mat.leadingBody||1.28,reflowSupMin);
           ctx.font=`italic 400 ${sf.size}px ${F.title}`;
           drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
           fontMeta.subtext=sf.size;
@@ -4148,7 +4206,7 @@ export default function App() {
           const rawLines=supportText.split(/\n+/).map(l=>l.trim()).filter(Boolean).slice(0,4);
           const widest=rawLines.reduce((a,l)=>Math.max(a,l.length),1);
           let ssz=Math.min(supBox.h/(rawLines.length*1.5), supBox.w/(widest*0.56));
-          ssz=Math.max(reflow.supMin||supBox.h*0.12, Math.min(ssz, reflow.supStart||supBox.h*0.3));
+          ssz=Math.max(reflowSupMin||supBox.h*0.12, Math.min(ssz, reflowSupStart||supBox.h*0.3));
           ctx.font=`300 ${ssz}px ${F.body}`; ctx.letterSpacing=`${0.01*ssz}px`;
           drawTextLines(ctx,rawLines,supBox.x,supBox.y+ssz,supBox.w,ssz*1.5,supAlign);
           ctx.letterSpacing="0px";
@@ -4156,13 +4214,35 @@ export default function App() {
         }else{
           // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
           // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
-          const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+          const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflowSupStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflowSupMin);
           ctx.font=`300 ${sf.size}px ${F.body}`;
           ctx.letterSpacing=`${0.01*sf.size}px`;
-          drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
+          // (Commit 1) MARGIN-BOUNDED LINE COUNT. fitText bottoms out at its min size and
+          // can return MORE lines than fit — the old fixed slice(0,3) then drew glyphs past
+          // the bottom safe margin (the crops the honest multi-line supUsedH audit now
+          // surfaces across formats). Draw only the lines that fit from supBox.y to the
+          // effective floor: the bottom safe margin, OR the top of a photo band sitting
+          // below the caption (editorial_split/portrait_credential story), whichever is
+          // higher. Min 1 line — a controlled truncation, never a canvas-edge/photo clip.
+          const _safeBot=(1-sm.b)*h;
+          const _bandTop=(mat.photoRegion&&!mat.fullBleed)?(()=>{const bb=bleedBox(mat.photoRegion);return (bb.y>supBox.y)?bb.y:Infinity;})():Infinity;
+          const _floor=Math.min(_safeBot,_bandTop);
+          // Max whole lines whose stacked height fits from the box top to the floor. A
+          // ~0.28em descender allowance keeps the LAST line's tails inside the margin
+          // (drawTextLines sets each baseline, so the visual bottom sits below the box row).
+          let _roomLines=Math.max(1,Math.floor((_floor-supBox.y-sf.size*0.28)/sf.lineHeight));
+          // Hard guard: the LAST drawn line's baseline is supBox.y+size+(n-1)*lineHeight;
+          // its visual bottom (baseline + ~0.28em descender) must not cross the floor. Drop
+          // trailing lines until it fits — a bulletproof no-clip guarantee (min 1 line).
+          const _lineBottom=(n)=>supBox.y+sf.size+(n-1)*sf.lineHeight+sf.size*0.28;
+          while(_roomLines>1 && _lineBottom(_roomLines)>_floor) _roomLines--;
+          const _lines=sf.lines.slice(0,Math.min(3,_roomLines));
+          drawTextLines(ctx,_lines,supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
           ctx.letterSpacing="0px";
           fontMeta.subtext=sf.size;
+          supUsedH=Math.max(sf.size, _lines.length*sf.lineHeight);
         }
+        if(!supUsedH) supUsedH=fontMeta.subtext||supBox.h*0.4;
         endText();
       }
       // (T1) ANCHORING FURNITURE — hairline rules / underline / index / counterweight.
@@ -4172,7 +4252,9 @@ export default function App() {
       if(mat.furniture && mat.furniture.length){
         const avoid=[
           heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
-          (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.4)*1.4}:null,
+          // (Commit 1) use the caption's ACTUAL drawn height (supUsedH), not ~1.4 lines —
+          // a 2-line caption on the short banner must fully block the enrolling pill.
+          (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)*1.15}:null,
           (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
           cardBox, maskBox,
           (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
@@ -4186,6 +4268,24 @@ export default function App() {
       // nothing. Honour an explicit user logo placement (userLogoTouched); otherwise the
       // archetype/variant `logoUse` policy governs: none|url → no lockup, mark|lockup → draw.
       const logoUse = mat.logoUse || "url";
+      // (Commit 1) COMBINED TEXT ENVELOPE for the logo guard. The banner/twitter
+      // caption↔lockup collision came from passing ONLY the hero box to putLogo — the
+      // logo guard then happily sat on the SUPPORT caption (which on wide big_number
+      // lives in its own right-hand box). Build the union bounding box of every drawn
+      // text role (hero + support + eyebrow) so pickLogoPlacement excludes ALL of them,
+      // exactly like the furniture avoid-list already does. Uses each role's ACTUAL
+      // drawn height (usedH / fontMeta) so the exclusion matches what's on the canvas.
+      const _txtBoxes=[
+        heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
+        (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)*1.15}:null,
+        (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
+      ].filter(Boolean);
+      const textEnvelope = _txtBoxes.length ? {
+        x:Math.min(..._txtBoxes.map(b=>b.x)),
+        y:Math.min(..._txtBoxes.map(b=>b.y)),
+        w:Math.max(..._txtBoxes.map(b=>b.x+b.w))-Math.min(..._txtBoxes.map(b=>b.x)),
+        h:Math.max(..._txtBoxes.map(b=>b.y+b.h))-Math.min(..._txtBoxes.map(b=>b.y)),
+      } : null;
       // (calibration r3 fix #2) LOGO PRESENCE — the client OVERRIDES the reference's
       // restraint: solid tiles (statement/manifesto/cta/schedule/stat) now carry a small
       // orchid MARK in a subtle corner; brand_card = centred lockup; closing_card = centred
@@ -4218,11 +4318,11 @@ export default function App() {
             containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
           }
         }
-      } else if(drawLockup) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,logoOpts);
+      } else if(drawLockup) putLogo(textEnvelope,logoOpts);
       else if(logoUse==="lockup"){ /* archetype lockup w/o user touch handled below */ }
       // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
       // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
-      if(logoUse==="lockup" && !userLogoTouched) putLogo(heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.4)}:null,{...logoOpts});
+      if(logoUse==="lockup" && !userLogoTouched) putLogo(textEnvelope,{...logoOpts});
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
@@ -4251,7 +4351,10 @@ export default function App() {
         // other role-pair overlap is a collision the reflow pass should have removed.
         // Zero = clean (the audit assertion the client asked for).
         const heroDrawn=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||0)}:null;
-        const supDrawn=supBox&&supportText?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.3)}:null;
+        // (Commit 1) Use the caption's REAL multi-line drawn height (supUsedH), not a single
+        // line — a 3-line caption that spilled under the bottom-right logo was invisible to
+        // the assertion when supDrawn measured only one line (the square logo↔caption bug).
+        const supDrawn=supBox&&supportText?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.3)}:null;
         const labelDrawn=labelBox&&eyebrow?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:reflow.labelSize||labelBox.h}:null;
         const ix=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
         const textRoles=[heroDrawn,supDrawn,labelDrawn].filter(Boolean);
@@ -4263,6 +4366,18 @@ export default function App() {
         // into the text-safe margin) would over-report an overlap the render never shows.
         const photoObs=cardBox||maskBox||(mat.photoRegion&&!mat.fullBleed?bleedBox(mat.photoRegion):null);
         if(!mat.fullBleed && photoObs) for(const t of textRoles) if(ix(t,photoObs)) boxOverlaps++;
+        // (Commit 1) LOGO↔TEXT collision — the drawn lockup/mark box vs each text role.
+        // This is the assertion that now catches the banner/twitter caption↔logo overlap
+        // the client reported (the box-only text check missed it because the logo isn't a
+        // text role). A small corner MARK legitimately hugs a corner, so only a real
+        // lockup overlap (>2% canvas-area intersection) counts — a hairline touch by a
+        // tiny mark is ignored.
+        const logoBx=auditLogo.box;
+        let _logoHit=0;
+        if(logoBx){
+          const areaFrac=(p,q)=>{ if(!ix(p,q)) return 0; const ox=Math.min(p.x+p.w,q.x+q.w)-Math.max(p.x,q.x), oy=Math.min(p.y+p.h,q.y+q.h)-Math.max(p.y,q.y); return (ox*oy)/(w*h); };
+          for(const t of textRoles) if(areaFrac(logoBx,t)>0.02){ boxOverlaps++; _logoHit++; }
+        }
         // Margin crop: any drawn text box outside the safe rect (tolerance 0.5%).
         const tolX=0.005*w,tolY=0.005*h;
         const outOfMargin=textRoles.some(t=>t.x<sm.l*w-tolX||t.y<sm.t*h-tolY||t.x+t.w>(1-sm.r)*w+tolX||t.y+t.h>(1-sm.b)*h+tolY);
@@ -4276,6 +4391,8 @@ export default function App() {
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin,
+            _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
+                    photo:photoObs||null, fullBleed:!!mat.fullBleed },
           },
         };
       }
@@ -4730,11 +4847,14 @@ export default function App() {
   }, [renderScene]);
 
   /* ── STRESS SWEEP (Commit 3 verification, dev-only) ──────────────────────────
-     window.__woArchStress(content?) renders EVERY archetype × {square,story,banner}
+     window.__woArchStress(content?) renders EVERY archetype × ALL 6 FORMATS
      offscreen with the given (long) copy via renderScene(archOverride+captureAudit),
      reading the collision assertion (boxOverlaps / outOfMargin) from each render's
      audit signal. Returns a report + a pass flag (zero overlaps, zero crops). No live
-     state is touched (temporary materialized state per cell). */
+     state is touched (temporary materialized state per cell). (Commit 1) The sweep now
+     covers ig_portrait / twitter / facebook too — the reported wide-format banner↔logo
+     collision and twitter right-edge clip were invisible while only square/story/banner
+     were asserted. The permanent stress set is ALL six DIMENSIONS. */
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.__woArchStress = (content) => {
@@ -4744,7 +4864,7 @@ export default function App() {
         attribution: "Apply now at hello@thewhiteorchid.sg before the end of this month",
         dateText: "18 September",
       };
-      const fmts = ["ig_square", "story", "banner"];
+      const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
       const rows = []; let overlaps = 0, crops = 0;
       try {
@@ -4756,7 +4876,7 @@ export default function App() {
             const dr = auditRef.current?.archetypeDrift || {};
             const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0;
             overlaps += o; crops += cr;
-            if (o || cr) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr });
+            if (o || cr) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
