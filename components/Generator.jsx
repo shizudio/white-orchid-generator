@@ -3677,29 +3677,73 @@ export default function App() {
     // Solid-field variants need no photo — skip the generation entirely (instant,
     // and it keeps the Higgsfield budget for photo-led takes).
     if (!scene || !nextIsPhotoLed) return { ok: true };
+    const url = await fetchScenePhoto(scene);
+    if (url) { await applyGeneratedImage(url, { harmonize: true }); return { ok: true }; }
+    return { ok: false, reason: 'failed' };
+  };
+
+  // Shared start/poll photo pipeline with QC + auto re-roll (WP-U #4): a completed
+  // generation that fails the server's vision QC (rendered text / poster-layout)
+  // re-rolls ONCE with a fresh seed — max 2 attempts; the last attempt skips QC so
+  // the user gets a photo over nothing. Returns a data URL or null (caller falls
+  // back to Library/solid-field). NEVER throws.
+  const fetchScenePhoto = async (scene, { maxAttempts = 2, budgetMs = 75_000 } = {}) => {
+    const deadline = Date.now() + budgetMs;
     try {
-      const startRes = await fetch('/api/design-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scene, dimensionId }),
-      });
-      const start = await startRes.json().catch(() => ({}));
-      if (start.unconfigured || start.failed || !start.jobId) return { ok: false, reason: 'unavailable' };
-      const qs = new URLSearchParams({ jobId: start.jobId }).toString();
-      const deadline = Date.now() + 75_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 3000));
-        let poll;
-        try { poll = await (await fetch(`/api/design-generate?${qs}`)).json(); } catch { continue; }
-        if (poll.status === 'pending') continue;
-        if (poll.status === 'done' && poll.imageDataUrl) {
-          await applyGeneratedImage(poll.imageDataUrl, { harmonize: true });
-          return { ok: true };
+      for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
+        const startRes = await fetch('/api/design-generate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scene, dimensionId }),
+        });
+        const start = await startRes.json().catch(() => ({}));
+        if (start.unconfigured || start.failed || !start.jobId) return null;
+        const qs = new URLSearchParams({ jobId: start.jobId, ...(attempt >= maxAttempts ? { qc: '0' } : {}) }).toString();
+        let reroll = false;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          let poll;
+          try { poll = await (await fetch(`/api/design-generate?${qs}`)).json(); } catch { continue; }
+          if (poll.status === 'pending') continue;
+          if (poll.status === 'done' && poll.imageDataUrl) return poll.imageDataUrl;
+          if (poll.status === 'qc_failed') { reroll = true; break; } // fresh seed next attempt
+          return null;
         }
-        return { ok: false, reason: 'failed' };
+        if (!reroll) return null; // timed out
       }
-      return { ok: false, reason: 'timeout' };
+      return null;
     } catch {
-      return { ok: false, reason: 'error' };
+      return null;
+    }
+  };
+
+  // (WP-U #8) "Refresh photo" chip — re-run ONLY the photo fetch on a photo-bearing
+  // design: Higgsfield with the SAME scenePrompt when the design came from a landing/
+  // chat generation (genBrief), else a Library/sample rotation. Copy + layout are
+  // untouched; the generated path reuses the Try-another plumbing (fetchScenePhoto +
+  // applyGeneratedImage) so undo and the silent harmonizer behave identically.
+  const [refreshingPhoto, setRefreshingPhoto] = useState(false);
+  const refreshPhoto = async () => {
+    if (refreshingPhoto || !mediaObj) return;
+    setRefreshingPhoto(true);
+    try {
+      const scene = genBrief?.scene || "";
+      if (scene) {
+        const url = await fetchScenePhoto(scene);
+        if (url) { await applyGeneratedImage(url, { harmonize: true }); return; }
+      }
+      // Library rotation fallback: any local-library or sample photo that isn't
+      // the current one. Deterministic-ish walk: first non-current candidate.
+      const pool = [...library.map(l => l.full), ...SAMPLE_IMAGES.map(s => s.full)]
+        .filter(u => u && u !== image);
+      if (pool.length) {
+        const url = pool[Math.floor(Math.random() * pool.length)];
+        noteManualEdit("photo");
+        setImage(url);
+        const img = await imgFrom(url);
+        if (img) setImageObj(img);
+      }
+    } finally {
+      setRefreshingPhoto(false);
     }
   };
 
@@ -6832,6 +6876,21 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
+              {/* (WP-U #8) Refresh photo — re-runs ONLY the photo fetch (same
+                  scenePrompt via Higgsfield when available, else Library rotation)
+                  without touching copy or layout. */}
+              {mediaObj && (
+                <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
+                  aria-label="Refresh photo"
+                  title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
+                  style={{position:"absolute",top:10,left:10,zIndex:8,display:"inline-flex",alignItems:"center",gap:6,
+                    padding:"6px 12px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",
+                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",
+                    cursor:refreshingPhoto?"wait":"pointer",boxShadow:"0 2px 10px rgba(43,80,64,0.14)",opacity:refreshingPhoto?0.7:1}}>
+                  <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
+                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
+                </button>
+              )}
             </div>
           </div>
 
