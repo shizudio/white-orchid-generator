@@ -2801,6 +2801,9 @@ export default function App() {
   // design, so the chat's "Try another design" chip can regenerate a fresh photo
   // and rotate the archetype variant. Shape: { scene, message } | null.
   const [genBrief, setGenBrief] = useState(null);
+  // "Try another" rotation cursor: { n, startId } — startId is the landing pick so
+  // the ring never immediately re-serves the first answer's archetype.
+  const tryAnotherRef = useRef({ n: 0, startId: null });
   const snapshotApplyableState = () => ({
     postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
     bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
@@ -3536,18 +3539,33 @@ export default function App() {
   // applies the new photo as the background and cycles the variant. NEVER throws.
   const regenerateDesign = async () => {
     if (!genBrief) return { ok: false, reason: 'no-brief' };
-    // Rotate the archetype palette variant for visible variety (mirrors the picker
-    // re-click). Safe no-op when the current archetype has ≤1 variant.
+    // ── ROTATION POOL (photo-first) ── successive "Try another" presses walk a
+    // deterministic ring: the OTHER photo-led compositions first (each with a fresh
+    // photo), then the solid-field feed tiles (big date / statement / stat) — so the
+    // solid looks stay reachable without ever being the FIRST answer. Falls back to
+    // palette-variant cycling when the ring lands back on the current archetype.
+    let nextIsPhotoLed = true;
     try {
-      if (archetypeId) {
+      const PHOTO_LED_RING = ['editorial_split', 'floated_card', 'full_bleed_duotone', 'documentary', 'portrait_credential'];
+      const SOLID_RING = ['big_number', 'label_headline', 'stat_tile', 'serif_word', 'cta_card'];
+      const start = tryAnotherRef.current.startId ?? (tryAnotherRef.current.startId = archetypeId);
+      const ring = [...PHOTO_LED_RING.filter(id => id !== start), ...SOLID_RING.filter(id => id !== start)];
+      const n = tryAnotherRef.current.n++;
+      const nextId = ring.length ? ring[n % ring.length] : archetypeId;
+      nextIsPhotoLed = PHOTO_LED_RING.includes(nextId) || nextId === null;
+      if (nextId && nextId !== archetypeId) {
+        materializeArchetype(nextId, { postType, attribution, subtext });
+      } else if (archetypeId) {
         const arch = ARCHETYPES_BY_ID[archetypeId];
         const count = arch?.variants?.length || 1;
         if (count > 1) materializeArchetype(archetypeId, { variant: (archVariant + 1) % count });
       }
-    } catch { /* variant rotation is best-effort */ }
+    } catch { /* rotation is best-effort */ }
 
     const scene = genBrief.scene || genBrief.message || "";
-    if (!scene) return { ok: true }; // variant rotated but no scene to regen a photo from
+    // Solid-field variants need no photo — skip the generation entirely (instant,
+    // and it keeps the Higgsfield budget for photo-led takes).
+    if (!scene || !nextIsPhotoLed) return { ok: true };
     try {
       const startRes = await fetch('/api/design-generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4298,6 +4316,31 @@ export default function App() {
         usedH=hr.usedH;
         fontMeta.headline=hr.size;
         setTextBounds(hr.usedH);
+      }
+      // ── PROMINENT DATE LINE (photo-first c) ──────────────────────────────────
+      // Dated events on PHOTO-LED archetypes used to DROP dateText entirely (only
+      // usesDateAsHero tiles rendered it). Render the date as a light serif line
+      // directly under the hero at ~0.55× the hero size, in the hero's ink/align,
+      // so "18 July" stays prominent beside the photo. It extends usedH, so the
+      // surgical caption nudge below pushes the support clear of it — and it never
+      // draws past the bottom safe margin (skipped when there is no room).
+      if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox &&
+         (mat.photoRegion || mat.fullBleed || (cardBox||maskBox))){
+        const _safeBotD=(1-sm.b)*h;
+        const dStart=Math.max(20*S,(fontMeta.headline||heroBox.h*0.4)*0.55);
+        const dGap=Math.max(0.014*h,(fontMeta.headline||0)*0.18);
+        const dTop=heroBox.y+usedH+dGap;
+        const dRoom=_safeBotD-dTop;
+        if(dRoom>22*S){
+          beginText(); ctx.fillStyle=heroInk;
+          const df=fitText(ctx,ccDateText,s=>`300 ${s}px ${F.title}`,Math.min(dStart,dRoom/1.15),heroBox.w,dRoom,1.05,Math.min(20*S,dRoom/1.3));
+          ctx.font=`300 ${df.size}px ${F.title}`;
+          const dAlign=(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left";
+          drawTextLines(ctx,df.lines.slice(0,1),heroBox.x,dTop+df.size,heroBox.w,df.size*1.05,dAlign);
+          fontMeta.date=df.size;
+          usedH+=dGap+df.size*1.28; // the caption nudge + audit envelope see the date
+          endText();
+        }
       }
       const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
       // (Commit 1) SURGICAL POST-HERO NUDGE. reflow de-collides against the hero's

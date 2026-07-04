@@ -161,6 +161,49 @@ function sanitizeScenePrompt(s) {
     .slice(0, 600);
 }
 
+// ── PHOTO-FIRST LANDING DEFAULTS ─────────────────────────────────────────────
+// Client ruling (2026-07-04): a solid-field tile reads great INSIDE a feed but
+// plain as a STANDALONE first answer. So landing briefs default to PHOTO-LED
+// compositions; solid-field archetypes stay reachable through the "Try another"
+// rotation, but are never the first answer UNLESS the brief is explicitly
+// text-only (quote / manifesto / mission / values wording).
+const TEXT_ONLY_INTENT = /\b(quote|quotation|saying|proverb|manifesto|mission|our values|values post|belief|motto|mantra|affirmation|text[- ]?only|no photo|without (a )?photo)\b/i;
+function wantsTextOnly(text) {
+  return TEXT_ONLY_INTENT.test(String(text || ''));
+}
+// Preferred photo-led archetypes per intent (order matters — first cap-clear wins).
+// petal_window is excluded (decor-gated signature tile).
+const PHOTO_LED_BY_INTENT = {
+  event:       ['editorial_split', 'full_bleed_duotone', 'floated_card', 'documentary', 'portrait_credential'],
+  text_post:   ['editorial_split', 'floated_card', 'portrait_credential', 'documentary', 'full_bleed_duotone'],
+  photo_logo:  ['documentary', 'full_bleed_duotone', 'floated_card', 'editorial_split', 'portrait_credential'],
+  texture_text:['full_bleed_duotone', 'documentary', 'floated_card', 'editorial_split', 'portrait_credential'],
+  quote:       ['portrait_credential', 'floated_card', 'editorial_split', 'documentary', 'full_bleed_duotone'],
+};
+// Deterministic photo-led pick: first cap-clear preference for this intent; if the
+// caps have saturated the whole photo-led pool (a run of photo-first landings),
+// fall back to the LEAST-RECENTLY-USED photo-led archetype rather than a solid.
+function pickPhotoLedArchetype(intent) {
+  const prefs = PHOTO_LED_BY_INTENT[intent] || PHOTO_LED_BY_INTENT.text_post;
+  for (const id of prefs) if (!exceedsCap(id)) return id;
+  const counts = prefs.map(id => ({ id, n: RECENT_PICKS.filter(x => x === id).length }));
+  counts.sort((a, b) => a.n - b.n);
+  return counts[0].id;
+}
+// Server-side fallback photographer briefs, per intent — used when the model
+// omitted scenePrompt for a photo-led plan so the photo pipeline ALWAYS fires
+// (lib/higgsfield adds the grade / camera / no-text scaffold).
+const DEFAULT_SCENES = {
+  event:       'an average ten-year-old Asian child arranging fresh flowers on a welcome table beside an open classroom door, bright soft morning daylight',
+  text_post:   'an average ten-year-old Asian child reading at a pale oak table in a bright plant-filled classroom, absorbed and quietly happy, soft natural daylight',
+  photo_logo:  'an average ten-year-old Asian child laughing mid-play in a sunlit garden, candid and unposed, bright airy daylight',
+  texture_text:'a small still-life of eucalyptus stems in a ceramic jar on a pale linen cloth by a bright window, soft morning light',
+  quote:       'an average ten-year-old Asian child watering a potted plant on a bright windowsill, gentle and calm, soft natural daylight',
+};
+function fallbackScene(intent) {
+  return DEFAULT_SCENES[intent] || DEFAULT_SCENES.text_post;
+}
+
 // ── EDITOR LAYOUT-INTENT GATE (Commit 1) ─────────────────────────────────────
 // In the editor, an archetype (layout) change should happen ONLY when the user
 // asks for a layout/style change. The model sometimes swaps the archetype on a
@@ -346,9 +389,12 @@ function guessIntent(text) {
 }
 // Suggested archetype + palette-class hint for THIS request. Rotates over the
 // cap-clear, non-petal set (minute bucket + jitter) so successive requests diverge.
-function pickLandingArchetypeHint() {
-  const pool = CAP_SELECTABLE.filter(a => !exceedsCap(a.id));
-  const list = pool.length ? pool : CAP_SELECTABLE;
+// (Photo-first) For a non-text-only brief the nudge rotates over the PHOTO-LED pool
+// only, so the soft suggestion never steers a landing plan back to a solid tile.
+function pickLandingArchetypeHint(textOnly) {
+  const base = textOnly ? CAP_SELECTABLE : CAP_SELECTABLE.filter(a => PHOTO_LED.has(a.id));
+  const pool = base.filter(a => !exceedsCap(a.id));
+  const list = pool.length ? pool : (base.length ? base : CAP_SELECTABLE);
   const idx = (Math.floor(Date.now() / 60_000) + Math.floor(Math.random() * list.length)) % list.length;
   const a = list[idx];
   return `${a.id} (${a.desc}) — palette: ${a.palette}`;
@@ -617,19 +663,21 @@ export async function POST(request) {
     `overlay mode: ${PATCH_OPTIONS.overlayMode.join(', ')}`,
   ].join('\n');
 
-  const landingArchetypeHint = pickLandingArchetypeHint();
+  const landingUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  const landingTextOnly = wantsTextOnly(landingUserText);
+  const landingArchetypeHint = pickLandingArchetypeHint(landingTextOnly);
   const contextRule = context === 'landing'
     ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set an ARCHETYPE (archetypeId), postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
 
 ARCHETYPE — REQUIRED. You MUST set patch.archetypeId to one of these editorial compositions, chosen by the request's INTENT:
 ${landingArchetypeCatalog()}
+PHOTO-FIRST (default): a standalone post leads with PHOTOGRAPHY. Unless the request is explicitly TEXT-ONLY (a quote, saying, manifesto, mission or values wording), pick a PHOTO-LED archetype (editorial_split, full_bleed_duotone, floated_card, documentary, portrait_credential) and ALWAYS write patch.scenePrompt. Solid-field tiles (big_number, stat_tile, label_headline, serif_word, manifesto, motif_field, cta_card, schedule_tile, brand_card, closing_card) belong to feed sequences and later variations — never the first answer for an everyday brief.
 Routing hints (choose the best fit, not always the same one):
-- a quote / saying / proverb → quote_margin or serif_word
-- a dated event (open house, term start, sports day, deadline) → big_number or editorial_split
-- hiring / a role → label_headline or portrait_credential
-- a photo moment → documentary, floated_card, or full_bleed_duotone
-- an announcement / brand statement → serif_word or motif_field
-- values / mission / manifesto copy → manifesto
+- a quote / saying / proverb / mission / values / manifesto (TEXT-ONLY briefs) → quote_margin, serif_word, or manifesto
+- a dated event (open house, term start, sports day, deadline) → editorial_split (photo beside a PROMINENT date) or full_bleed_duotone (date overlaid on the photo); also floated_card. Put the date in dateText — the engine renders it large.
+- hiring / a role → editorial_split or portrait_credential
+- a photo moment / behind-the-scenes → documentary, floated_card, or full_bleed_duotone
+- an announcement / a welcome / general news → floated_card or editorial_split
 - petal_window ONLY when the user explicitly names the petal / orchid / shape / frame — otherwise NEVER pick it.
 SUGGESTED for THIS request (a soft nudge for variety — override only if intent clearly points elsewhere): ${landingArchetypeHint}.
 
@@ -639,7 +687,7 @@ VARIETY (important — the studio has felt repetitive):
 - OVERLAYS / FRAMES: NEVER add an overlay (addOverlay) unless the user explicitly names the treatment — "frame", "petal", "orchid shape", "cut-out", "overlay". An invite, open house, celebration or festive post is NOT a reason to add one. Default is always NO overlay.
 - AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.
 
-PHOTO (scenePrompt) — when the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), ALSO write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
+PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only brief. When the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
   • ONE scene, ONE subject with a concrete action, a setting, and lighting.
   • The subject is an average ~10-year-old Asian child (or a small still-life of plants/objects) in a bright, calm early-education setting.
   • Example shape (do NOT copy verbatim — fit it to the request): "an average ten-year-old Asian child painting with watercolours at a pale oak table, absorbed and quietly happy, bright soft natural daylight".
@@ -768,10 +816,26 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // same DECOR intent that gates overlays); otherwise it's overridden silently.
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const intent = guessIntent(lastUserText);
+    const textOnly = wantsTextOnly(lastUserText);
     let picked = LANDING_ARCH_BY_ID[patch.archetypeId] ? patch.archetypeId : null;
     if (picked === 'petal_window' && !wantsDecoration(lastUserText)) picked = null; // petal only when named
     if (!picked) picked = resolveLandingArchetype(null, intent); // model omitted / invalid → pick suited
-    const finalArchetype = resolveLandingArchetype(picked, intent);
+    let finalArchetype = resolveLandingArchetype(picked, intent);
+    // ── PHOTO-FIRST DEFAULT ── unless the brief is explicitly text-only, the FIRST
+    // answer is a photo-led composition (solid-field tiles live in the "Try another"
+    // rotation instead — great in a feed, plain standalone). Deterministic, cap-aware.
+    if (!textOnly && !PHOTO_LED.has(finalArchetype)) {
+      finalArchetype = pickPhotoLedArchetype(intent);
+    }
+    // Variety: never serve the SAME photo-led archetype twice in a row — successive
+    // briefs should read as distinct compositions, not the same split re-skinned.
+    if (!textOnly && PHOTO_LED.has(finalArchetype) &&
+        RECENT_PICKS[RECENT_PICKS.length - 1] === finalArchetype) {
+      const prefs = (PHOTO_LED_BY_INTENT[intent] || PHOTO_LED_BY_INTENT.text_post)
+        .filter(id => id !== finalArchetype);
+      const alt = prefs.find(id => !exceedsCap(id)) || prefs[0];
+      if (alt) finalArchetype = alt;
+    }
     patch.archetypeId = finalArchetype;
     recordPick(finalArchetype);
     // Measured palette rotation (spec §3): pick a sanctioned variant index for this
@@ -790,6 +854,12 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // Higgsfield PHOTO job for it (photo-first pipeline); it is NOT an applied field.
     if (archIsPhotoLed && typeof patch.scenePrompt === 'string' && patch.scenePrompt.trim()) {
       landingScenePrompt = sanitizeScenePrompt(patch.scenePrompt);
+    }
+    // (Photo-first) EVERY photo-led landing plan must carry a photographer brief so
+    // the Soul photo pipeline actually fires — the model occasionally omits it, and
+    // a photo-led archetype without a fresh photo was the client's "basic" default.
+    if (archIsPhotoLed && !landingScenePrompt) {
+      landingScenePrompt = fallbackScene(intent);
     }
     // LIBRARY FALLBACK — when Higgsfield is NOT configured (no scene generation path)
     // OR the model gave no scene, attach a Library image so a photo-led design isn't
