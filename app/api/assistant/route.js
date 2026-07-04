@@ -228,7 +228,7 @@ function wantsLayoutChange(text) {
 //   palette       the palette-class hint surfaced in the rotation nudge
 const LANDING_ARCHETYPES = [
   { id:'serif_word',        desc:'oversized serif hero word/phrase on a solid field — announcements, brand statements', suits:['text_post','quote','announcement'], klass:'light', cap:0.18, palette:'ivory field, burnham ink, one coral accent' },
-  { id:'editorial_split',   desc:'photo block + solid text block, seam off-center — dated events, hiring, photo moments', suits:['event','photo_logo','text_post'], klass:'light', cap:0.14, palette:'ivory text block beside a duotone photo' },
+  { id:'editorial_split',   desc:'photo block + solid text block, seam off-center — dated events, hiring, photo moments', suits:['event','photo_logo','text_post'], klass:'light', cap:0.14, palette:'ivory text block beside a warm-graded (near-raw) photo' },
   { id:'big_number',        desc:'a date or number at poster scale is the hero — open house, term start, deadlines', suits:['event'], klass:'light', cap:0.12, palette:'ivory field, big burnham numeral' },
   { id:'full_bleed_duotone',desc:'photo full-bleed under a green duotone + one whisper caption — mood / seasonal photo moments', suits:['photo_logo','texture_text'], klass:'dark', cap:0.12, palette:'deep-green duotone photo, ivory whisper line' },
   { id:'floated_card',      desc:'a small framed photo card floated on a solid field — friendly announcements, photo moments, events', suits:['photo_logo','event','texture_text'], klass:'light', cap:0.20, palette:'ivory field, one rounded photo card, coral accent' },

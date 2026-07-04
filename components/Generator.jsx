@@ -474,7 +474,7 @@ const ARCHETYPES = [
       {bg:"sage",      ink:"burnham",accentUse:"softTangerine",klass:"light"},
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
-    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
     cropDrama:1.18, // (T8) push the crop tighter — v3's split photo read timid vs tile 10's winner
     // (T1) photo archetype → ≤1 tell: a hairline rule dividing hero from the detail tier.
@@ -500,7 +500,7 @@ const ARCHETYPES = [
       {bg:"sky",       ink:"burnham",accentUse:"softTangerine",klass:"light"},
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
-    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["event"], frequencyCap:0.12, usesDateAsHero:true,
     // (T1) v3 tile 3 scored 1/5 "too plain, not centralized for no reason". Anchor the
     // numeral with an underline under the label, a small index top-left, and a bottom
@@ -585,7 +585,7 @@ const ARCHETYPES = [
     palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"field"},
     // Quote stays deep-green (spec §2.6 / §3): the statement register, no pastels.
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
-    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["quote"], frequencyCap:0.14, logoUse:"none", // (P1) statement/quote: no logo
     // (T1) v3 tile 6 "plain but composition slightly better" → 2 tells on the green
     // field: a short hairline rule above the quote (a quote-mark surrogate) and a
@@ -703,7 +703,7 @@ const ARCHETYPES = [
       {bg:"sky",       ink:"burnham",accentUse:"softTangerine",klass:"light"},
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
-    photoTreatment:"duotone", heroRegister:"serif", caps:false,
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","event","quote"], frequencyCap:0.10,
     // (Commit 1) Story: pull the text block up tight under the photo band and shorten the
     // hero so hero + gap + caption all fit between the band and the bottom safe margin
@@ -759,7 +759,7 @@ const ARCHETYPES = [
       {bg:"terracotta",ink:"whiteSmoke",accentUse:"whiteSmoke", klass:"light"},
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",     klass:"dark"},
     ],
-    photoTreatment:"duotoneStrong", heroRegister:"serif", caps:false,
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
     special:"petalWindow", maskAreaFrac:0.40, // (R3b) toward the 35–42% ceiling — signature scale
     // (Commit 1) Story: hero shortened + caption lifted so the hero can't reach the
@@ -3537,7 +3537,10 @@ export default function App() {
         const textCandidates=regions.filter(r=>allowedRows.includes(r.row)&&r.col!==1).map(r=>({...r,score:r.variance+(r.row===1?0.008:0)+(r.col===1?0.02:0)})).sort((a,b)=>a.score-b.score);
         const tr=textCandidates[0]||regions[0],width=base.width;
         chosenLayout={...base,x:tr.col===0?0.08:0.92-width,y:tr.row===0?0.10:tr.row===1?0.38:0.66,align:tr.col===0?"left":"right"};
-        const tinted=!hasFrameLayer&&["quote","event","text_post"].includes(postType),tintStrength=(postType==="text_post"?0.84:0.82)*bgAlpha,bgLum=hexLuminance(curBg?.color||B.burnham);
+        // (WP-U green-filter fix) the full-frame brand tint over photos is retired —
+        // photos render warm/near-raw, so the text-colour director samples the RAW
+        // photo regions (tinted=false always).
+        const tinted=false,tintStrength=(postType==="text_post"?0.84:0.82)*bgAlpha,bgLum=hexLuminance(curBg?.color||B.burnham);
         const textCols=tr.col===0?[0,1]:[1,2],textRows=tr.row===2?[1,2]:[tr.row,Math.min(2,tr.row+1)];
         const textSurfaces=regions.filter(r=>textCols.includes(r.col)&&textRows.includes(r.row)).map(r=>tinted?r.mean*(1-tintStrength)+bgLum*tintStrength:r.mean);
         const textSuggestion=suggestTextColorForSurfaces(textSurfaces);
@@ -4255,12 +4258,13 @@ export default function App() {
           drawPhotoFramed(octx,mediaObj,m.w,m.h,effImgTFor(m.w,m.h,true)); octx.restore();
           octx.globalCompositeOperation="source-over";
           octx.restore();
-          // Duotone the masked photo, then RE-MASK: applyDuotone's blend passes paint the
-          // whole rect (incl. the transparent area OUTSIDE the flower) at low alpha, leaving
-          // a faint tinted rectangle. Knock everything outside the flower back out with a
-          // destination-in pass of the orchid silhouette, so only the flower survives.
-          // (Fixes the sage-green rectangle regression behind the petal window.)
-          applyStrongDuotone(octx,m.x,m.y,m.w,m.h);
+          // Treat the masked photo (WP-U: the MATERIALIZED treatment — warm grade by
+          // default; green duotone only when the design explicitly carries it), then
+          // RE-MASK: blend passes paint the whole rect (incl. the transparent area
+          // OUTSIDE the flower) at low alpha, leaving a faint tinted rectangle. Knock
+          // everything outside the flower back out with a destination-in pass of the
+          // orchid silhouette, so only the flower survives.
+          treatOf(mat.photoTreatment)(octx,m.x,m.y,m.w,m.h);
           octx.save();
           octx.globalCompositeOperation="destination-in";
           octx.translate(m.x+m.w/2,m.y+m.h/2);
@@ -4878,22 +4882,35 @@ export default function App() {
         putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
       }else{putLogo();if(live)textBoundsRef.current=null;}
     }else if(postType==="quote"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.82*bgAlpha);ctx.fillRect(0,0,w,h);}}
-      if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
-      beginText();const q=stripHeroMarkers(headline)||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=stripHeroMarkers(attribution||subtext);
-      ctx.fillStyle=frameBgTextColor||tc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
-      ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
-      if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+      // (WP-U green-filter fix) the full-frame brand tint (a whole-canvas green wash
+      // over the photo) is RETIRED — photos render warm/near-raw (warmGrade) and text
+      // legibility comes from a LOCALIZED band/scrim under the text zone only.
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}}
+      const drawQuoteText=()=>{
+        beginText();const q=stripHeroMarkers(headline)||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=stripHeroMarkers(attribution||subtext);
+        ctx.fillStyle=frameBgTextColor||zoneTc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
+        ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
+        if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+        endText();return used;
+      };
+      // (WP-U green-filter fix) band sized to the DRAWN copy: measure with an
+      // invisible pass, band the measured block only, then draw for real.
+      if(mediaObj&&(!hasFrame||frameOnPhoto)){
+        const _dl=dropped.length;ctx.save();ctx.globalAlpha=0;const est=drawQuoteText();ctx.restore();dropped.length=_dl;
+        const _qb={x:bx,y:by-0.05*h,w:bw,h:est+0.09*h};resolveZoneTc(_qb);drawBackdrop(_qb,false,false);
+      }
+      const used=drawQuoteText();
       setTextBounds(used);
-      endText();
       putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="event"){
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){
-        if(photoBox){drawPhoto();/* left panel stays solid brand colour → no tint over text */}
-        else{drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.8*bgAlpha);ctx.fillRect(0,0,w,h);}
+        if(photoBox){drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,photoBox.x,photoBox.y,photoBox.w,photoBox.h);/* left panel stays solid brand colour */}
+        // (WP-U green-filter fix) full-frame brand tint retired → warm-graded photo +
+        // a LOCALIZED band under the text zone only (drawBackdrop below).
+        else{drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}
       }}
-      if(mediaObj&&((!hasFrame&&!photoBox)||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
-      beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
+      const drawEventText=()=>{
+      beginText();ctx.fillStyle=frameBgTextColor||zoneTc;let used=0;
       if(headline){const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
       if(dateText){const gap=Math.max(42*S,used?48*S:0),parts=dateText.split(" "),day=parts[0]||"",rest=parts.slice(1).join(" ");used+=gap;const df=fitText(ctx,day,s=>`300 ${s}px ${F.title}`,190*S*scale*fm("heading"),bw,maxTextH-used-(subtext?110*S:0),0.95,mf("date",190*S*scale*fm("heading"),120*S));fontMeta.date=df.size;ctx.font=`300 ${df.size}px ${F.title}`;
         // Baseline is alphabetic, so the large date's cap rises ~0.75× its size
@@ -4924,13 +4941,23 @@ export default function App() {
           else{ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
         }
       }
+      endText();return used;
+      };
+      // (WP-U green-filter fix) band sized to the DRAWN copy: invisible measuring
+      // pass -> localized band under the measured block only -> real draw.
+      if(mediaObj&&((!hasFrame&&!photoBox)||frameOnPhoto)){
+        const _dl=dropped.length;ctx.save();ctx.globalAlpha=0;const est=drawEventText();ctx.restore();dropped.length=_dl;
+        const _eb={x:bx,y:by-0.05*h,w:bw,h:est+0.09*h};resolveZoneTc(_eb);drawBackdrop(_eb,false,false);
+      }
+      const used=drawEventText();
       setTextBounds(used);
-      endText();
       putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="text_post"){
-      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
-      if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
-      beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
+      // (WP-U green-filter fix) full-frame brand tint retired → warm-graded photo +
+      // a LOCALIZED band under the text zone only (drawBackdrop below).
+      if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}}
+      const drawTextPostText=()=>{
+      beginText();ctx.fillStyle=frameBgTextColor||zoneTc;let used=0;
       if(subtext){const introFit=fitText(ctx,stripHeroMarkers(subtext),s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
       if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,mf("headline",84*S*scale*fm("heading"),52*S));fontMeta.headline=hf.size;
         // (Crops ext) complete-or-absent: all wrapped lines render or the field drops.
@@ -4946,8 +4973,15 @@ export default function App() {
           if(af.lines.length>2){dropped.push("Subtext");}
           else{ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}}
       }
+      endText();return used;
+      };
+      // (WP-U green-filter fix) measured localized band (see quote/event above).
+      if(mediaObj&&(!hasFrame||frameOnPhoto)){
+        const _dl=dropped.length;ctx.save();ctx.globalAlpha=0;const est=drawTextPostText();ctx.restore();dropped.length=_dl;
+        const _tb={x:bx,y:by-0.05*h,w:bw,h:est+0.09*h};resolveZoneTc(_tb);drawBackdrop(_tb,false,false);
+      }
+      const used=drawTextPostText();
       setTextBounds(used);
-      endText();
       putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
