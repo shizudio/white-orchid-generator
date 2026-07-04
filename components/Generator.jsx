@@ -1500,6 +1500,8 @@ function heroWords(str){
     for(const p of parts){
       if(p==="") continue;
       if(/^\s+$/.test(p)){ if(words.length) words[words.length-1].space=true; continue; }
+      const prev=words[words.length-1];
+      if(prev && prev.space===false && /^[.,!?;:…'’")\]]/.test(p)){ prev.text+=p; continue; }
       words.push({text:p, italic:tok.italic, space:false});
     }
   }
@@ -1600,8 +1602,10 @@ function drawHeroText(ctx, str, opts){
   const lineHeight=size*lr;
   // Clamp to the box height: never draw a line below maxH (controlled truncation, not
   // an edge crop). The reflow engine sizes the box inside the safe margins.
+  let truncated=false;
   if(fit && fit.lines.length*lineHeight>maxH){
     const maxLines=Math.max(1,Math.floor(maxH/lineHeight));
+    truncated=fit.lines.length>maxLines;
     fit={...fit,lines:fit.lines.slice(0,maxLines),lineCount:Math.min(fit.lineCount,maxLines)};
   }
   // Draw.
@@ -1626,12 +1630,12 @@ function drawHeroText(ctx, str, opts){
       else if(baseInk){ ctx.fillStyle=baseInk; }
       ctx.fillText(wtok.text,cx,baseY);
       cx+=ctx.measureText(wtok.text).width;
-      if(wi<lineWords.length-1) cx+=ctx.measureText(" ").width;
+      if(wi<lineWords.length-1 && wtok.space!==false) cx+=ctx.measureText(" ").width;
     });
     if(baseInk) ctx.fillStyle=baseInk;
   });
   if(tracking) ctx.letterSpacing="0px"; // reset so later draws are unaffected
-  return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount};
+  return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount, truncated};
 }
 
 // All-caps micro-label with +0.05–0.12em letterspacing (spec §3). Returns the
@@ -1640,15 +1644,25 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
   const tracking=Math.max(0.05,Math.min(0.12,opts.tracking==null?0.08:opts.tracking));
   const txt=stripHeroMarkers(str).toUpperCase();
   ctx.save();
+  // (Crops ext) FIT-OR-DROP: when opts.maxW is given, shrink the tracked caps line
+  // until it fits its panel width; if it still can't fit at opts.minSize, draw
+  // NOTHING and return null — an eyebrow never crosses its panel/photo seam.
+  const wAt=(s)=>{ctx.font=`400 ${s}px ${F.subtitle}`;ctx.letterSpacing=`${(tracking+0.01)*s}px`;const m=ctx.measureText(txt).width+tracking*s*Math.max(0,txt.length-1);ctx.letterSpacing="0px";return m;};
+  let sz=size;
+  if(opts.maxW){
+    const min=opts.minSize||Math.max(10,size*0.6);
+    while(sz>min && wAt(sz)>opts.maxW) sz-=1;
+    if(wAt(sz)>opts.maxW){ ctx.restore(); return null; }
+  }
   // (R1) THINNER micro-caption — Syne variable floors at 400, so drop 600→400 (its
   // lightest weight) to lighten the eyebrow; +0.01em added to the caps tracking below.
-  ctx.font=`400 ${size}px ${F.subtitle}`;
-  ctx.letterSpacing=`${(tracking+0.01)*size}px`;
+  ctx.font=`400 ${sz}px ${F.subtitle}`;
+  ctx.letterSpacing=`${(tracking+0.01)*sz}px`;
   ctx.textAlign=opts.align||"left";
   ctx.textBaseline="alphabetic";
   const tx=opts.align==="center"?x:opts.align==="right"?x:x;
-  ctx.fillText(txt,tx,y+size);
-  const wpx=ctx.measureText(txt).width+tracking*size*Math.max(0,txt.length-1);
+  ctx.fillText(txt,tx,y+sz);
+  const wpx=ctx.measureText(txt).width+tracking*sz*Math.max(0,txt.length-1);
   ctx.letterSpacing="0px";
   ctx.restore();
   return wpx;
@@ -1885,7 +1899,16 @@ function reflowEditorial(ctx, a){
       hitFloor=true;
       const hardFloor=Math.max(14,0.02*h);
       size=heroMin;
-      while(size>hardFloor && !widestWordFits(size)) size-=2;
+      // (Crops ext) COMPLETE-OR-ABSENT: keep shrinking below the readable min until
+      // the widest word fits the box width AND every wrapped line fits the box
+      // height — a hero renders whole; a mid-sentence clamp never ships.
+      while(size>hardFloor){
+        if(widestWordFits(size)){
+          const f=measureHeroLines(ctx,words,register,size,heroBox.w);
+          if(f.lineCount*size*lr<=heroBox.h) break;
+        }
+        size-=2;
+      }
       heroPx=size; heroLineH=size*lr;
       const fit=measureHeroLines(ctx,words,register,size,heroBox.w); heroUsedH=fit.lineCount*heroLineH;
       flooredRoles.push({label:"Headline"});
@@ -4259,20 +4282,25 @@ export default function App() {
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
 
       let usedH=0;
+      let _midCut=0;   // (Crops ext) count of any mid-copy cut that reached the canvas
       const isSchedule = mat.special==="scheduleRows";
-      // eyebrow (micro-label)
+      // eyebrow (micro-label) — fit-or-drop inside its panel width (crops ext):
+      // shrinks until the tracked caps fit labelBox.w; if impossible, the eyebrow
+      // is dropped whole (never crosses a panel edge / photo seam mid-render).
+      let eyebrowDrawnW=null;
       if(eyebrow && labelBox){
         ctx.save(); ctx.fillStyle=heroInk;
         const lblSize=Math.min(reflow.labelSize, labelBox.h);
-        drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08});
+        eyebrowDrawnW=drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08,maxW:labelBox.w,minSize:Math.max(12*S,lblSize*0.55)});
         ctx.restore();
+        if(eyebrowDrawnW==null){ dropped.push("Eyebrow"); labelBox=null; }
       }
       // (P2 §2.17) SCHEDULE ROWS — serif time + light-sans activity separated by hairline
       // rules (grid #2 "A DAY HERE"). Rows come from the subtext as "time  activity" pairs
       // split on " | " (or newlines). Renders inside the hero box zone; skips the normal
       // hero/support draw for this archetype.
       if(isSchedule && heroBox){
-        const raw=String(ccSubtext||heroFinal||"").trim();
+        const raw=stripHeroMarkers(String(ccSubtext||heroFinal||"")).trim();
         const rows=raw.split(/\s*\|\s*|\n+/).map(r=>r.trim()).filter(Boolean).slice(0,8).map(r=>{
           const m=r.match(/^(\S+)\s+(.+)$/); return m?{t:m[1],a:m[2]}:{t:"",a:r};
         });
@@ -4358,6 +4386,7 @@ export default function App() {
         endText();
         usedH=hr.usedH;
         fontMeta.headline=hr.size;
+        if(hr.truncated) _midCut++;   // (Crops ext) a clamped hero = a mid-copy cut
         setTextBounds(hr.usedH);
       }
       // ── PROMINENT DATE LINE (photo-first c) ──────────────────────────────────
@@ -4367,10 +4396,12 @@ export default function App() {
       // so "18 July" stays prominent beside the photo. It extends usedH, so the
       // surgical caption nudge below pushes the support clear of it — and it never
       // draws past the bottom safe margin (skipped when there is no room).
+      let dateDrawn=null, dateExtH=0;   // the date line's own drawn rect + usedH extension (audit)
       if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox &&
          (mat.photoRegion || mat.fullBleed || (cardBox||maskBox))){
         const _safeTopD=sm.t*h, _safeBotD=(1-sm.b)*h;
         const heroSz=fontMeta.headline||heroBox.h*0.4;
+        const dTxt=stripHeroMarkers(ccDateText);
         // Obstacle + floor awareness: the date must never reach a photo band/card/mask
         // (the same obstacles reflow de-collides text against) nor squeeze the caption
         // past its floor. floor = the bottom safe margin, or the top of a full-width
@@ -4389,21 +4420,23 @@ export default function App() {
         const supBelow=!!(supportText && supBox && supBox.y>=heroBox.y-0.01*h);
         const supNeed=supBelow?(reflow.supMin*1.5+dGap):0;
         const dAlign=(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left";
-        const dTextW=ctx.measureText(ccDateText).width;
+        const dTextW=ctx.measureText(dTxt).width;
         const dX=dAlign==="center"?heroBox.x+(heroBox.w-dTextW)/2:dAlign==="right"?heroBox.x+heroBox.w-dTextW:heroBox.x;
         const clearOfObs=(rect)=>!_dObs||!(rect.x<_dObs.x+_dObs.w&&rect.x+rect.w>_dObs.x&&rect.y<_dObs.y+_dObs.h&&rect.y+rect.h>_dObs.y);
         const drawDate=(dy)=>{ beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
-          drawTextLines(ctx,[ccDateText],heroBox.x,dy+dSz,heroBox.w,dSz*1.05,dAlign);
+          drawTextLines(ctx,[dTxt],heroBox.x,dy+dSz,heroBox.w,dSz*1.05,dAlign);
           fontMeta.date=dSz; endText(); };
         const belowTop=heroBox.y+usedH+dGap;
         const belowRect={x:dX,y:belowTop,w:dTextW,h:dSz*1.28};
         if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
           drawDate(belowTop);
-          usedH+=dH; // the caption nudge + audit envelope see the date
+          dateDrawn=belowRect; dateExtH=dH;
+          usedH+=dH; // the caption nudge sees the date; the audit tracks its own rect
         }else if(mat.fullBleed && heroBox.y-_safeTopD>=dSz*1.6){
           // Full-bleed whisper tiles keep their caption low — overlay the date ABOVE
           // the hero on the photo instead (the reference "date overlay" treatment).
           drawDate(heroBox.y-dSz*1.6);
+          dateDrawn={x:dX,y:heroBox.y-dSz*1.6,w:dTextW,h:dSz*1.28};
         }
       }
       const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
@@ -4476,11 +4509,31 @@ export default function App() {
           // trailing lines until it fits — a bulletproof no-clip guarantee (min 1 line).
           const _lineBottom=(n)=>supBox.y+sf.size+(n-1)*sf.lineHeight+sf.size*0.28;
           while(_roomLines>1 && _lineBottom(_roomLines)>_floor) _roomLines--;
-          const _lines=sf.lines.slice(0,Math.min(3,_roomLines));
-          drawTextLines(ctx,_lines,supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
+          // (Matrix hardening) even a SINGLE line at its floored size can cross the
+          // floor by a few px (short wide formats, e.g. a quote-margined 16:9). Lift
+          // the box just enough — never above the hero's real bottom — and if there
+          // is genuinely no room for one clean line, DROP the caption (controlled
+          // degradation, spec §6) rather than clipping at the margin.
+          let _supY=supBox.y;
+          if(_lineBottom(_roomLines)>_floor){
+            const _lift=_lineBottom(_roomLines)-_floor;
+            const _heroBot=(heroBox&&usedH>0)?heroBox.y+usedH+0.008*h:sm.t*h;
+            _supY=Math.max(_heroBot,supBox.y-_lift);
+          }
+          const _supOneBottom=_supY+sf.size+(_roomLines-1)*sf.lineHeight+sf.size*0.28;
+          // (Crops ext) COMPLETE-OR-ABSENT: the caption renders ALL its wrapped
+          // lines or not at all — a mid-sentence cut never ships (client rule).
+          if(_supOneBottom>_floor+0.005*h || sf.lines.length>Math.min(3,_roomLines)){
+            dropped.push("Details");
+            ctx.letterSpacing="0px";
+          }else{
+          const _lines=sf.lines;
+          drawTextLines(ctx,_lines,supBox.x,_supY+sf.size,supBox.w,sf.lineHeight,supAlign);
           ctx.letterSpacing="0px";
           fontMeta.subtext=sf.size;
           supUsedH=Math.max(sf.size, _lines.length*sf.lineHeight);
+          if(_supY!==supBox.y) supBox={...supBox,y:_supY};
+          }
         }
         if(!supUsedH) supUsedH=fontMeta.subtext||supBox.h*0.4;
         endText();
@@ -4615,14 +4668,14 @@ export default function App() {
         // only for full-bleed (the hero sits on the treated photo by design); every
         // other role-pair overlap is a collision the reflow pass should have removed.
         // Zero = clean (the audit assertion the client asked for).
-        const heroDrawn=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||0)}:null;
+        const heroDrawn=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH-(dateExtH||0),fontMeta.headline||0)}:null;
         // (Commit 1) Use the caption's REAL multi-line drawn height (supUsedH), not a single
         // line — a 3-line caption that spilled under the bottom-right logo was invisible to
         // the assertion when supDrawn measured only one line (the square logo↔caption bug).
         const supDrawn=supBox&&supportText?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.3)}:null;
-        const labelDrawn=labelBox&&eyebrow?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:reflow.labelSize||labelBox.h}:null;
+        const labelDrawn=labelBox&&eyebrow?{x:labelBox.x,y:labelBox.y,w:(eyebrowDrawnW||labelBox.w),h:reflow.labelSize||labelBox.h}:null;
         const ix=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
-        const textRoles=[heroDrawn,supDrawn,labelDrawn].filter(Boolean);
+        const textRoles=[heroDrawn,supDrawn,labelDrawn,dateDrawn].filter(Boolean);
         let boxOverlaps=0;
         for(let i=0;i<textRoles.length;i++)for(let j=i+1;j<textRoles.length;j++) if(ix(textRoles[i],textRoles[j])) boxOverlaps++;
         // Text vs photo obstacle (card/mask/split) — a real collision unless fullBleed.
@@ -4655,9 +4708,9 @@ export default function App() {
             supportFloor:(mat.heroToSupport||8),
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
-            warmthDevices, pastelClash, boxOverlaps, outOfMargin,
+            warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
-                    photo:photoObs||null, fullBleed:!!mat.fullBleed },
+                    photo:photoObs||null, fullBleed:!!mat.fullBleed, sm:{...sm}, postType },
           },
         };
       }
@@ -4774,10 +4827,10 @@ export default function App() {
         // microscopic overflow; the floor is now the per-format legible minimum).
         if(room<detailFloor*1.3){dropped.push("Details");}
         else{
-          const sf=fitText(ctx,subtext,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,detailFloor);fontMeta.subtext=sf.size;
-          const lines=sf.lines.slice(0,Math.max(1,maxDetail));
-          if(lines.length<sf.lines.length)dropped.push("Details (truncated)");
-          ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,lines,bx,by+used+gap,bw,sf.lineHeight,align);
+          const sf=fitText(ctx,stripHeroMarkers(subtext),s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,detailFloor);fontMeta.subtext=sf.size;
+          // (Crops ext) complete-or-absent: render every line or drop the field.
+          if(sf.lines.length>Math.max(1,maxDetail)){dropped.push("Details");}
+          else{ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
         }
       }
       setTextBounds(used);
@@ -4787,15 +4840,20 @@ export default function App() {
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();ctx.fillStyle=withAlpha(curBg.color,0.84*bgAlpha);ctx.fillRect(0,0,w,h);}}
       if(mediaObj&&(!hasFrame||frameOnPhoto))drawBackdrop({x:bx,y:by,w:bw,h:maxTextH*0.7},false,!frameOnPhoto);
       beginText();ctx.fillStyle=frameBgTextColor||tc;let used=0;
-      if(subtext){const introFit=fitText(ctx,subtext,s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
-      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,headline.toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,mf("headline",84*S*scale*fm("heading"),52*S));fontMeta.headline=hf.size;const hlLines=hf.lines.slice(0,Math.max(1,fmt.maxLines??3));if(hlLines.length<hf.lines.length)dropped.push("Headline (truncated)");ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hlLines,bx,by+used+gap,bw,hf.lineHeight,align);}
+      if(subtext){const introFit=fitText(ctx,stripHeroMarkers(subtext),s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
+      if(headline){const gap=Math.max(40*S,used?48*S:0),remaining=maxTextH-used-gap-(attribution?120*S:0);const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,84*S*scale*fm("heading"),bw,Math.max(remaining,150*S),1.08,mf("headline",84*S*scale*fm("heading"),52*S));fontMeta.headline=hf.size;
+        // (Crops ext) complete-or-absent: all wrapped lines render or the field drops.
+        if(hf.lines.length>Math.max(1,fmt.maxLines??3)){dropped.push("Headline");}
+        else{ctx.font=`700 ${hf.size}px ${F.subtitle}`;used+=gap+drawTextLines(ctx,hf.lines,bx,by+used+gap,bw,hf.lineHeight,align);}}
       if(attribution){
         const gap=Math.max(36*S,48*S),room=maxTextH-used-gap;
         const subFloor=mf("body",38*S*scale*fm("content"),32*S);
         // Tertiary subtext drops if no room for a line at its READABLE floor (spec §6
         // step 2 + Task 4 — clean drop beats microscopic text).
         if(room<subFloor*1.3){dropped.push("Subtext");}
-        else{const af=fitText(ctx,attribution,s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,subFloor);ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines.slice(0,2),bx,by+used+gap,bw,af.lineHeight,align);}
+        else{const af=fitText(ctx,stripHeroMarkers(attribution),s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,subFloor);
+          if(af.lines.length>2){dropped.push("Subtext");}
+          else{ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}}
       }
       setTextBounds(used);
       endText();
@@ -5135,7 +5193,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -5143,18 +5201,31 @@ export default function App() {
             const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
             renderScene(c.getContext("2d"), dm.w, dm.h, { dimensionId: dimId, live: false, captureAudit: true, archOverride: id, calibrationContent: cc });
             const dr = auditRef.current?.archetypeDrift || {};
-            const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0;
-            overlaps += o; crops += cr;
-            if (o || cr) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, diag: dr._diag || null });
+            const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0, mc = dr.midCut || 0;
+            overlaps += o; crops += cr; midcuts += mc;
+            if (o || cr || mc) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0, totalOverlaps: overlaps, totalCrops: crops, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
     };
-    return () => { try { delete window.__woArchStress; } catch {} };
+    // Single-cell probe (verification): render ONE archetype x format offscreen and
+    // return that cell's drift snapshot (boxes + overlap/crop flags).
+    window.__woCell = (archId, dimId, content) => {
+      const dm = DIMENSIONS.find(d => d.id === dimId);
+      if (!dm || !ARCHETYPE_IDS.includes(archId)) return null;
+      const prev = auditRef.current, prevBounds = textBoundsRef.current;
+      try {
+        const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
+        renderScene(c.getContext("2d"), dm.w, dm.h, { dimensionId: dimId, live: false, captureAudit: true, archOverride: archId, calibrationContent: content || {} });
+        return JSON.parse(JSON.stringify(auditRef.current?.archetypeDrift || null));
+      } catch (e) { return { error: String(e) }; }
+      finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
+    };
+    return () => { try { delete window.__woArchStress; delete window.__woCell; } catch {} };
   }, [renderScene]);
 
   /* ── CLIENT-REPRO HARNESS (Commit 4 verification, dev-only) ──────────────────
