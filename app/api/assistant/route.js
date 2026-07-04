@@ -461,6 +461,27 @@ function stripEmphasisMarkers(s) {
   return String(s || '').replace(/\*([^*]+)\*/g, '$1');
 }
 
+// ── TONE SCRUB (brand voice, spec §0) ────────────────────────────────────────
+// The brand never exclaims. Prompt rules reduce it, but the model still slips
+// ("Join Us for Our Open House!") — so exclamation marks are scrubbed
+// deterministically from every model-written copy field: sentence-ending "!"
+// becomes ".", mid-sentence "!" is dropped. Idempotent, whitespace-tidy.
+function toneScrub(s) {
+  if (typeof s !== 'string') return s;
+  return s
+    .replace(/!+(\s|$)/g, '.$1')  // end-of-clause bangs → a calm period
+    .replace(/!+/g, '')            // any leftovers (mid-word decorations) vanish
+    .replace(/\.{2,}/g, '.')       // "!." pile-ups collapse
+    .replace(/\s+([.,])/g, '$1');
+}
+// Fields the scrub applies to — every user-visible copy surface in a patch.
+const TONE_FIELDS = ['headline', 'subtext', 'attribution', 'dateText'];
+function toneScrubPatch(patch) {
+  if (!patch || typeof patch !== 'object') return patch;
+  for (const f of TONE_FIELDS) if (typeof patch[f] === 'string') patch[f] = toneScrub(patch[f]);
+  return patch;
+}
+
 function captionSourceFacts(d) {
   const facts = [];
   if (d.headline) facts.push(`Headline: ${stripEmphasisMarkers(d.headline)}`);
@@ -478,7 +499,7 @@ async function handleCaption({ apiKey, designState, brandContext, model, rewrite
 
   const systemPrompt = `You are the social copywriter for The White Orchid, a Singaporean preschool / early-education brand for young families. You write the post caption that a staff member will publish alongside a design they just made.
 
-Brand voice: ${brandContext.tone}. Warm, plain-English, parent-facing, gently reassuring, never salesy, never corporate. Singapore preschool context (write for local parents; British/Singapore English is fine).
+Brand voice: ${brandContext.tone}. Warm, plain-English, parent-facing, gently reassuring, never salesy, never corporate. NEVER use exclamation marks — calm sentence case throughout. Singapore preschool context (write for local parents; British/Singapore English is fine).
 
 Write for this platform — follow its conventions exactly:
 ${platform.rules}
@@ -528,7 +549,7 @@ Brand context: ${JSON.stringify(brandContext)}`;
   }
   let parsed;
   try { parsed = JSON.parse(getOutputText(result)); } catch { parsed = null; }
-  let caption = typeof parsed?.caption === 'string' ? parsed.caption.trim() : '';
+  let caption = typeof parsed?.caption === 'string' ? toneScrub(parsed.caption.trim()) : '';
   let hashtags = Array.isArray(parsed?.hashtags)
     ? parsed.hashtags.map(t => String(t || '').replace(/^#+/, '').trim()).filter(Boolean).slice(0, 8)
     : [];
@@ -706,6 +727,12 @@ ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT o
   const systemPrompt = `You are the Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
 
 Brand voice: ${brandContext.tone}. Warm, plain-English, never salesy.
+COPY TONE (applies to EVERY copy field you write — headline, subtext, attribution, reply):
+- NEVER use an exclamation mark. Not one. Calm confidence, not excitement.
+- Never salesy or promotional ("Join us for a day of discovery and learning!" is exactly wrong). No urgency phrases, no hype adjectives, no "don't miss".
+- Sentence case, not Title Case ("Come and see for yourself", not "Join Us For Our Open House").
+- Short, quiet, editorial. An invitation reads like a note from a calm teacher, not a flyer.
+- Avoid brochure clichés: "Join us for…", "a day of discovery and learning", "fun-filled", "exciting". Prefer plain, concrete lines ("Come and see for yourself", "Doors open at nine").
 
 You reply with JSON matching the provided schema: { reply, patch }.
 - reply: under 2 sentences, warm and plain-English, describing what you changed (or, if you can't do something, saying so briefly and suggesting the nearest possible action).
@@ -781,8 +808,10 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   } catch {
     return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
   }
-  const reply = typeof parsed?.reply === 'string' ? parsed.reply : '';
-  const patch = parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {};
+  // (Tone) scrub exclamation marks from every model-written copy surface —
+  // the brand never exclaims (spec §0 voice; deterministic belt over the prompt).
+  const reply = typeof parsed?.reply === 'string' ? toneScrub(parsed.reply) : '';
+  const patch = toneScrubPatch(parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {});
   if (!reply) {
     return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
   }

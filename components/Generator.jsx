@@ -3622,7 +3622,15 @@ export default function App() {
       const PHOTO_LED_RING = ['editorial_split', 'floated_card', 'full_bleed_duotone', 'documentary', 'portrait_credential'];
       const SOLID_RING = ['big_number', 'label_headline', 'stat_tile', 'serif_word', 'cta_card'];
       const start = tryAnotherRef.current.startId ?? (tryAnotherRef.current.startId = archetypeId);
-      const ring = [...PHOTO_LED_RING.filter(id => id !== start), ...SOLID_RING.filter(id => id !== start)];
+      // INTERLEAVED ring: photo-led alternates and solid feed tiles take turns
+      // (photo -> solid -> photo ...), so the solid looks stay quickly reachable
+      // without ever being the first answer - and successive takes feel distinct.
+      const ps = PHOTO_LED_RING.filter(id => id !== start), ss = SOLID_RING.filter(id => id !== start);
+      const ring = [];
+      for (let i = 0; i < Math.max(ps.length, ss.length); i++) {
+        if (ps[i]) ring.push(ps[i]);
+        if (ss[i]) ring.push(ss[i]);
+      }
       const n = tryAnotherRef.current.n++;
       const nextId = ring.length ? ring[n % ring.length] : archetypeId;
       nextIsPhotoLed = PHOTO_LED_RING.includes(nextId) || nextId === null;
@@ -3761,7 +3769,13 @@ export default function App() {
       const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,drawInkLum,frameBox);
       if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
       const effSizeId=logoOpts.sizeId||place.sizeId; // (P1) logoUse:"mark" forces small
-      const pct=LOGO_SIZES.find(s=>s.id===effSizeId)?.pct||0.12,lSz=w*pct;
+      const pct=LOGO_SIZES.find(s=>s.id===effSizeId)?.pct||0.12;
+      // (Crops addendum) WIDE-FORMAT SCALE CAP — width-relative sizing balloons on
+      // the short wide canvases (banner 3:1: 0.12*w = 36% of the height, dwarfing
+      // the headline). Cap the drawn lockup at 30% of the canvas HEIGHT on the
+      // wide formats so the logo is never the largest element on a tile.
+      const _wideCap=["twitter","facebook","banner"].includes(dimId)?0.30*h:Infinity;
+      const lSz=Math.min(w*pct,_wideCap);
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
       const[lx,ly]=logoCenter(pos,w,h,lSz);
       // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
@@ -4645,7 +4659,14 @@ export default function App() {
             if(tinted) containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
           }
         }
-      } else if(drawLockup) putLogo(textEnvelope,logoOpts);
+      } else if(drawLockup){
+        // (Crops addendum) WIDE-FORMAT LOCKUP CAP — outside the brand bookends the
+        // lockup must never be the largest element on a tile; on the wide formats
+        // (twitter/facebook/banner) it draws at the SMALL size regardless of the
+        // square-tuned size id (the client's banner lockup ran ~2x the headline).
+        const _wideDim=["twitter","facebook","banner"].includes(dimId);
+        putLogo(textEnvelope, _wideDim?{...logoOpts,sizeId:"s"}:logoOpts);
+      }
       else if(logoUse==="lockup"){ /* archetype lockup w/o user touch handled below */ }
       // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
       // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
@@ -4729,7 +4750,9 @@ export default function App() {
         // never be the largest element: flag a drawn lockup taller than ~1.6x the
         // hero glyph size (the client's banner lockup ran ~2x the headline).
         const _bookend=archetypeId==="brand_card"||archetypeId==="closing_card"||provArch?.id==="brand_card"||provArch?.id==="closing_card";
-        const logoDominant=!!(!_bookend && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
+        // User-pinned logos are explicit intent (and height-capped on wide formats);
+        // the dominance assertion guards the AUTO composition only.
+        const logoDominant=!!(!_bookend && !userLogoTouched && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
