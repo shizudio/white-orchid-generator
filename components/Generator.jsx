@@ -4894,6 +4894,7 @@ export default function App() {
         const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
+          copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
           archetypeDrift:{
@@ -5152,6 +5153,7 @@ export default function App() {
         hasMedia:!!mediaObj,
         backdropMode:backdropMode||"auto",
         textColorId,
+        copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
         zoneContrast:contrast,          // {min,max,mean} or null
         flooredRoles,                   // [{label}]
         dropped:[...dropped],           // spec §6 drops active this render
