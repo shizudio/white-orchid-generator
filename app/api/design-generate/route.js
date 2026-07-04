@@ -21,7 +21,7 @@
    Vercel-stateless-safe).
    ───────────────────────────────────────────────────────────────────────── */
 
-import { startPhotoJob, pollPhotoJob, higgsfieldConfigured } from '@/lib/higgsfield';
+import { startPhotoJob, pollPhotoJob, higgsfieldConfigured, qcPhoto } from '@/lib/higgsfield';
 import { PATCH_OPTIONS } from '@/lib/design-patch';
 
 export const runtime = 'nodejs';
@@ -79,6 +79,18 @@ export async function GET(request) {
   if (poll.status === 'pending') return Response.json({ status: 'pending' });
   if (poll.status !== 'done' || !poll.imageB64) {
     return Response.json({ status: 'failed' }); // failed / nsfw / no image → client falls back
+  }
+  // (WP-U #4) PHOTO QC on completed Higgsfield generations ONLY (Library photos
+  // never pass through this route): rendered text/letters or a poster/framed
+  // layout makes the background unusable → tell the client so it can re-roll
+  // once with a fresh seed (max 2 attempts), then fall back to Library/samples.
+  // qc=0 skips (e.g. the final attempt keeps whatever it got). Degrades open.
+  const skipQc = searchParams.get('qc') === '0';
+  if (!skipQc) {
+    const qc = await qcPhoto(poll.imageB64);
+    if (!qc.pass) {
+      return Response.json({ status: 'qc_failed', textOrLetters: !!qc.textOrLetters, posterOrLayout: !!qc.posterOrLayout });
+    }
   }
   return Response.json({ status: 'done', imageDataUrl: `data:image/png;base64,${poll.imageB64}` });
 }

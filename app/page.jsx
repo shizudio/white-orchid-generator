@@ -44,31 +44,41 @@ export default function Home() {
   // pipeline. Returns a photo data URL, or null to signal the caller to fall back
   // (Library photo / solid-field). NEVER throws.
   async function generateScenePhoto(scene, dimensionId = 'ig_square') {
-    let start;
-    try {
-      const res = await fetch('/api/design-generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scene, dimensionId }),
-      });
-      start = await res.json().catch(() => ({}));
-      if (!res.ok) return null;
-    } catch { return null; }
-    if (start.unconfigured || start.failed || !start.jobId) return null;
-
-    const qs = new URLSearchParams({ jobId: start.jobId }).toString();
+    // (WP-U #4) QC + AUTO RE-ROLL: a completed generation that fails the server's
+    // vision QC (rendered text / poster-layout) is re-rolled ONCE with a fresh
+    // seed — max 2 attempts — then the caller falls back to Library/samples.
+    const MAX_ATTEMPTS = 2;
     const deadline = Date.now() + GEN_POLL_MAX_MS;
-    while (Date.now() < deadline) {
-      await sleep(GEN_POLL_INTERVAL_MS);
-      let poll;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS && Date.now() < deadline; attempt++) {
+      let start;
       try {
-        const res = await fetch(`/api/design-generate?${qs}`);
-        poll = await res.json().catch(() => ({}));
-      } catch { continue; } // transient — keep polling within the budget
-      if (poll.status === 'pending') continue;
-      if (poll.status === 'done' && poll.imageDataUrl) return poll.imageDataUrl;
-      return null; // failed / nsfw → fall back
+        const res = await fetch('/api/design-generate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scene, dimensionId }),
+        });
+        start = await res.json().catch(() => ({}));
+        if (!res.ok) return null;
+      } catch { return null; }
+      if (start.unconfigured || start.failed || !start.jobId) return null;
+
+      // The LAST attempt skips QC — keep whatever the roll produced over nothing.
+      const qs = new URLSearchParams({ jobId: start.jobId, ...(attempt >= MAX_ATTEMPTS ? { qc: '0' } : {}) }).toString();
+      let reroll = false;
+      while (Date.now() < deadline) {
+        await sleep(GEN_POLL_INTERVAL_MS);
+        let poll;
+        try {
+          const res = await fetch(`/api/design-generate?${qs}`);
+          poll = await res.json().catch(() => ({}));
+        } catch { continue; } // transient — keep polling within the budget
+        if (poll.status === 'pending') continue;
+        if (poll.status === 'done' && poll.imageDataUrl) return poll.imageDataUrl;
+        if (poll.status === 'qc_failed') { reroll = true; break; } // fresh seed next loop
+        return null; // failed / nsfw → fall back
+      }
+      if (!reroll) return null; // timed out → fall back
     }
-    return null; // timed out → fall back
+    return null;
   }
 
   function startStageTicker() {
