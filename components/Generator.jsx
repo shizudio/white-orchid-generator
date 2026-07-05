@@ -7899,63 +7899,11 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
-              {/* (WP-U #8) Refresh photo — re-runs ONLY the photo fetch (same
-                  scenePrompt via Higgsfield when available, else Library rotation)
-                  without touching copy or layout. */}
-              {mediaObj && (
-                <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
-                  aria-label="Refresh photo"
-                  title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
-                  style={{position:"absolute",top:10,left:10,zIndex:8,display:"inline-flex",alignItems:"center",gap:6,
-                    padding:"6px 12px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",
-                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
-                    cursor:refreshingPhoto?"wait":"pointer",boxShadow:"0 2px 10px rgba(43,80,64,0.14)",opacity:refreshingPhoto?0.7:1}}>
-                  <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
-                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
-                </button>
-              )}
-              {/* ── (WP-W0) FLOATING UNDO — a small, airy affordance beside the
-                    canvas (the top-bar Undo alone is too far from the eye). Appears
-                    once there is anything to undo/redo; thin type, on-brand. ── */}
-              {(aiUndoStack.length>0||redoStack.length>0)&&(
-                <div style={{position:"absolute",bottom:10,right:10,zIndex:8,display:"inline-flex",gap:6}}>
-                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
-                    aria-label="Undo" title="Undo the last change (⌘Z)"
-                    style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:999,
-                      border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
-                      fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
-                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4,
-                      boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
-                    <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
-                  </button>
-                  {redoStack.length>0&&(
-                    <button type="button" onClick={redoLastChange}
-                      aria-label="Redo" title="Redo (⇧⌘Z)"
-                      style={{display:"inline-flex",alignItems:"center",padding:"6px 10px",borderRadius:999,
-                        border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
-                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer",
-                        boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
-                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* ── (WP-W) SAVE-AS-TEMPLATE MOMENT (ux-architecture §2.7) ── One
-                    gentle inline nudge after a successful export — the moment of
-                    proven success. One tap saves via the existing template path;
-                    dismissal is remembered per session (don't nag). ── */}
-              {exportNudge && (
-                <div role="status" style={{position:"absolute",left:"50%",bottom:14,transform:"translateX(-50%)",zIndex:9,
-                  display:"inline-flex",alignItems:"center",gap:12,maxWidth:"92%",
-                  padding:"10px 14px",borderRadius:14,background:"rgba(255,255,255,0.97)",
-                  border:`1px solid ${B.ash}44`,boxShadow:"0 6px 24px rgba(43,80,64,0.18)"}}>
-                  <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Want to reuse this design? Save it as a template.</span>
-                  <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
-                    style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
-                  <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
-                    style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
-                </div>
-              )}
+              {/* (canvas-chrome §3) The Refresh-photo, Undo/Redo, and export nudge
+                  affordances were moved OUT of the canvas shell into the control
+                  strip + toast BELOW the canvas — nothing persistent may obscure the
+                  design at rest. Only the intrinsic on-canvas editing affordances
+                  (EditorChrome selection handles + ghost add-slots) live in here. */}
               {/* ── GHOST SLOTS — faint dashed add-affordances in empty role
                     regions (visible on hover/tap; always faintly visible on
                     touch devices via CSS). ── */}
@@ -7974,6 +7922,64 @@ export default function App() {
               ))}
             </div>
           </div>
+
+          {/* ── BELOW-CANVAS CONTROL STRIP (canvas-chrome §3) ── Affordances that
+              used to float OVER the artwork now live here, beneath the canvas, so
+              the preview at rest shows ONLY the design. Refresh photo (photo posts)
+              + Undo/Redo (once there's history) sit in one airy row. */}
+          {(mediaObj || aiUndoStack.length>0 || redoStack.length>0) && (
+            <div className="generator-canvas-controls" style={{width:"100%",maxWidth:820,marginTop:12,display:"flex",gap:8,justifyContent:"center",alignItems:"center",flexWrap:"wrap"}}>
+              {mediaObj && (
+                <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
+                  aria-label="Refresh photo"
+                  title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
+                  style={{display:"inline-flex",alignItems:"center",gap:6,
+                    padding:"7px 13px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"#fff",
+                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
+                    cursor:refreshingPhoto?"wait":"pointer",opacity:refreshingPhoto?0.7:1}}>
+                  <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
+                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
+                </button>
+              )}
+              {(aiUndoStack.length>0||redoStack.length>0)&&(
+                <div style={{display:"inline-flex",gap:6}}>
+                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
+                    aria-label="Undo" title="Undo the last change (⌘Z)"
+                    style={{display:"inline-flex",alignItems:"center",gap:6,padding:"7px 13px",borderRadius:999,
+                      border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
+                      fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
+                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4}}>
+                    <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
+                  </button>
+                  {redoStack.length>0&&(
+                    <button type="button" onClick={redoLastChange}
+                      aria-label="Redo" title="Redo (⇧⌘Z)"
+                      style={{display:"inline-flex",alignItems:"center",padding:"7px 11px",borderRadius:999,
+                        border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
+                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer"}}>
+                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── SAVE-AS-TEMPLATE TOAST (canvas-chrome §3) ── The post-export nudge
+              now renders BELOW the canvas (never over the artwork). One gentle line;
+              dismissal remembered per session. */}
+          {exportNudge && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
+              padding:"10px 14px",borderRadius:14,background:"#fff",
+              border:`1px solid ${B.ash}44`,boxShadow:"0 2px 10px rgba(43,80,64,0.10)"}}>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Want to reuse this design? Save it as a template.</span>
+              <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
+              <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
+            </div>
+          )}
 
           {/* Live format strip — one thumbnail per dimension, click to switch */}
           <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:16,display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
