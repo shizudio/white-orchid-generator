@@ -6625,11 +6625,12 @@ export default function App() {
   const deriveSessionTitle = () => {
     const clip = (s) => String(s || "").trim().replace(/\s+/g, " ").slice(0, 60);
     if (sessionTitle) return sessionTitle;
-    const brief = genBrief?.headline || genBrief?.scene;
-    if (brief) return clip(brief);
-    if (headline && headline.trim()) return clip(headline);
+    // The user's own brief — NEVER genBrief.scene, which is the internal
+    // Higgsfield photographer prompt ("an average ten-year-old Asian…").
+    if (genBrief?.message) return clip(genBrief.message);
     const firstUser = sessionConversation.find(m => m.role === "user" && m.content);
     if (firstUser) return clip(firstUser.content);
+    if (headline && headline.trim()) return clip(headline);
     if (subtext && subtext.trim()) return clip(subtext);
     return (curType?.label || "Post");
   };
@@ -7737,7 +7738,7 @@ export default function App() {
                     canvas (the top-bar Undo alone is too far from the eye). Appears
                     once there is anything to undo/redo; thin type, on-brand. ── */}
               {(aiUndoStack.length>0||redoStack.length>0)&&(
-                <div style={{position:"absolute",top:10,right:10,zIndex:8,display:"inline-flex",gap:6}}>
+                <div style={{position:"absolute",bottom:10,right:10,zIndex:8,display:"inline-flex",gap:6}}>
                   <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
                     aria-label="Undo" title="Undo the last change (⌘Z)"
                     style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:999,
