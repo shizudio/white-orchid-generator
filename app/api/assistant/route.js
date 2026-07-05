@@ -607,6 +607,8 @@ function compactDesignState(raw) {
   return {
     postType, archetypeId: archetypeId ?? null, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
+    // (WP-V) eyebrow + pill presence so the model can add/edit/remove them.
+    microLabel: raw.microLabel ?? null, pillText: raw.pillText ?? null,
     logoId: selectedLogoId, logoPosition, logoSize,
     fontSizes: fontSizes || undefined,
     overlays,
@@ -722,7 +724,16 @@ PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only b
   • Leave scenePrompt NULL for text-only archetypes (serif_word, manifesto, quote_margin, motif_field, stat_tile, brand_card, closing_card, schedule_tile) — those are solid-field designs with no photo.`
     : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).
 
-ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.`;
+ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.
+
+VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describe elements by what they LOOK like, not by design terms. Map their words to the right field, and it must Just Work:
+- "small text at the bottom / under the title / a little caption / a note that says …" → subtext
+- "small label at the top / little caps text / the tiny heading above" → microLabel
+- "a button / a tag / a badge / one of those pill things" → pillText
+- "the date / when it is" → dateText (only a date the user actually supplied)
+- "the big text / the title / the main words" → headline
+TEACH THE TERM BACK: when you add or change a mapped element, your reply gently names it once so the user learns the word — e.g. "Added that as a caption — the small text under your headline. Tap it anytime to edit." or "That's the eyebrow — the little label up top. Done." Keep it warm, one sentence, never lecture.
+REMOVING: "get rid of the small text / label / button" → set that field to "" (empty string removes it explicitly).`;
 
   const systemPrompt = `You are the Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
 

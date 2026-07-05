@@ -1261,6 +1261,35 @@ canvas[role="application"]:focus-visible {
   .wo-chat-list { min-height: 180px; }
 }
 
+/* ── Ghost slots (§3.2) — faint dashed add-affordances in empty role regions.
+   Invisible until hover/focus on pointer devices; faintly visible on touch. ── */
+.wo-ghost {
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 8px;
+  background: transparent;
+  border: 1.5px dashed color-mix(in srgb, var(--tw-burnham) 40%, transparent);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--tw-burnham) 75%, transparent);
+  font-family: var(--font-syne);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms ease, background 160ms ease;
+}
+.generator-canvas-shell:hover .wo-ghost { opacity: 0.55; }
+.wo-ghost:hover, .wo-ghost:focus-visible {
+  opacity: 1 !important;
+  background: color-mix(in srgb, #ffffff 55%, transparent);
+}
+@media (hover: none) {
+  .wo-ghost { opacity: 0.45; }
+}
+
 /* ── Inspector: shared shell ── */
 .wo-inspector {
   display: flex;

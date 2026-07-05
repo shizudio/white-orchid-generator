@@ -2635,10 +2635,10 @@ export default function App() {
   // the renderer NEVER forks on it.
   const [photoTreatment, setPhotoTreatment] = useState("none");
   const [photoFrame, setPhotoFrame] = useState({ type: "none" });
-  const [microLabel, setMicroLabel] = useState("");
+  const [microLabel, setMicroLabel] = useState(null); // null = unset (fallback allowed) · "" = explicitly none (WP-V sentinel)
   // (WP-U fix #1) User override for the accent PILL/badge label (archetype furniture).
   // "" = the archetype's authored badge text; non-empty = the user's own label.
-  const [pillText, setPillText] = useState("");
+  const [pillText, setPillText] = useState(null); // null = archetype badge · "" = explicitly none · text = override (WP-V sentinel)
   const [heroRegister, setHeroRegister] = useState("");   // "" = legacy caps-sans hero
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
@@ -2987,7 +2987,7 @@ export default function App() {
       // bg from the RESOLVED VARIANT palette (m.palette), not the base — this is how the
       // sanctioned palette rotation lands on the canvas as a real bgColor.
       postType: pt, bg: (m.palette?.bg && BG_ID_SET.has(m.palette.bg)) ? m.palette.bg : null,
-      register: m.register, microLabel: shortAttr ? attr : "",
+      register: m.register, microLabel: shortAttr ? attr : null,
       photoTreatment: m.photoTreatment || "none", photoFrame: frame,
       layout, motifLayers,
     };
@@ -3012,7 +3012,7 @@ export default function App() {
     setLogoVariantTouched(false);
     setHeroRegister(mat.register);
     setMicroLabel(mat.microLabel);
-    setPillText("");   // fresh materialization → the archetype's authored pill label
+    setPillText(null); // fresh materialization → the archetype's authored pill label
     setPhotoTreatment(mat.photoTreatment);
     setPhotoFrame(mat.photoFrame);
     setTypeLayouts(prev => ({
@@ -3323,8 +3323,8 @@ export default function App() {
     // Restore materialized archetype visuals (Commit 1) — older snapshots omit them.
     setPhotoTreatment(s.photoTreatment || "none");
     setPhotoFrame(s.photoFrame || { type: "none" });
-    setMicroLabel(s.microLabel || "");
-    setPillText(s.pillText || "");
+    setMicroLabel("microLabel" in s ? s.microLabel : null);
+    setPillText("pillText" in s ? s.pillText : null);
     setHeroRegister(s.heroRegister || "");
     if (s.typeLayouts) setTypeLayouts(s.typeLayouts);
     setSelectedLogoId(s.selectedLogoId);
@@ -3364,8 +3364,9 @@ export default function App() {
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
   const chatDesignState = () => ({
-    postType, dimensionId, bgColor, textColorId, backdropMode,
+    postType, archetypeId, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
+    microLabel, pillText,
     selectedLogoId, logoPosition, logoSize,
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: overlayLayers.map(l => ({ assetId: l.assetId, mode: l.mode || "frame" })),
@@ -4165,7 +4166,9 @@ export default function App() {
         fullBleed: !!(specNums?.fullBleed), thinBorder: !!(specNums?.thinBorder),
         heroCapFrac: specNums?.heroCapFrac||0.3, heroToSupport: specNums?.heroToSupport||8,
         leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
-        palette: specNums?.palette||null, microLabelText: microLabel||"", editorial,
+        // (WP-V Stage 4) EYEBROW SENTINEL: null = unset (attribution fallback
+        // below may fill it), "" = explicitly removed (no fallback).
+        palette: specNums?.palette||null, microLabelText: microLabel, editorial,
         gridAnchor: specNums?.gridAnchor||"edge", motif:null, furniture: specNums?.furniture||null,
         cropDrama: specNums?.cropDrama||null, logoUse: specNums?.logoUse||null,
         supportRegister: specNums?.supportRegister||null, special: specNums?.special||null,
@@ -4558,7 +4561,7 @@ export default function App() {
       const ccAttribution=cc&&cc.attribution!=null?cc.attribution:attribution;
       const ccDateText=cc&&cc.dateText!=null?cc.dateText:dateText;
       const heroFinal = isBigNum ? (ccDateText||ccHeadline||"") : (ccHeadline || "");
-      const eyebrow = mat.microLabelText || (labelBox && mat.roles?.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28 ? ccAttribution : "");
+      const eyebrow = (mat.microLabelText != null) ? mat.microLabelText : (labelBox && mat.roles?.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28 ? ccAttribution : "");
       // support text: subtext, else attribution (if not already used as the eyebrow),
       // else the headline (for big_number where the date is the hero).
       const supportText = stripHeroMarkers(ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "");
@@ -4852,7 +4855,20 @@ export default function App() {
       // Drawn after text so the avoid-list uses each role's ACTUAL drawn box; any
       // furniture item that would overprint hero/support/label/photo is skipped inside
       // drawFurniture (never clutters, never collides — anti-pattern #15/#16).
-      if(mat.furniture && mat.furniture.length){
+      // (WP-V Stage 4) PILL SENTINEL + STANDALONE PILL:
+      //   pillText === null  → archetype's authored furniture as-is
+      //   pillText === ""    → the badge is EXPLICITLY REMOVED
+      //   pillText = "TEXT"  → override the authored badge text; if the design
+      //                        has no authored badge, a default one is added so
+      //                        "+ Button" works on any editorial design.
+      const furnitureBase = (() => {
+        const base = mat.furniture || [];
+        if (pillText == null) return base;
+        if (pillText === "") return base.filter(it => !(it && it.type === "badge"));
+        if (base.some(it => it && it.type === "badge")) return base.map(it => (it && it.type === "badge") ? { ...it, text: pillText } : it);
+        return [...base, { type: "badge", text: pillText, x: 0.08, y: 0.86, size: 0.022, align: "left", color: "softTangerine" }];
+      })();
+      if(furnitureBase && furnitureBase.length){
         const avoid=[
           heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
           // (Commit 1) use the caption's ACTUAL drawn height (supUsedH), not ~1.4 lines —
@@ -4865,9 +4881,7 @@ export default function App() {
         // (WP-U fix #1) A user-edited pill label overrides the archetype's authored
         // badge text; drawFurniture reports each drawn text piece so the pill becomes
         // a click-editable role like hero/support/eyebrow.
-        const furnItems = pillText
-          ? mat.furniture.map(it => (it && it.type === "badge") ? { ...it, text: pillText } : it)
-          : mat.furniture;
+        const furnItems = furnitureBase;
         drawFurniture(ctx, furnItems, w, h, sm, heroInk, avoid, accentInk,
           _roleB ? (role, box) => { _roleB[role] = box; } : null);
       }
@@ -6208,8 +6222,8 @@ export default function App() {
     // renders through the single path; newer templates round-trip the fields verbatim.
     setPhotoTreatment(s.photoTreatment || "none");
     setPhotoFrame(s.photoFrame || { type: "none" });
-    setMicroLabel(s.microLabel || "");
-    setPillText(s.pillText || "");
+    setMicroLabel("microLabel" in s ? s.microLabel : null);
+    setPillText("pillText" in s ? s.pillText : null);
     setHeroRegister(s.heroRegister || "");
     setHeadline(s.headline || "");
     setSubtext(s.subtext || "");
@@ -6463,12 +6477,14 @@ export default function App() {
           an eyebrow is on the canvas or the archetype carries the role. */}
       {(microLabel || (heroRegister && typeLayouts[postType]?.roles?.microLabel)) ?
         <In data-wo-role="eyebrow" placeholder="Eyebrow (small caps label)" maxLength={28}
-          value={microLabel || ((attribution && attribution.length<=28) ? attribution : "")}
+          value={microLabel ?? ((attribution && attribution.length<=28 && subtext) ? attribution : "")}
           onChange={e=>applyPatch({microLabel:e.target.value},{source:"ui"})} mt /> : null}
       {/* (WP-U fix #1) PILL — the accent badge label (archetype furniture) is now editable. */}
       {(()=>{const badge=archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.furniture||[]).find(f=>f&&f.type==="badge"):null;
-        return badge ? <In data-wo-role="pill" placeholder="Pill label (e.g. NOW ENROLLING)" maxLength={30}
-          value={pillText || badge.text || ""} onChange={e=>applyPatch({pillText:e.target.value},{source:"ui"})} mt /> : null;})()}
+        // (WP-V) Also shown when the user ADDED a pill via + Add / chat
+        // (pillText non-null) on a design without an authored badge.
+        return (badge || pillText != null) ? <In data-wo-role="pill" placeholder="Pill label (e.g. NOW ENROLLING)" maxLength={30}
+          value={pillText ?? badge?.text ?? ""} onChange={e=>applyPatch({pillText:e.target.value},{source:"ui"})} mt /> : null;})()}
       <EditorSubhead label="Typography" summary="Editorial auto-fit" />
       <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -6700,9 +6716,66 @@ export default function App() {
      Recognition over recall: visual tiles with plain-language labels. Adds go
      through THE pipeline. (Stage 2 ships photo + decoration; Stage 4 adds the
      text-role tiles with rendered thumbnails.) */
-  const renderAddGallery = () => (
+  // One gallery tile: a tiny rendered PREVIEW of the element (recognition over
+  // recall) + a plain-language label. `has` → tap edits instead of adds.
+  const AddTile = ({label, has, onClick, children}) => (
+    <button onClick={onClick} title={has?`${label} — already on the design, tap to edit`:`Add: ${label}`}
+      style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"8px 6px",borderRadius:10,border:`1px solid ${has?B.burnham+"55":B.ash+"22"}`,background:"#fff",cursor:"pointer"}}>
+      <svg viewBox="0 0 40 40" style={{width:"100%",maxWidth:64,aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
+        <rect x="0" y="0" width="40" height="40" rx="3" fill={B.whiteSmoke} stroke={`${B.ash}44`} strokeWidth="0.6"/>
+        {children}
+      </svg>
+      <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,letterSpacing:0.2,color:B.jet,textAlign:"center",lineHeight:1.25}}>{label}{has?" ·":""}</span>
+    </button>
+  );
+  // Add a text role through THE pipeline with a placeholder the user replaces
+  // immediately (the role's input is focused + selected after the add).
+  const addTextRole = (patch, focusRole) => {
+    applyPatch(patch, { source: "ui" });
+    setTopMenu(null);
+    focusTextField(focusRole);
+  };
+  const renderAddGallery = () => {
+    const heroBar = <rect x="6" y="13" width="26" height="6" rx="1.2" fill={B.burnham} opacity="0.85"/>;
+    const editorial = !!heroRegister;
+    return (
     <>
       <MenuHead label="Add to this design" sub="Tap what you want to add — no design words needed." />
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:14}}>
+        <AddTile label="Small text under the title" has={!!(subtext&&subtext.trim())}
+          onClick={()=> (subtext&&subtext.trim()) ? (setTopMenu(null),focusTextField("support")) : addTextRole({ subtext:"A small line under the title" }, "support")}>
+          {heroBar}
+          <rect x="6" y="23" width="20" height="3" rx="1" fill={B.tangerine} opacity="0.9"/>
+        </AddTile>
+        <AddTile label="Date" has={!!(dateText&&dateText.trim())}
+          onClick={()=> (dateText&&dateText.trim()) ? (setTopMenu(null),focusTextField("date")) : addTextRole({ dateText:"15 January" }, "date")}>
+          {heroBar}
+          <rect x="6" y="30" width="12" height="3.4" rx="1" fill={B.tangerine} opacity="0.9"/>
+        </AddTile>
+        <AddTile label="Little label up top" has={!!(microLabel&&microLabel.trim())}
+          onClick={()=> (microLabel&&microLabel.trim()) ? (setTopMenu(null),focusTextField("eyebrow")) : addTextRole({ microLabel:"A LITTLE LABEL" }, "eyebrow")}>
+          <rect x="6" y="7" width="10" height="2.4" rx="1" fill={B.tangerine} opacity="0.9"/>
+          {heroBar}
+        </AddTile>
+        {editorial && (
+          <AddTile label="Button" has={!!(pillText&&pillText.trim())}
+            onClick={()=> (pillText&&pillText.trim()) ? (setTopMenu(null),focusTextField("pill")) : addTextRole({ pillText:"BOOK A VISIT" }, "pill")}>
+            {heroBar}
+            <rect x="6" y="28" width="16" height="6" rx="3" fill={SOFT_TANGERINE}/>
+          </AddTile>
+        )}
+        <AddTile label="Logo" has={logoRendered}
+          onClick={()=>{selectElement("logo");setTopMenu(null);}}>
+          {heroBar}
+          <circle cx="20" cy="31" r="3.4" fill={B.burnham} opacity="0.8"/>
+        </AddTile>
+        <AddTile label="Photo" has={!!mediaObj}
+          onClick={()=>{ if(mediaObj){selectElement("photo");setTopMenu(null);} else {setShowLibPicker(true);setTopMenu(null);} }}>
+          <rect x="4" y="4" width="32" height="20" rx="2" fill={B.celadonDeep} opacity="0.8"/>
+          <circle cx="12" cy="11" r="2.6" fill={B.whiteSmoke} opacity="0.9"/>
+          <rect x="6" y="29" width="20" height="4" rx="1" fill={B.burnham} opacity="0.7"/>
+        </AddTile>
+      </div>
       <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Photo</div>
       <div style={{display:"flex",gap:6,marginBottom:14}}>
         <button onClick={()=>{setShowLibPicker(true);setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:"transparent",border:`1px solid ${B.burnham}33`,borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:B.burnham,letterSpacing:0.5}}>📂 From the Library</button>
@@ -6729,12 +6802,16 @@ export default function App() {
         </button>
       </div>
     </>
-  );
+    );
+  };
 
   /* ── INSPECTOR LAYER LIST (WP-V Stage 2) ──
      The bubbles rail's ONLY surviving job (§2.3): selecting occluded elements.
      Lives INSIDE the inspector and renders only when relevant (≥2 elements). */
-  const LayerList = () => {
+  // NOTE: render FUNCTIONS, not inline components — an inline component gets a
+  // new identity every render, so React would REMOUNT the inspector subtree on
+  // each keystroke and steal focus from its inputs (WP-V fix).
+  const renderLayerList = () => {
     if (activeElements.length < 2) return null;
     return (
       <div role="toolbar" aria-label="Elements" style={{display:"flex",flexWrap:"wrap",gap:6,padding:"10px 14px",borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto"}}>
@@ -6766,11 +6843,11 @@ export default function App() {
   // The contextual inspector panel (element name header + delete + ✕ + layer
   // list + the element's control panel). Top-level mount below so
   // position:fixed anchors to the viewport (no transformed ancestor trap).
-  const InspectorPanel = ({mobile=false}) => {
+  const renderInspectorPanel = () => {
     if (!inspectorInfo) return null;
     return (
       <div role="dialog" aria-label={`${inspectorInfo.title} controls`}
-        className={mobile?"wo-inspector wo-inspector-sheet":"wo-inspector wo-inspector-dock"}>
+        className="wo-inspector wo-inspector-dock">
         <div className="wo-inspector-head" style={{
           display:"flex",alignItems:"center",gap:10,padding:"12px 14px",
           borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto",
@@ -6785,7 +6862,7 @@ export default function App() {
           <button type="button" aria-label="Close inspector" onClick={closeInspector}
             style={{marginLeft:inspectorRemove?0:"auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}18`,color:B.jet,fontSize:15,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
         </div>
-        <LayerList />
+        {renderLayerList()}
         <div className="wo-inspector-body" style={{padding:"14px 15px 18px",overflowY:"auto",flex:"1 1 auto",background:"#fff"}}>
           {inspectorInfo.body}
         </div>
@@ -6966,6 +7043,32 @@ export default function App() {
     return null;
   };
 
+  /* ── GHOST SLOTS (WP-V Stage 4, §3.2) ── Empty regions where the layout
+     engine KNOWS a role could go render a faint dashed "＋ add text here" on
+     hover/tap. Clicking adds the role through THE pipeline and focuses it.
+     Editorial designs only (they carry role geometry); hidden while an
+     element is selected so they never fight a drag gesture. */
+  const ghostSlots = (() => {
+    if (!heroRegister || inspectorEl != null) return [];
+    const roles = textLayout.roles || {};
+    const out = [];
+    if (roles.support && !(subtext && subtext.trim())) {
+      out.push({ key:"support", box: roles.support, minH: 0.05,
+        label:"＋ add text here", patch:{ subtext:"A small line under the title" }, focus:"support" });
+    }
+    const eyebrowFallback = !!(attribution && attribution.length <= 28 && subtext);
+    if (roles.microLabel && !(microLabel && microLabel.trim()) && !(microLabel == null && eyebrowFallback)) {
+      out.push({ key:"eyebrow", box: roles.microLabel, minH: 0.04,
+        label:"＋ add a little label", patch:{ microLabel:"A LITTLE LABEL" }, focus:"eyebrow" });
+    }
+    if (!(dateText && dateText.trim())) {
+      const bx = roles.support?.x ?? roles.hero?.x ?? 0.08;
+      out.push({ key:"date", box: { x: bx, y: 0.885, w: 0.36, h: 0.05 }, minH: 0.05,
+        label:"＋ add a date", patch:{ dateText:"15 January" }, focus:"date" });
+    }
+    return out;
+  })();
+
   const topBarButtons = [
     { id:"templates", label:"Templates", badge:!!newerDraft },
     { id:"format", label:`Format · ${dim.label}` },
@@ -7068,6 +7171,22 @@ export default function App() {
                   {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
                 </button>
               )}
+              {/* ── GHOST SLOTS — faint dashed add-affordances in empty role
+                    regions (visible on hover/tap; always faintly visible on
+                    touch devices via CSS). ── */}
+              {ghostSlots.map(g => (
+                <button key={g.key} type="button" className="wo-ghost"
+                  aria-label={g.label.replace(/^＋\s*(add\s*)?/, "Add ")}
+                  style={{
+                    position:"absolute",
+                    left:`${(g.box.x*100).toFixed(2)}%`, top:`${(g.box.y*100).toFixed(2)}%`,
+                    width:`${(Math.min(g.box.w,0.96-g.box.x)*100).toFixed(2)}%`,
+                    height:`${(Math.max(g.box.h||0,g.minH)*100).toFixed(2)}%`,
+                  }}
+                  onClick={()=>{ applyPatch(g.patch, { source:"ui" }); focusTextField(g.focus); }}>
+                  {g.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -7121,7 +7240,7 @@ export default function App() {
       {inspectorInfo && (
         <>
           <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
-          <InspectorPanel />
+          {renderInspectorPanel()}
         </>
       )}
     </div>
