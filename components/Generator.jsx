@@ -2653,7 +2653,7 @@ export default function App() {
   // formats (spec §1 user-edit model / Failure 2 fix).
   const [logoByDim, setLogoByDim] = useState({});
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
-  const setFontSize = (role, id) => setFontSizes(prev => ({ ...prev, [role]:id }));
+  const setFontSize = (role, id) => applyPatch({ fontSizes: { [role]: id } }, { source: "ui" });
   const [textSelected, setTextSelected] = useState(false);
   // Lightweight selection flags for elements that have no canvas hit-region of
   // their own (Background, Logo). They only drive the rail active-state + which
@@ -2729,7 +2729,8 @@ export default function App() {
     return {...focalToImgT(imageObj,W,H,f,targetFx,targetFy,uz),rotation:imgT.rotation||0};
   })();
   const photoT = dimensionId===MASTER_DIM ? imgT : (imgTByDim[dimensionId] || autoPhotoT);
-  // Apply a photo-transform patch to the right target (master vs per-dim override).
+  // RAW photo-transform writer — routes to the right target (master vs per-dim
+  // override). Only the patch pipeline calls this; UI gestures use patchPhoto.
   const setPhotoT = (patchOrFn) => {
     if(dimensionId===MASTER_DIM){ setImgT(patchOrFn); return; }
     setImgTByDim(prev=>{
@@ -2738,6 +2739,9 @@ export default function App() {
       return {...prev,[dimensionId]:{...base,...patch}};
     });
   };
+  // UI photo reframes (drag / handles / keyboard / quick chips) emit patches
+  // through THE pipeline — same undo + harmonizer path as everything else.
+  const patchPhoto = (t) => applyPatch({ photoTransform: t }, { source: "ui" });
 
   // Effective layout for the CURRENT dimension (spec resolution rule). The ACTIVE
   // ARCHETYPE must travel into the resolution (template-revert fix): without it the
@@ -2746,8 +2750,9 @@ export default function App() {
   const activeArchForLayout = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
   const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim,activeArchForLayout);
   // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
-  const updateTextLayout = patch => {
-    noteManualEdit("text");   // canvas drag / slider / grid / keyboard nudge (Commit 3)
+  // RAW text-geometry writer — only the patch pipeline (applyDesignPatch) calls
+  // this. UI surfaces go through updateTextLayout below, which emits a patch.
+  const writeTextLayout = patch => {
     if(dimensionId===MASTER_DIM){
       setTypeLayouts(prev=>({...prev,[postType]:{...(prev[postType]||TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post),...patch}}));
     }else{
@@ -2762,7 +2767,11 @@ export default function App() {
       });
     }
   };
+  // UI text-geometry edits (canvas drag / slider / grid / keyboard nudge) emit a
+  // patch through THE pipeline — same grammar, same undo, same harmonizer (WP-V).
+  const updateTextLayout = patch => applyPatch({ textLayout: patch }, { source: "ui" });
   const resetTextLayout = () => {
+    noteManualEdit("text");   // undoable + harmonized like any other manual edit
     if(dimensionId===MASTER_DIM){
       setTypeLayouts(prev=>({...prev,[postType]:{...(TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post)}}));
     }else{
@@ -2770,19 +2779,14 @@ export default function App() {
     }
   };
 
-  // Apply a logo placement change from the UI (Failure 2 rule): on MASTER_DIM this
-  // pins the logo globally (userLogoTouched); on any OTHER format it writes a
-  // per-dimension override (logoByDim) so it does NOT leak onto the other formats.
+  // Apply a logo placement change from the UI (Failure 2 rule): emits a patch
+  // through THE pipeline; the uiSource branch inside applyDesignPatch keeps the
+  // manual semantics (per-dim override does not pin the global position).
   const placeLogo = (patch) => {
-    noteManualEdit("logo");   // manual logo placement (Commit 3)
-    const nextPos=patch.position??logoPosition, nextSize=patch.sizeId??logoSize;
-    if(patch.position!=null)setLogoPosition(patch.position);
-    if(patch.sizeId!=null)setLogoSize(patch.sizeId);
-    if(dimensionId===MASTER_DIM){
-      setUserLogoTouched(true);
-    }else{
-      setLogoByDim(prev=>({...prev,[dimensionId]:{position:nextPos,sizeId:nextSize}}));
-    }
+    const p = {};
+    if (patch.position != null) p.logoPosition = patch.position;
+    if (patch.sizeId != null) p.logoSize = patch.sizeId;
+    applyPatch(p, { source: "ui" });
   };
 
   // Click text on the canvas → open the contextual inspector for the text
@@ -2891,7 +2895,7 @@ export default function App() {
   const tryAnotherRef = useRef({ n: 0, startId: null });
   const snapshotApplyableState = () => ({
     postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
-    bgColor, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
+    bgColor, bgAlpha, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
     // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
     // patch that materializes an archetype reverts cleanly as one action.
     photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
@@ -2903,7 +2907,10 @@ export default function App() {
     markTab,
     // Photo source + transform (Commit 4): an in-chat generated image replaces the
     // background through the AI path, so undo must restore the previous photo too.
+    // (WP-V Stage 1) + per-dimension reframe overrides, now that photo drags are
+    // first-class undoable patches.
     image, imgT: JSON.parse(JSON.stringify(imgT)),
+    imgTByDim: JSON.parse(JSON.stringify(imgTByDim)),
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
@@ -2913,8 +2920,16 @@ export default function App() {
   // touched ("text" | "logo" | "colour" | "overlay").
   const noteManualEdit = (tag) => {
     const m = manualHarmRef.current;
-    if (!m.pending) { m.pending = true; m.snap = snapshotApplyableState(); m.touched = new Set(); }
-    if (tag) m.touched.add(tag);
+    if (!m.pending) {
+      m.pending = true; m.snap = snapshotApplyableState(); m.touched = new Set();
+      // (WP-V Stage 1) A manual burst is a FIRST-CLASS undo entry: push the
+      // pre-burst snapshot NOW so the top-bar Undo reverts UI edits exactly like
+      // AI patches. The debounced harmonize pass AMENDS this entry (it no longer
+      // pushes its own) — one burst + its silent fixes = one undo.
+      setAiUndoStack(prev => [m.snap, ...prev].slice(0, AI_UNDO_DEPTH));
+      setPreAiState(m.snap);
+    }
+    if (tag) (Array.isArray(tag) ? tag : [tag]).forEach(t => t && m.touched.add(t));
     if (m.timer) clearTimeout(m.timer);
     m.timer = setTimeout(() => { m.timer = null; setManualHarmTick(t => t + 1); }, MANUAL_HARMONIZE_DEBOUNCE_MS);
   };
@@ -3016,14 +3031,17 @@ export default function App() {
   // Picker click: first click on an archetype materializes its base variant; clicking
   // the ALREADY-ACTIVE archetype cycles to the next sanctioned palette variant (spec §3
   // measured rotation, user-driven). Re-materializes so the new bg/ink/motif land.
+  // (WP-V) Picker clicks emit an archetypeId patch through THE pipeline so a
+  // layout change from the UI is undoable + harmonized exactly like a chat one.
   const pickArchetype = (id) => {
-    if (id === null) { materializeArchetype(null); return; }
+    if (id === null) { applyPatch({ archetypeId: "none" }, { source: "ui" }); return; }
+    let variant = 0;
     if (id === archetypeId) {
-      const arch = ARCHETYPES_BY_ID[id];
-      const count = arch?.variants?.length || 1;
-      if (count > 1) { materializeArchetype(id, { variant: (archVariant + 1) % count }); return; }
+      const count = ARCHETYPES_BY_ID[id]?.variants?.length || 1;
+      if (count <= 1) return; // already active, nothing to cycle
+      variant = (archVariant + 1) % count;
     }
-    materializeArchetype(id);
+    applyPatch({ archetypeId: id, archVariant: variant }, { source: "ui" });
   };
 
   const applyDesignPatch = (patch, opts = {}) => {
@@ -3055,7 +3073,11 @@ export default function App() {
     // + treatment defaults (mirrors the picker) so a chat patch restyles fully.
     if (patch.archetypeId !== undefined && patch.archetypeId !== null) {
       if (patch.archetypeId === "none" && archetypeId !== null) { setArchetypeId(null); applied.push("archetypeId"); }
-      else if (ARCHETYPE_IDS.includes(patch.archetypeId) && patch.archetypeId !== archetypeId) {
+      // (WP-V) Same-id with a DIFFERENT archVariant re-materializes — this is the
+      // picker's palette-variant cycling routed through the pipeline.
+      else if (ARCHETYPE_IDS.includes(patch.archetypeId) &&
+               (patch.archetypeId !== archetypeId ||
+                (Number.isInteger(patch.archVariant) && patch.archVariant !== archVariant))) {
         // Pass the patch's own copy so materialization (register/eyebrow/frame) uses
         // the SAME values this patch is about to set, not stale closure state.
         materializeArchetype(patch.archetypeId, {
@@ -3074,6 +3096,11 @@ export default function App() {
     if (typeof patch.subtext === "string" && patch.subtext !== subtext) { setSubtext(patch.subtext); applied.push("subtext"); }
     if (typeof patch.attribution === "string" && patch.attribution !== attribution) { setAttribution(patch.attribution); applied.push("attribution"); }
     if (typeof patch.dateText === "string" && patch.dateText !== dateText) { setDateText(patch.dateText); applied.push("dateText"); }
+    // (WP-V) Eyebrow + pill are first-class patch fields. EXPLICIT-EMPTY sentinel:
+    // "" REMOVES the element (render no longer falls back to attribution / the
+    // archetype's authored badge text); null leaves it unchanged.
+    if (typeof patch.microLabel === "string" && patch.microLabel !== microLabel) { setMicroLabel(patch.microLabel); applied.push("microLabel"); }
+    if (typeof patch.pillText === "string" && patch.pillText !== pillText) { setPillText(patch.pillText); applied.push("pillText"); }
     if (inList(patch.bgColor, "bgColor") && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
     if (inList(patch.textColorId, "textColorId") && patch.textColorId !== textColorId) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
     if (inList(patch.backdropMode, "backdropMode") && patch.backdropMode !== backdropMode) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
@@ -3107,7 +3134,15 @@ export default function App() {
         if (posChanged) setLogoPosition(nextPos);
         if (sizeChanged) setLogoSize(nextSize);
       } else {
-        setUserLogoTouched(true);
+        // (WP-V) A UI edit on a non-master format writes the per-dimension
+        // override + the global mirror but never PINS the global position
+        // (legacy placeLogo rule); an AI placement keeps the pin as before.
+        if (opts.uiSource) {
+          if (posChanged) setLogoPosition(nextPos);
+          if (sizeChanged) setLogoSize(nextSize);
+        } else {
+          setUserLogoTouched(true);
+        }
         setLogoByDim(prev => ({ ...prev, [dimensionId]: { position: nextPos, sizeId: nextSize } }));
       }
       if (posChanged) applied.push("logoPosition");
@@ -3124,8 +3159,10 @@ export default function App() {
 
     if (patch.removeOverlays === true) { setOverlayLayers([]); setSelOverlay(null); applied.push("removeOverlays"); }
 
-    if (patch.addOverlay && inList(patch.addOverlay.assetId, "overlayAssetId")) {
-      const asset = DEFAULT_OVERLAYS.find(o => o.id === patch.addOverlay.assetId);
+    // (WP-V) The UI may add any asset in the user's overlay LIBRARY (uploads
+    // included), not just the built-in enum the AI is limited to.
+    if (patch.addOverlay && (inList(patch.addOverlay.assetId, "overlayAssetId") || overlays.some(o => o.id === patch.addOverlay.assetId))) {
+      const asset = overlays.find(o => o.id === patch.addOverlay.assetId) || DEFAULT_OVERLAYS.find(o => o.id === patch.addOverlay.assetId);
       if (asset) {
         const mode = inList(patch.addOverlay.mode, "overlayMode") ? patch.addOverlay.mode : "overlay";
         const t = suggestPlacement(asset.kind, asset.ratio, W, H);
@@ -3135,10 +3172,58 @@ export default function App() {
           { uid, assetId: asset.id, mode, master: t, byDim: {} },
         ]);
         applied.push("addOverlay");
+        // Select + open the inspector on a UI-added overlay (matches the old
+        // gallery tap behaviour: place → immediately editable).
+        if (opts.uiSource) { setSelOverlay(uid); setOverlayChromeVisible(true); setInspectorEl(uid); setOverlayDirty(true); }
       }
     }
 
-    setPhotoSel(false);
+    /* ── CLIENT-ONLY PATCH EXTENSION (WP-V Stage 1 — see lib/design-patch.js
+       CLIENT_PATCH_KEYS). These keys are emitted by UI surfaces only; the AI's
+       strict schema cannot produce them. They flow through the SAME pipeline so
+       undo + harmonizer semantics are uniform by construction. ── */
+    if (typeof patch.bgAlpha === "number" && Number.isFinite(patch.bgAlpha)) {
+      const v = Math.max(0, Math.min(1, patch.bgAlpha));
+      if (v !== bgAlpha) { setBgAlpha(v); applied.push("bgAlpha"); }
+    }
+    if (patch.textLayout && typeof patch.textLayout === "object") {
+      const t = {};
+      for (const k of ["x", "y", "width", "lineHeight", "scale"]) if (typeof patch.textLayout[k] === "number" && Number.isFinite(patch.textLayout[k])) t[k] = patch.textLayout[k];
+      if (["left", "center", "right"].includes(patch.textLayout.align)) t.align = patch.textLayout.align;
+      if (Object.keys(t).length) { writeTextLayout(t); applied.push("textLayout"); }
+    }
+    if (patch.photoTransform && typeof patch.photoTransform === "object") {
+      const t = {};
+      for (const k of ["zoom", "cx", "cy", "rotation"]) if (typeof patch.photoTransform[k] === "number" && Number.isFinite(patch.photoTransform[k])) t[k] = patch.photoTransform[k];
+      if (Object.keys(t).length) { setPhotoT(prev => ({ ...prev, ...t })); applied.push("photoTransform"); }
+    }
+    if (patch.overlayUpdate && typeof patch.overlayUpdate === "object" && patch.overlayUpdate.uid) {
+      const { uid, transform, mode, style } = patch.overlayUpdate;
+      if (transform && typeof transform === "object") writeLayerT(uid, transform);
+      if (inList(mode, "overlayMode")) writeLayerMode(uid, mode);
+      if (style && typeof style === "object") writeLayerStyle(uid, style);
+      applied.push("overlayUpdate");
+    }
+    if (typeof patch.removeOverlay === "string" && patch.removeOverlay) {
+      writeDeleteLayer(patch.removeOverlay);
+      applied.push("removeOverlay");
+    }
+    if (typeof patch.imageSrc === "string" && patch.imageSrc) {
+      removeVideo();
+      setImage(patch.imageSrc);
+      imgFrom(patch.imageSrc).then(img => { if (img) setImageObj(img); });
+      applied.push("imageSrc");
+    }
+    if (patch.removeImage === true) {
+      removeVideo();
+      setImage(null);
+      setImageObj(null);
+      applied.push("removeImage");
+    }
+
+    // A UI-sourced patch never clobbers the live selection (photo drags emit
+    // patches mid-gesture); AI patches keep the historical deselect.
+    if (!opts.uiSource) setPhotoSel(false);
 
     // Arm the silent harmonizer for AI-originated patches (chat / landing). This is
     // the START of a harmonization sequence, so RESET the round counter + applied-fix
@@ -3150,6 +3235,41 @@ export default function App() {
     }
 
     return applied;
+  };
+
+  /* ── applyPatch — THE ONE PATCH PIPELINE (WP-V Stage 1, ux-architecture §4) ──
+     Every design mutation flows through here: the AI response handler AND all
+     UI interactions (inspector fields, canvas drags/resizes, colour/logo/photo
+     picks, + Add gallery, ghost slots). One entry point → by construction,
+     anything the AI can do the UI can do and vice versa, with uniform state
+     application, undo snapshots, and harmonizer behaviour.
+
+       source:"ai" (default) — pushes a fresh undo snapshot per patch and (with
+         harmonize:true) arms the silent post-render harmonizer.
+       source:"ui" — burst-aware: the FIRST patch of an edit burst pushes ONE
+         undo snapshot (noteManualEdit); further patches inside the debounce
+         window (a drag gesture, typing) fold into it, and the debounced
+         MANUAL-EDIT harmonize pass runs after the burst settles.               */
+  const applyPatch = (patch, opts = {}) => {
+    if (!patch || typeof patch !== "object") return [];
+    if ((opts.source || "ai") === "ui") {
+      noteManualEdit(uiTagsForPatch(patch));
+      return applyDesignPatch(patch, { amendUndo: true, uiSource: true });
+    }
+    return applyDesignPatch(patch, opts);
+  };
+  // Which element(s) a UI patch touches — feeds the manual harmonizer's
+  // geometry restraint (it never relocates what the user just placed).
+  const uiTagsForPatch = (patch) => {
+    const tags = [];
+    if (patch.logoId || patch.logoPosition || patch.logoSize) tags.push("logo");
+    if (patch.bgColor || patch.textColorId || patch.backdropMode || typeof patch.bgAlpha === "number") tags.push("colour");
+    if (patch.textLayout || patch.fontSizes || typeof patch.headline === "string" || typeof patch.subtext === "string" ||
+        typeof patch.attribution === "string" || typeof patch.dateText === "string" ||
+        typeof patch.microLabel === "string" || typeof patch.pillText === "string") tags.push("text");
+    if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays) tags.push("overlay");
+    if (patch.photoTransform || patch.imageSrc || patch.removeImage || patch.photoTreatment || patch.photoFrameType) tags.push("photo");
+    return tags;
   };
 
   // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
@@ -3175,6 +3295,7 @@ export default function App() {
     setAttribution(s.attribution);
     setDateText(s.dateText);
     setBgColor(s.bgColor);
+    if (typeof s.bgAlpha === "number") setBgAlpha(s.bgAlpha);
     setTextColorId(s.textColorId);
     setBackdropMode(s.backdropMode === "gradient" ? "auto" : s.backdropMode);
     // Restore materialized archetype visuals (Commit 1) — older snapshots omit them.
@@ -3203,6 +3324,7 @@ export default function App() {
       if (s.image) imgFrom(s.image).then(img => setImageObj(img)); else setImageObj(null);
       if (s.imgT) setImgT(s.imgT);
     }
+    if (s.imgTByDim) setImgTByDim(s.imgTByDim);
     setPhotoSel(false);
   };
 
@@ -3609,9 +3731,10 @@ export default function App() {
   },[]);
 
   /* ── Load image + auto-save to library ── */
-  const loadImage = useCallback(async (dataUrl) => {
-    setImage(dataUrl);
-    setImageObj(await imgFrom(dataUrl));
+  // NOTE (WP-V): not memoized — applyPatch closes over live design state, and a
+  // useCallback([]) here would freeze a stale pipeline.
+  const loadImage = async (dataUrl) => {
+    applyPatch({ imageSrc: dataUrl }, { source: "ui" });   // WP-V: through THE pipeline
     // Compress and save to library
     const thumb = await compressImage(dataUrl, 120, 0.5);
     const full = await compressImage(dataUrl, 1080, 0.7);
@@ -3620,7 +3743,7 @@ export default function App() {
       const next = [{id, thumb, full}, ...prev.filter(x => x.full !== full)];
       return next.slice(0, MAX_LIB);
     });
-  }, []);
+  };
 
   // Apply an AI-generated image (Commit 4). Ingests through the SAME path as an
   // upload — remove any video, set the canvas photo + save to the local library —
@@ -3750,17 +3873,14 @@ export default function App() {
         .filter(u => u && u !== image);
       if (pool.length) {
         const url = pool[Math.floor(Math.random() * pool.length)];
-        noteManualEdit("photo");
-        setImage(url);
-        const img = await imgFrom(url);
-        if (img) setImageObj(img);
+        applyPatch({ imageSrc: url }, { source: "ui" });   // WP-V: through THE pipeline
       }
     } finally {
       setRefreshingPhoto(false);
     }
   };
 
-  const loadFile = useCallback(async (file) => {
+  const loadFile = async (file) => {
     if (!file) return;
     // Load onto canvas immediately
     const r = new FileReader();
@@ -3773,21 +3893,17 @@ export default function App() {
       fd.append('source_type', 'midjourney_render');
       await fetch('/api/images', { method: 'POST', body: fd });
     } catch(e) { /* non-blocking — canvas still works if upload fails */ }
-  }, [loadImage]);
+  };
 
   const selectLibraryImage = async (item) => {
-    noteManualEdit("photo");   // manual background swap (Commit 3)
-    setImage(item.full);
-    setImageObj(await imgFrom(item.full));
+    applyPatch({ imageSrc: item.full }, { source: "ui" });   // WP-V: through THE pipeline
   };
 
   // Load image from Supabase library picker
   const selectFromLibrary = async (img) => {
     setShowLibPicker(false);
     if (!img.url) return;
-    noteManualEdit("photo");   // manual background swap (Commit 3)
-    setImage(img.url);
-    setImageObj(await imgFrom(img.url));
+    applyPatch({ imageSrc: img.url }, { source: "ui" });   // WP-V: through THE pipeline
   };
 
   const removeLibraryItem = (id) => {
@@ -5636,9 +5752,8 @@ export default function App() {
     }
     if (!Object.keys(fixPatch).length) return;
 
-    // ONE undo entry: pre-edit snapshot first, fixes folded into it.
-    setAiUndoStack(prev => [snap, ...prev].slice(0, AI_UNDO_DEPTH));
-    setPreAiState(snap);
+    // ONE undo entry: the pre-edit snapshot was already pushed at burst start
+    // (noteManualEdit, WP-V Stage 1) — the fixes here FOLD into it via amendUndo.
     harmonizeRef.current = { armed: true, rounds: 1, applied: fails.map(f => f.id + ":" + JSON.stringify(f.fix)), avoidLogoGeo };
     applyDesignPatch(fixPatch, { amendUndo: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5880,7 +5995,7 @@ export default function App() {
       const snap = Math.round(deg/45)*45;
       if (Math.abs(deg - snap) < 6) deg = snap;
       deg = ((deg % 360) + 360) % 360; if (deg > 180) deg -= 360;
-      setPhotoT(t => ({ ...t, rotation:Math.round(deg*10)/10 }));
+      patchPhoto({ rotation:Math.round(deg*10)/10 });
       return;
     }
     if (d.mode === "resize") {
@@ -5888,7 +6003,7 @@ export default function App() {
       let z = Math.max(0.1, Math.min(6, d.startZoom * (dist / d.startDist)));
       // soft-lock to common sizes
       for (const s of [0.25,0.5,0.75,1,1.5,2]) { if (Math.abs(z-s) < 0.025) { z = s; break; } }
-      setPhotoT(t => ({ ...t, zoom:z }));
+      patchPhoto({ zoom:z });
       return;
     }
     if (d.mode === "photomove") {
@@ -5897,7 +6012,7 @@ export default function App() {
       // soft-lock to centered
       if (Math.abs(cx-0.5) < 0.02) cx = 0.5;
       if (Math.abs(cy-0.5) < 0.02) cy = 0.5;
-      setPhotoT(t => ({ ...t, cx, cy }));
+      patchPhoto({ cx, cy });
     }
   };
   const onPanEnd = () => {
@@ -5906,7 +6021,7 @@ export default function App() {
     if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusTextField(d.role||"hero");
     dragRef.current = null;
   };
-  const setZoom = (z) => setPhotoT(t => ({ ...t, zoom:z }));
+  const setZoom = (z) => patchPhoto({ zoom:z });
 
   /* ── Overlay assets: upload, place, transform, save ── */
   const assetFor = (uid) => {
@@ -5931,21 +6046,16 @@ export default function App() {
     overlayImgs.current[id] = img;
     setOverlays(prev => [{ id, name:file.name.replace(/\.[^.]+$/, ""), dataUrl, kind, ratio, category:"overlays" }, ...prev]);
   };
-  // Tap a shape: add it once, or if already placed, toggle it off.
+  // Tap a shape: add it once (through THE pipeline), or if placed, toggle off.
   const toggleOverlay = (asset) => {
     const existing = overlayLayers.find(l => l.assetId === asset.id);
     if (existing) { deleteLayer(existing.uid); return; }
-    const t = suggestPlacement(asset.kind, asset.ratio, W, H);
-    const uid = "ol_" + Date.now().toString(36);
     const mode = asset.kind === "corner" || asset.kind === "accessory" ? "overlay" : "frame";
-    setOverlayLayers(prev => [...prev, { uid, assetId:asset.id, mode, master:t, byDim:{} }]);
-    setSelOverlay(uid);
-    setOverlayChromeVisible(true);
-    setPhotoSel(false);
-    setInspectorEl(uid);   // open the inspector on the freshly placed overlay
-    setOverlayDirty(true);
+    applyPatch({ addOverlay: { assetId: asset.id, mode } }, { source: "ui" });
   };
-  const setLayerMode = (uid, mode) => {
+  // ── RAW overlay writers — only the patch pipeline calls these. UI surfaces
+  //    use the pipeline wrappers below (WP-V Stage 1). ──
+  const writeLayerMode = (uid, mode) => {
     setOverlayLayers(prev => prev.map(l => l.uid === uid
       ? {
           ...l,
@@ -5956,11 +6066,11 @@ export default function App() {
       : l));
     setOverlayDirty(true);
   };
-  const setLayerStyle = (uid, patch) => {
+  const writeLayerStyle = (uid, patch) => {
     setOverlayLayers(prev => prev.map(l => l.uid === uid ? { ...l, ...patch } : l));
     setOverlayDirty(true);
   };
-  const updateLayerT = (uid, patch) => {
+  const writeLayerT = (uid, patch) => {
     setOverlayLayers(prev => prev.map(l => {
       if (l.uid !== uid) return l;
       if (dimensionId === MASTER_DIM) return { ...l, master:{ ...l.master, ...patch } };
@@ -5970,6 +6080,10 @@ export default function App() {
     }));
     setOverlayDirty(true);
   };
+  // ── Pipeline wrappers (UI surfaces call these; they emit patches) ──
+  const setLayerMode  = (uid, mode)  => applyPatch({ overlayUpdate: { uid, mode } },  { source: "ui" });
+  const setLayerStyle = (uid, style) => applyPatch({ overlayUpdate: { uid, style } }, { source: "ui" });
+  const updateLayerT  = (uid, t)     => applyPatch({ overlayUpdate: { uid, transform: t } }, { source: "ui" });
   const onCanvasKeyDown = (e) => {
     const arrows = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1] };
     if (arrows[e.key]) {
@@ -5984,16 +6098,16 @@ export default function App() {
         updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,textLayout.x+dx*step)),y:Math.max(0.08,Math.min(0.82,textLayout.y+dy*step))});
       } else if (canPan) {
         setPhotoSel(true);
-        setPhotoT(t => ({ ...t, cx:t.cx+dx*step, cy:t.cy+dy*step }));
+        patchPhoto({ cx:photoT.cx+dx*step, cy:photoT.cy+dy*step });
       }
       return;
     }
     if (!canPan || selOverlay || textSelected) return;
     if (["+","=","-","_","[","]"].includes(e.key)) e.preventDefault();
-    if (e.key === "+" || e.key === "=") setPhotoT(t => ({ ...t, zoom:Math.min(6,t.zoom+0.05) }));
-    if (e.key === "-" || e.key === "_") setPhotoT(t => ({ ...t, zoom:Math.max(0.1,t.zoom-0.05) }));
-    if (e.key === "[") setPhotoT(t => ({ ...t, rotation:(t.rotation||0)-1 }));
-    if (e.key === "]") setPhotoT(t => ({ ...t, rotation:(t.rotation||0)+1 }));
+    if (e.key === "+" || e.key === "=") patchPhoto({ zoom:Math.min(6,photoT.zoom+0.05) });
+    if (e.key === "-" || e.key === "_") patchPhoto({ zoom:Math.max(0.1,photoT.zoom-0.05) });
+    if (e.key === "[") patchPhoto({ rotation:(photoT.rotation||0)-1 });
+    if (e.key === "]") patchPhoto({ rotation:(photoT.rotation||0)+1 });
   };
   const resetLayer = (uid) => {
     setOverlayLayers(prev => prev.map(l => {
@@ -6005,13 +6119,14 @@ export default function App() {
     }));
     setOverlayDirty(true);
   };
-  const deleteLayer = (uid) => {
+  const writeDeleteLayer = (uid) => {
     setOverlayLayers(prev => prev.filter(l => l.uid !== uid));
     if (selOverlay === uid) { setSelOverlay(null); setOverlayChromeVisible(false); }
     // Gracefully close the inspector if it was showing the deleted overlay.
     setInspectorEl(prev => prev === uid ? null : prev);
     setOverlayDirty(true);
   };
+  const deleteLayer = (uid) => applyPatch({ removeOverlay: uid }, { source: "ui" });
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); sSet(SK_DOC_TS, Date.now()); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
   const currentTemplateState = () => ({
@@ -6222,7 +6337,7 @@ export default function App() {
     <>
       <div style={{display:"flex",gap:10}}>
         {BG_OPTIONS.map(b=>(
-          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>{noteManualEdit("colour");setBgColor(b.id);}} title={b.label} style={{
+          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>applyPatch({bgColor:b.id},{source:"ui"})} title={b.label} style={{
             width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
             background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
             border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
@@ -6234,8 +6349,8 @@ export default function App() {
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
         <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
         <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha}
-          onInput={e=>setBgAlpha(parseFloat(e.currentTarget.value))}
-          onChange={e=>setBgAlpha(parseFloat(e.target.value))}
+          onInput={e=>applyPatch({bgAlpha:parseFloat(e.currentTarget.value)},{source:"ui"})}
+          onChange={e=>applyPatch({bgAlpha:parseFloat(e.target.value)},{source:"ui"})}
           style={{flex:1,accentColor:B.burnham}} />
         <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
       </div>
@@ -6254,7 +6369,7 @@ export default function App() {
         <>
           <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
             {SAMPLE_IMAGES.map((s,i)=>(
-              <button key={i} onClick={()=>{removeVideo();setImage(s.full);imgFrom(s.full).then(setImageObj);}}
+              <button key={i} onClick={()=>applyPatch({imageSrc:s.full},{source:"ui"})}
                 style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
                 title={s.label}>
                 <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
@@ -6269,11 +6384,11 @@ export default function App() {
           <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
           {mediaObj&&<>
             <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>⊕ Center</button>
-              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.5}));}} style={quickBtn(B,FU)}>50%</button>
-              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:0.75}));}} style={quickBtn(B,FU)}>75%</button>
-              <button onClick={()=>{setPhotoSel(true);setPhotoT(t=>({...t,zoom:1,cx:0.5,cy:0.5}));}} style={quickBtn(B,FU)}>Fill</button>
-              <button onClick={()=>{setPhotoT(t=>({...t,rotation:0}));}} style={quickBtn(B,FU)}>0°</button>
+              <button onClick={()=>{setPhotoSel(true);patchPhoto({cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>⊕ Center</button>
+              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.5});}} style={quickBtn(B,FU)}>50%</button>
+              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.75});}} style={quickBtn(B,FU)}>75%</button>
+              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:1,cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>Fill</button>
+              <button onClick={()=>{patchPhoto({rotation:0});}} style={quickBtn(B,FU)}>0°</button>
             </div>
             <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
           </>}
@@ -6310,17 +6425,17 @@ export default function App() {
   // would break focusPrimaryText and accessibility.
   const renderTextPanel = (idPrefix="wo-text-primary") => (
     <>
-      {postType==="quote"&&<><Area id={idPrefix} data-wo-role="hero" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>setHeadline(e.target.value)} /><In data-wo-role="support" placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>setAttribution(e.target.value)} mt /></>}
-      {postType==="event"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Event title" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /><In data-wo-role="support" placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt /></>}
-      {postType==="text_post"&&<><In data-wo-role="support" placeholder="Intro line / caption" maxLength={140} value={subtext} onChange={e=>setSubtext(e.target.value)} /><In id={idPrefix} data-wo-role="hero" placeholder="Headline" maxLength={200} value={headline} onChange={e=>setHeadline(e.target.value)} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>setAttribution(e.target.value)} mt />{dateText?<In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt />:null}</>}
-      {postType==="texture_text"&&<In id={idPrefix} data-wo-role="hero" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} />}
-      {postType==="photo_logo"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>setHeadline(e.target.value)} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
+      {postType==="quote"&&<><Area id={idPrefix} data-wo-role="hero" placeholder="Quote text" maxLength={280} value={headline} onChange={e=>applyPatch({headline:e.target.value},{source:"ui"})} /><In data-wo-role="support" placeholder="Attribution" maxLength={100} value={attribution} onChange={e=>applyPatch({attribution:e.target.value},{source:"ui"})} mt /></>}
+      {postType==="event"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Event title" maxLength={100} value={headline} onChange={e=>applyPatch({headline:e.target.value},{source:"ui"})} /><In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>applyPatch({dateText:e.target.value},{source:"ui"})} mt /><In data-wo-role="support" placeholder="Details / CTA" maxLength={180} value={subtext} onChange={e=>applyPatch({subtext:e.target.value},{source:"ui"})} mt /></>}
+      {postType==="text_post"&&<><In data-wo-role="support" placeholder="Intro line / caption" maxLength={140} value={subtext} onChange={e=>applyPatch({subtext:e.target.value},{source:"ui"})} /><In id={idPrefix} data-wo-role="hero" placeholder="Headline" maxLength={200} value={headline} onChange={e=>applyPatch({headline:e.target.value},{source:"ui"})} mt /><In placeholder="Subtext" maxLength={220} value={attribution} onChange={e=>applyPatch({attribution:e.target.value},{source:"ui"})} mt />{dateText?<In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>applyPatch({dateText:e.target.value},{source:"ui"})} mt />:null}</>}
+      {postType==="texture_text"&&<In id={idPrefix} data-wo-role="hero" placeholder="Overlay text (e.g. NOW OPEN)" maxLength={100} value={headline} onChange={e=>applyPatch({headline:e.target.value},{source:"ui"})} />}
+      {postType==="photo_logo"&&<><In id={idPrefix} data-wo-role="hero" placeholder="Caption (optional)" maxLength={100} value={headline} onChange={e=>applyPatch({headline:e.target.value},{source:"ui"})} /><div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no caption needed.</div></>}
       {/* (WP-U fix #1) photo_logo / texture_text EDITORIAL designs also render a
           support line + a date (landing/chat plans set them) — expose both so every
           drawn role has its own input. */}
       {["photo_logo","texture_text"].includes(postType) && heroRegister ? <>
-        <In data-wo-role="support" placeholder="Support line (optional)" maxLength={180} value={subtext} onChange={e=>setSubtext(e.target.value)} mt />
-        {dateText ? <In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>setDateText(e.target.value)} mt /> : null}
+        <In data-wo-role="support" placeholder="Support line (optional)" maxLength={180} value={subtext} onChange={e=>applyPatch({subtext:e.target.value},{source:"ui"})} mt />
+        {dateText ? <In data-wo-role="date" placeholder="Date (e.g. 15 January)" maxLength={50} value={dateText} onChange={e=>applyPatch({dateText:e.target.value},{source:"ui"})} mt /> : null}
       </> : null}
       {/* (WP-U fix #1) EYEBROW — the small caps label was baked at materialization
           (microLabel) and had NO edit field, so it looked uneditable. Shown whenever
@@ -6328,11 +6443,11 @@ export default function App() {
       {(microLabel || (heroRegister && typeLayouts[postType]?.roles?.microLabel)) ?
         <In data-wo-role="eyebrow" placeholder="Eyebrow (small caps label)" maxLength={28}
           value={microLabel || ((attribution && attribution.length<=28) ? attribution : "")}
-          onChange={e=>setMicroLabel(e.target.value)} mt /> : null}
+          onChange={e=>applyPatch({microLabel:e.target.value},{source:"ui"})} mt /> : null}
       {/* (WP-U fix #1) PILL — the accent badge label (archetype furniture) is now editable. */}
       {(()=>{const badge=archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.furniture||[]).find(f=>f&&f.type==="badge"):null;
         return badge ? <In data-wo-role="pill" placeholder="Pill label (e.g. NOW ENROLLING)" maxLength={30}
-          value={pillText || badge.text || ""} onChange={e=>setPillText(e.target.value)} mt /> : null;})()}
+          value={pillText || badge.text || ""} onChange={e=>applyPatch({pillText:e.target.value},{source:"ui"})} mt /> : null;})()}
       <EditorSubhead label="Typography" summary="Editorial auto-fit" />
       <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -6377,14 +6492,14 @@ export default function App() {
       <EditorSubhead label="Text backdrop" summary={{auto:"Auto",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
       <div style={{display:"flex",gap:6}}>
         {[{id:"auto",l:"Auto"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
-          <button key={o.id} aria-pressed={on} onClick={()=>{noteManualEdit("colour");setBackdropMode(o.id);}} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
+          <button key={o.id} aria-pressed={on} onClick={()=>applyPatch({backdropMode:o.id},{source:"ui"})} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
             style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
         );})}
       </div>
       <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto flips the text colour first, then adds a solid brand band only where the photo is too busy.</div>
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
       <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
-        {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>{noteManualEdit("colour");setTextColorId(option.id);}} title={option.label}
+        {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>applyPatch({textColorId:option.id},{source:"ui"})} title={option.label}
           style={{position:"relative",width:38,height:38,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:color,boxShadow:"0 0 0 2px #fff inset",display:"grid",placeItems:"center",color:hexLuminance(color)>0.55?B.jet:B.whiteSmoke,fontFamily:F.subtitle,fontSize:option.id==="auto"?9:0,fontWeight:800}}>{option.id==="auto"&&"AUTO"}</button>;})}
       </div>
       <div style={{fontSize:11,color:B.ash,marginTop:7,fontFamily:F.body,lineHeight:1.45}}>
@@ -6406,7 +6521,7 @@ export default function App() {
           const isSel = selectedLogoId===v.id;
           const isAuto = suggestedColor===v.color && !isSel && imageObj;
           return (
-            <button key={v.id} aria-pressed={isSel} onClick={()=>{noteManualEdit("logo");setSelectedLogoId(v.id);setLogoVariantTouched(true);}}
+            <button key={v.id} aria-pressed={isSel} onClick={()=>applyPatch({logoId:v.id},{source:"ui"})}
               title={`${v.label} — ${v.color}${isAuto?" (suggested)":""}`}
               style={{position:"relative",padding:6,borderRadius:8,border:`2px solid ${isSel?B.burnham:isAuto?B.celadon:B.ash+"33"}`,background:isSel?B.burnham+"11":v.color==="green"?"#F0F4F1":"#FAF8F4",cursor:"pointer",aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",transition:"all 0.12s"}}>
               <img src={v.src} alt={v.label} style={{width:"100%",height:"60%",objectFit:"contain"}} />
@@ -6724,7 +6839,7 @@ export default function App() {
               {DIMENSIONS.map(d=>{
                 const on=dimensionId===d.id;
                 return (
-                  <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.purpose} · ${d.w} × ${d.h}px`}
+                  <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.purpose} · ${d.w} × ${d.h}px`}
                     style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
                     <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
                     <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
@@ -6741,7 +6856,7 @@ export default function App() {
 
           <Sec label="Post Type" summary={`${curType?.label||"Post"} · ${videoObj?"Video":imageObj?"Image":"No media"}`} defaultOpen>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-              {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>setPostType(t.id)}>{t.label}</Chip>)}
+              {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>applyPatch({postType:t.id},{source:"ui"})}>{t.label}</Chip>)}
             </div>
             <EditorSubhead label="Media" summary={videoObj?"Video added":imageObj?"Image added":"Optional for every post"} />
             {renderPhotoPanel()}
@@ -6934,7 +7049,7 @@ export default function App() {
               const on=dimensionId===d.id;
               const tw=Math.max(1,Math.round(72*d.w/d.h));
               return (
-                <button key={d.id} aria-pressed={on} onClick={()=>setDimensionId(d.id)} title={`${d.label} · ${d.w} × ${d.h}px`}
+                <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.label} · ${d.w} × ${d.h}px`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
                   <span style={{display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
                     {formatThumbs[d.id]
