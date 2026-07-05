@@ -2698,6 +2698,7 @@ export default function App() {
   const [chatSeed, setChatSeed] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
   const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
+  const [topMenu, setTopMenu] = useState(null); // WP-V top bar popover: templates|format|type|add|export
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -5946,9 +5947,9 @@ export default function App() {
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
     }
     setTextSelected(false);
-    if (!canPan) return;
+    if (!canPan) { selectElement("bg"); return; }
     const hp = photoHandles(rect);
-    if (!hp) return;
+    if (!hp) { selectElement("bg"); return; }
     const near = (p) => Math.hypot(e.clientX-p.x, e.clientY-p.y) <= HANDLE_HIT;
     // Rotate + resize handles only active once the photo is selected.
     if (photoSel && near(hp.rotKnob)) {
@@ -5968,9 +5969,10 @@ export default function App() {
       dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:photoT.cx, cy:photoT.cy, rect };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
-    // clicked empty space → deselect everything + close the inspector.
+    // (WP-V §2.2) Dead clicks are impossible: empty canvas IS the background
+    // element — clicking it opens the Background inspector.
     setPhotoSel(false);
-    closeInspector();
+    selectElement("bg");
   };
   const onPanMove = (e) => {
     const d = dragRef.current; if (!d) return;
@@ -6381,7 +6383,6 @@ export default function App() {
             <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
           </div>
           <MidjourneyLauncher />
-          <input ref={imgRef} type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f){removeVideo();loadFile(f);}}} style={{display:"none"}} />
           {mediaObj&&<>
             <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
               <button onClick={()=>{setPhotoSel(true);patchPhoto({cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>⊕ Center</button>
@@ -6395,7 +6396,6 @@ export default function App() {
         </>
       ):(
         <>
-          <input ref={videoInputRef} type="file" accept="video/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} style={{display:"none"}} />
           <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
           {videoObj&&<>
             <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -6675,33 +6675,76 @@ export default function App() {
     return { title:a?.name || "Overlay", body:renderOverlayPanel() };
   })();
 
-  // A single rail chip (shared by desktop rail + mobile strip).
-  const RailChip = (el) => {
-    const on = activeElKey === el.key;
+  /* ── + ADD GALLERY (WP-V — vocabulary-free adding, §3) ──
+     Recognition over recall: visual tiles with plain-language labels. Adds go
+     through THE pipeline. (Stage 2 ships photo + decoration; Stage 4 adds the
+     text-role tiles with rendered thumbnails.) */
+  const renderAddGallery = () => (
+    <>
+      <MenuHead label="Add to this design" sub="Tap what you want to add — no design words needed." />
+      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Photo</div>
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        <button onClick={()=>{setShowLibPicker(true);setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:"transparent",border:`1px solid ${B.burnham}33`,borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:B.burnham,letterSpacing:0.5}}>📂 From the Library</button>
+        <button onClick={()=>{imgRef.current?.click();setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:B.burnham,border:"none",borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:"#fff",letterSpacing:0.5}}>＋ Upload a photo</button>
+      </div>
+      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+        {overlays.map(o=>{
+          const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
+          const placed=!!placedLayer;
+          return (
+            <button key={o.id} aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else{toggleOverlay(o);}setTopMenu(null);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
+              style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+              <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
+              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
+              {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
+            </button>
+          );
+        })}
+        <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG decoration"
+          style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`1px dashed ${B.ash}88`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:600,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
+          <span style={{fontSize:20,lineHeight:1}}>＋</span>
+          Add new
+        </button>
+      </div>
+    </>
+  );
+
+  /* ── INSPECTOR LAYER LIST (WP-V Stage 2) ──
+     The bubbles rail's ONLY surviving job (§2.3): selecting occluded elements.
+     Lives INSIDE the inspector and renders only when relevant (≥2 elements). */
+  const LayerList = () => {
+    if (activeElements.length < 2) return null;
     return (
-      <button key={el.key} type="button" aria-pressed={on} title={`Edit ${el.label}`}
-        onClick={()=>{
-          if (el.overlay) selectElement("overlay", el.key);
-          else selectElement(el.key);
-        }}
-        className="wo-rail-chip" data-active={on?"true":"false"}
-        style={{
-          display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,
-          width:52,minHeight:52,padding:"6px 4px",borderRadius:12,cursor:"pointer",flex:"0 0 auto",
-          border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",
-          color:on?"#fff":B.jet,transition:"all 0.12s",
-        }}>
-        {el.thumb
-          ? <img src={el.thumb} alt="" style={{width:20,height:20,objectFit:"contain",filter:on?"brightness(0) invert(1)":"none"}} />
-          : <span aria-hidden="true" style={{fontSize:15,lineHeight:1,fontFamily:el.icon==="T"?F.title:FU.subtitle,fontWeight:700}}>{el.icon}</span>}
-        <span style={{fontSize:8,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.3,maxWidth:48,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{el.label}</span>
-      </button>
+      <div role="toolbar" aria-label="Elements" style={{display:"flex",flexWrap:"wrap",gap:6,padding:"10px 14px",borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto"}}>
+        {activeElements.map(el => {
+          const on = activeElKey === el.key;
+          return (
+            <button key={el.key} type="button" aria-pressed={on} title={`Edit ${el.label}`}
+              onClick={()=> el.overlay ? selectElement("overlay", el.key) : selectElement(el.key)}
+              style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 11px",minHeight:30,borderRadius:999,
+                border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?B.burnham:"transparent",
+                color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:500,letterSpacing:0.4,cursor:"pointer"}}>
+              <span aria-hidden="true" style={{fontSize:11,lineHeight:1}}>{el.icon}</span>{el.label}
+            </button>
+          );
+        })}
+      </div>
     );
   };
 
-  // The contextual inspector panel (element name header + ✕ + the element's
-  // extracted control panel). Top-level mount below so position:fixed anchors to
-  // the viewport (no transformed ancestor trap) and it can inset above the FAB.
+  // Per-element REMOVE action (§2.3 "…, delete"). Emits through THE pipeline.
+  // Background + logo are constitutive — no delete.
+  const inspectorRemove = (() => {
+    if (inspectorEl === "text") return { label:"Clear text", act:()=>applyPatch({ headline:"", subtext:"", attribution:"", dateText:"", microLabel:"", pillText:"" }, { source:"ui" }) };
+    if (inspectorEl === "photo") return { label: videoObj ? "Remove video" : "Remove photo", act:()=>{ applyPatch({ removeImage:true }, { source:"ui" }); closeInspector(); } };
+    if (inspectorEl && !["bg","logo","text","photo"].includes(inspectorEl)) return { label:"Delete", act:()=>deleteLayer(inspectorEl) };
+    return null;
+  })();
+
+  // The contextual inspector panel (element name header + delete + ✕ + layer
+  // list + the element's control panel). Top-level mount below so
+  // position:fixed anchors to the viewport (no transformed ancestor trap).
   const InspectorPanel = ({mobile=false}) => {
     if (!inspectorInfo) return null;
     return (
@@ -6709,12 +6752,19 @@ export default function App() {
         className={mobile?"wo-inspector wo-inspector-sheet":"wo-inspector wo-inspector-dock"}>
         <div className="wo-inspector-head" style={{
           display:"flex",alignItems:"center",gap:10,padding:"12px 14px",
-          borderBottom:`1px solid ${B.ash}33`,background:"#fff",flex:"0 0 auto",
+          borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto",
         }}>
-          <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.6,textTransform:"uppercase",color:B.burnham}}>{inspectorInfo.title}</span>
+          <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.6,textTransform:"uppercase",color:B.burnham}}>{inspectorInfo.title}</span>
+          {inspectorRemove && (
+            <button type="button" onClick={inspectorRemove.act}
+              style={{marginLeft:"auto",border:"none",background:"transparent",color:B.tangerine,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.4,cursor:"pointer",padding:"6px 8px"}}>
+              {inspectorRemove.label}
+            </button>
+          )}
           <button type="button" aria-label="Close inspector" onClick={closeInspector}
-            style={{marginLeft:"auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}22`,color:B.jet,fontSize:16,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
+            style={{marginLeft:inspectorRemove?0:"auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}18`,color:B.jet,fontSize:15,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
         </div>
+        <LayerList />
         <div className="wo-inspector-body" style={{padding:"14px 15px 18px",overflowY:"auto",flex:"1 1 auto",background:"#fff"}}>
           {inspectorInfo.body}
         </div>
@@ -6724,290 +6774,232 @@ export default function App() {
 
   if(!ready) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:B.whiteSmoke,fontFamily:F.body,color:B.burnham}}>Loading...</div>;
 
+  /* ── TOP BAR MENU CONTENT (WP-V Stage 2 — globals only: format, post type,
+     templates, add, export, undo; ux-architecture §2.4) ── */
+  const MenuHead = ({label, sub}) => (
+    <div style={{margin:"4px 0 10px"}}>
+      <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.burnham}}>{label}</div>
+      {sub && <div style={{fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.5,marginTop:3}}>{sub}</div>}
+    </div>
+  );
+  const topMenuContent = () => {
+    if (topMenu === "format") return (
+      <>
+        <MenuHead label="Format" sub="The canvas size. Every format keeps its own smart layout." />
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
+          {DIMENSIONS.map(d=>{
+            const on=dimensionId===d.id;
+            return (
+              <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.purpose} · ${d.w} × ${d.h}px`}
+                style={{padding:"9px 4px",borderRadius:10,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <span style={{fontSize:11,fontWeight:600,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
+                <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
+              </button>
+            );
+          })}
+        </div>
+        {dropHint&&(
+          <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}14`,border:`1px solid ${B.tangerine}44`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
+            <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>{dim.label} shows a condensed layout.</strong> Hidden to fit: {dropHint}. Shorten the copy or pick a taller format.
+          </div>
+        )}
+      </>
+    );
+    if (topMenu === "type") return (
+      <>
+        <MenuHead label="Post type" sub="The kind of post — it shapes which text fields the design carries." />
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>applyPatch({postType:t.id},{source:"ui"})}>{t.label}</Chip>)}
+        </div>
+      </>
+    );
+    if (topMenu === "templates") return (
+      <>
+        {newerDraft&&(
+          <div role="status" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.wisteria}22`,border:`1px solid ${B.wisteria}66`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
+            <span style={{flex:"1 1 auto",minWidth:140}}>A newer draft from another device is available.</span>
+            <button onClick={()=>{loadNewerDraft();setTopMenu(null);}} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.3,color:"#fff",background:B.burnham,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer"}}>Load</button>
+            <button onClick={()=>setNewerDraft(null)} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.3,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}44`,borderRadius:7,padding:"6px 11px",cursor:"pointer"}}>Dismiss</button>
+          </div>
+        )}
+        <MenuHead label="Templates" sub="Start from a finished design — everything stays editable." />
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+          {STARTER_TEMPLATES.map(t=>(
+            <TemplateCard key={t.id} template={t} onClick={()=>{applyTemplateWithGuard(t);setTopMenu(null);}} />
+          ))}
+        </div>
+        {designTemplates.length>0&&(
+          <>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"16px 0 8px",gap:8}}>
+              <span style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase"}}>Your templates</span>
+              <span title={cloudTplConfigured?"Templates are shared with your team":"Saved on this device only"} style={{fontSize:9,fontFamily:F.body,color:cloudTplConfigured?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{cloudTplConfigured?"◆ Synced to team library":"◇ This device only"}</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+              {designTemplates.slice(0,6).map(template=>(
+                <div key={template.id} style={{position:"relative"}}>
+                  <button onClick={()=>{applyTemplateWithGuard(template);setTopMenu(null);}} title={`Apply ${template.name}`}
+                    style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1px solid ${B.ash}33`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
+                    {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,textTransform:"uppercase"}}>Template</span>}
+                  </button>
+                  {cloudTplConfigured&&(template.localOnly||template.unsynced)&&(
+                    <span title={template.localOnly?"Too large to share — stays on this device":"Not yet synced — will retry"} style={{position:"absolute",top:4,left:4,fontSize:8,fontFamily:F.body,color:"#fff",background:B.jet+"cc",borderRadius:5,padding:"1px 4px",lineHeight:1.3}}>{template.localOnly?"This device":"Unsynced"}</span>
+                  )}
+                  <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
+                    style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
+                  <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <button onClick={saveDesignTemplate} style={{width:"100%",marginTop:14,padding:"10px 12px",borderRadius:999,border:`1px solid ${B.burnham}44`,background:"transparent",color:B.burnham,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,cursor:"pointer"}}>
+          Save current design as a template
+        </button>
+        <div style={{height:18}} />
+        <MenuHead label="Layouts" sub="12 editorial compositions. Applying one restyles the whole design; everything stays editable." />
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+          <button onClick={()=>pickArchetype(null)} aria-pressed={archetypeId===null} title="Free layout (no archetype)"
+            style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1px solid ${archetypeId===null?B.burnham:B.ash+"33"}`,background:archetypeId===null?`${B.celadon}22`:"#fff",cursor:"pointer"}}>
+            <span style={{width:"100%",aspectRatio:"1/1",borderRadius:6,border:`1px dashed ${B.ash}66`,display:"grid",placeItems:"center",color:B.ash,fontSize:18}}>∅</span>
+            <span style={{fontSize:9,fontWeight:600,fontFamily:FU.subtitle,letterSpacing:0.2,color:archetypeId===null?B.burnham:B.jet,textAlign:"center",lineHeight:1.2}}>None (free)</span>
+          </button>
+          {ARCHETYPES.map(a=>{
+            const on=archetypeId===a.id;
+            const el=a.elements||{};
+            const box=(b,fill,op=1)=>b?<rect x={(b.x*40).toFixed(1)} y={(b.y*40).toFixed(1)} width={(Math.min(b.w,1-b.x)*40).toFixed(1)} height={(Math.min(b.h,1-b.y)*40).toFixed(1)} rx="1.5" fill={fill} opacity={op}/>:null;
+            const fieldC=(BG_OPTIONS.find(o=>o.id===a.palette?.bg)?.color)||B.whiteSmoke;
+            const inkC=(BG_OPTIONS.find(o=>o.id===a.palette?.ink)?.color)||B.burnham;
+            return (
+              <button key={a.id} onClick={()=>pickArchetype(a.id)} aria-pressed={on} title={on&&(a.variants?.length||1)>1?`${a.name} — click again to cycle palette (${(archVariant%(a.variants.length))+1}/${a.variants.length})`:`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
+                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?`${B.celadon}22`:"#fff",cursor:"pointer"}}>
+                <svg viewBox="0 0 40 40" style={{width:"100%",aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
+                  <rect x="0" y="0" width="40" height="40" rx="3" fill={fieldC} stroke={`${B.ash}44`} strokeWidth="0.6"/>
+                  {a.fullBleed&&el.photo?box(el.photo,B.celadonDeep,0.85):null}
+                  {a.special==="floatedCard"&&el.card?box(el.card,B.celadonDeep,0.9):null}
+                  {a.special==="petalWindow"&&el.mask?<ellipse cx={((el.mask.x+el.mask.w/2)*40).toFixed(1)} cy={((el.mask.y+el.mask.h/2)*40).toFixed(1)} rx={(el.mask.w*20).toFixed(1)} ry={(el.mask.h*20).toFixed(1)} fill={B.celadonDeep} opacity="0.9"/>:null}
+                  {(!a.fullBleed&&!a.special&&el.photo)?box(el.photo,B.celadonDeep,0.85):null}
+                  {a.special==="motifField"?<><circle cx="6" cy="6" r="2" fill={ARCHETYPE_COLORS.sage}/><circle cx="34" cy="7" r="2" fill={ARCHETYPE_COLORS.butter}/><circle cx="35" cy="33" r="1.6" fill={ARCHETYPE_COLORS.sage}/></>:null}
+                  {el.microLabel?box(el.microLabel,inkC,0.5):null}
+                  {el.hero?box(el.hero,inkC,0.85):null}
+                  {el.support?box(el.support,inkC,0.4):null}
+                </svg>
+                <span style={{fontSize:8.5,fontWeight:600,fontFamily:FU.subtitle,letterSpacing:0.1,color:on?B.burnham:B.jet,textAlign:"center",lineHeight:1.15}}>{a.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </>
+    );
+    if (topMenu === "add") return renderAddGallery();
+    if (topMenu === "export") return (
+      <>
+        <MenuHead label="Export" sub={`${W} × ${H} px · ${dim.label}`} />
+        <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:10}}>
+          <div style={{display:"flex",gap:6,flex:1}}>{[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
+            <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)} style={{flex:1,padding:"8px",borderRadius:8,border:`1px solid ${exportFormat===f?B.burnham:B.ash+"33"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:1,cursor:"pointer"}}>{l}</button>
+          ))}</div>
+          {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
+        </div>
+        <button onClick={download} style={{
+          width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",
+          border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",
+          letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
+        }}>Download {exportFormat.toUpperCase()}</button>
+        <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
+          width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,
+          border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
+          letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
+        }}>Download all formats</button>
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          <button onClick={()=>{setAuditOpen(true);setTopMenu(null);}} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
+            flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
+            border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
+            letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+          }}><span aria-hidden="true">✓</span> AI audit</button>
+          <button onClick={()=>{setCaptionOpen(true);setTopMenu(null);}} title="Write a brand-voice caption + hashtags for this design" style={{
+            flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
+            border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
+            letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+          }}><span aria-hidden="true">✎</span> Caption</button>
+        </div>
+        {history.length>0&&(
+          <div style={{marginTop:16,paddingTop:12,borderTop:`1px solid ${B.ash}22`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <span style={{fontSize:10,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash}}>Recent exports ({history.length})</span>
+              <button onClick={clearHistory} style={{fontSize:11,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Clear all</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(56px, 1fr))",gap:8}}>
+              {history.map(h=>(
+                <div key={h.id} style={{textAlign:"center"}}>
+                  <div style={{width:"100%",aspectRatio:"1/1",borderRadius:6,overflow:"hidden",border:`1px solid ${B.ash}22`}}>
+                    <img src={h.thumb} alt={h.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+                  </div>
+                  <div style={{fontSize:9,color:B.ash,marginTop:3,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.date}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    );
+    return null;
+  };
+
+  const topBarButtons = [
+    { id:"templates", label:"Templates", badge:!!newerDraft },
+    { id:"format", label:`Format · ${dim.label}` },
+    { id:"type", label:`Type · ${curType?.label||"Post"}` },
+    { id:"add", label:"＋ Add" },
+  ];
+
   /* ───────── UI ───────── */
   return (
     <div style={{fontFamily:F.body,color:B.jet,minHeight:"100vh",background:B.whiteSmoke}}>
       <Nav section="create" />
 
+      {/* Hidden file inputs — top-level so upload works from the + Add gallery
+          AND the photo inspector regardless of what is mounted. */}
+      <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e=>{const f=e.target.files?.[0];if(f)loadFile(f);e.target.value="";}} />
+      <input ref={videoInputRef} type="file" accept="video/*" style={{display:"none"}}
+        onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} />
+      <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" style={{display:"none"}}
+        onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} />
+
+      {/* ── TOP BAR — GLOBALS ONLY (WP-V Stage 2, §2.4): format, post type,
+            templates, add, export, undo. Per-element controls exist ONLY in
+            the contextual inspector. ── */}
+      <div className="wo-topbar" role="toolbar" aria-label="Design globals">
+        {topBarButtons.map(b=>(
+          <button key={b.id} type="button" className="wo-topbtn" aria-expanded={topMenu===b.id}
+            onClick={()=>setTopMenu(prev=>prev===b.id?null:b.id)}>
+            {b.label}
+            {b.badge && <span aria-hidden="true" style={{display:"inline-block",width:6,height:6,borderRadius:3,background:B.tangerine,marginLeft:6,verticalAlign:"middle"}} />}
+          </button>
+        ))}
+        <span style={{flex:1}} />
+        <button type="button" className="wo-topbtn" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
+          title={aiUndoStack.length?"Undo the last change":"Nothing to undo"}
+          style={{opacity:aiUndoStack.length?1:0.35}}>
+          ↶ Undo
+        </button>
+        <button type="button" className="wo-topbtn wo-topbtn-accent" aria-expanded={topMenu==="export"}
+          onClick={()=>setTopMenu(prev=>prev==="export"?null:"export")}>
+          Export
+        </button>
+      </div>
+      {topMenu && (
+        <>
+          <div className="wo-topmenu-backdrop" onClick={()=>setTopMenu(null)} aria-hidden="true" />
+          <div className="wo-topmenu" role="dialog" aria-label={`${topMenu} menu`}>
+            {topMenuContent()}
+          </div>
+        </>
+      )}
+
       <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
-        {/* ── CONTROLS ── */}
-        <div className="generator-controls" style={{flex:"1 1 310px",minWidth:270,maxWidth:410,padding:"22px 28px",borderRight:`1px solid ${B.ash}33`,background:"#fff",overflowY:"auto",maxHeight:"calc(100vh - 64px)"}}>
-
-          {/* ── ELEMENTS STRIP (mobile): horizontal scrollable chips, rendered
-                directly under the sticky preview panel (outside the sticky element
-                so it never grows the sticky footprint). Hidden on desktop where the
-                vertical rail beside the preview takes over. */}
-          <div className="wo-strip" role="toolbar" aria-label="Design elements"
-            style={{display:"none",gap:8,overflowX:"auto",padding:"2px 0 12px",marginBottom:4}}>
-            {activeElements.map(RailChip)}
-          </div>
-
-          {/* ── TEMPLATES: outcome-first entry point (first thing a new user sees) ── */}
-          <Sec label="Templates" summary={activeTemplateName || (galleryOpen?"Start from a design":"Pick a design")}
-               open={galleryOpen} onOpenChange={setGalleryOpen}>
-            {newerDraft&&(
-              <div role="status" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.wisteria}33`,border:`1px solid ${B.wisteria}`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
-                <span style={{flex:"1 1 auto",minWidth:140}}>A newer draft from another device is available.</span>
-                <button onClick={loadNewerDraft} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.3,color:"#fff",background:B.burnham,border:"none",borderRadius:7,padding:"5px 11px",cursor:"pointer"}}>Load</button>
-                <button onClick={()=>setNewerDraft(null)} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.3,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}55`,borderRadius:7,padding:"5px 11px",cursor:"pointer"}}>Dismiss</button>
-              </div>
-            )}
-            {!hasMeaningfulEdits&&(
-              <div style={{fontSize:12,fontFamily:F.body,color:B.burnham,background:`${B.celadon}44`,border:`1px solid ${B.celadon}`,borderRadius:9,padding:"9px 11px",marginBottom:12,lineHeight:1.4}}>
-                <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>New here?</strong> Tap a template below and everything is set up — just edit the words.
-              </div>
-            )}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
-              {STARTER_TEMPLATES.map(t=>(
-                <TemplateCard key={t.id} template={t} onClick={()=>applyTemplateWithGuard(t)} />
-              ))}
-            </div>
-            {designTemplates.length>0&&(
-              <>
-                <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"16px 0 8px",gap:8}}>
-                  <span style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Your templates</span>
-                  <span title={cloudTplConfigured?"Templates are shared with your team":"Saved on this device only"} style={{fontSize:9,fontFamily:F.body,color:cloudTplConfigured?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{cloudTplConfigured?"◆ Synced to team library":"◇ This device only"}</span>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-                  {designTemplates.slice(0,6).map(template=>(
-                    <div key={template.id} style={{position:"relative"}}>
-                      <button onClick={()=>applyTemplateWithGuard(template)} title={`Apply ${template.name}`}
-                        style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
-                        {template.thumb?<img src={template.thumb} alt={template.name} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,textTransform:"uppercase"}}>Template</span>}
-                      </button>
-                      {cloudTplConfigured&&(template.localOnly||template.unsynced)&&(
-                        <span title={template.localOnly?"Too large to share — stays on this device":"Not yet synced — will retry"} style={{position:"absolute",top:4,left:4,fontSize:8,fontFamily:F.body,color:"#fff",background:B.jet+"cc",borderRadius:5,padding:"1px 4px",lineHeight:1.3}}>{template.localOnly?"This device":"Unsynced"}</span>
-                      )}
-                      <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
-                        style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
-                      <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </Sec>
-
-          {/* ── ARCHETYPES: calibration surface (Commit 4). Applies an archetype
-                 as a STARTING POINT (+ its palette/treatment); "None (free)"
-                 returns to the legacy layout. Frequency caps are DATA-ONLY for
-                 now — enforcement arrives with AI selection in the next package. */}
-          <Sec label="Archetypes" summary={archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.name||"Custom"):"None (free)"}>
-            <div style={{fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.45,marginBottom:10}}>
-              Start from one of the 12 editorial compositions. It restyles the canvas across every format; you can still edit any text, photo, or logo.
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-              <button onClick={()=>applyArchetype(null)} aria-pressed={archetypeId===null} title="Free layout (no archetype)"
-                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${archetypeId===null?B.burnham:B.ash+"44"}`,background:archetypeId===null?`${B.celadon}33`:"#fff",cursor:"pointer"}}>
-                <span style={{width:"100%",aspectRatio:"1/1",borderRadius:6,border:`1px dashed ${B.ash}88`,display:"grid",placeItems:"center",color:B.ash,fontSize:18}}>∅</span>
-                <span style={{fontSize:9,fontWeight:700,fontFamily:FU.subtitle,letterSpacing:0.2,color:archetypeId===null?B.burnham:B.jet,textAlign:"center",lineHeight:1.2}}>None (free)</span>
-              </button>
-              {ARCHETYPES.map(a=>{
-                const on=archetypeId===a.id;
-                const el=a.elements||{};
-                const box=(b,fill,op=1)=>b?<rect x={(b.x*40).toFixed(1)} y={(b.y*40).toFixed(1)} width={(Math.min(b.w,1-b.x)*40).toFixed(1)} height={(Math.min(b.h,1-b.y)*40).toFixed(1)} rx="1.5" fill={fill} opacity={op}/>:null;
-                const fieldC=(BG_OPTIONS.find(o=>o.id===a.palette?.bg)?.color)||B.whiteSmoke;
-                const inkC=(BG_OPTIONS.find(o=>o.id===a.palette?.ink)?.color)||B.burnham;
-                return (
-                  <button key={a.id} onClick={()=>pickArchetype(a.id)} aria-pressed={on} title={on&&(a.variants?.length||1)>1?`${a.name} — click again to cycle palette (${(archVariant%(a.variants.length))+1}/${a.variants.length})`:`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
-                    style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?`${B.celadon}33`:"#fff",cursor:"pointer"}}>
-                    <svg viewBox="0 0 40 40" style={{width:"100%",aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
-                      <rect x="0" y="0" width="40" height="40" rx="3" fill={fieldC} stroke={`${B.ash}55`} strokeWidth="0.6"/>
-                      {a.fullBleed&&el.photo?box(el.photo,B.celadonDeep,0.85):null}
-                      {a.special==="floatedCard"&&el.card?box(el.card,B.celadonDeep,0.9):null}
-                      {a.special==="petalWindow"&&el.mask?<ellipse cx={((el.mask.x+el.mask.w/2)*40).toFixed(1)} cy={((el.mask.y+el.mask.h/2)*40).toFixed(1)} rx={(el.mask.w*20).toFixed(1)} ry={(el.mask.h*20).toFixed(1)} fill={B.celadonDeep} opacity="0.9"/>:null}
-                      {(!a.fullBleed&&!a.special&&el.photo)?box(el.photo,B.celadonDeep,0.85):null}
-                      {a.special==="motifField"?<><circle cx="6" cy="6" r="2" fill={ARCHETYPE_COLORS.sage}/><circle cx="34" cy="7" r="2" fill={ARCHETYPE_COLORS.butter}/><circle cx="35" cy="33" r="1.6" fill={ARCHETYPE_COLORS.sage}/></>:null}
-                      {el.microLabel?box(el.microLabel,inkC,0.5):null}
-                      {el.hero?box(el.hero,inkC,0.85):null}
-                      {el.support?box(el.support,inkC,0.4):null}
-                    </svg>
-                    <span style={{fontSize:8.5,fontWeight:700,fontFamily:FU.subtitle,letterSpacing:0.1,color:on?B.burnham:B.jet,textAlign:"center",lineHeight:1.15}}>{a.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {archetypeId&&(
-              <div style={{marginTop:10,fontSize:10,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>
-                Suits: {(ARCHETYPES_BY_ID[archetypeId]?.suitedPostTypes||[]).join(", ")}. If the current post type is unsuited, the layout falls back gracefully.
-              </div>
-            )}
-          </Sec>
-
-          <Sec label="Format" summary={dim.label}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
-              {DIMENSIONS.map(d=>{
-                const on=dimensionId===d.id;
-                return (
-                  <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.purpose} · ${d.w} × ${d.h}px`}
-                    style={{padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?B.burnham:B.ash+"55"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all 0.12s"}}>
-                    <span style={{fontSize:11,fontWeight:700,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
-                    <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {dropHint&&(
-              <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
-                <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>{dim.label} shows a condensed layout.</strong> Hidden to fit: {dropHint}. Shorten the copy or pick a taller format to show everything.
-              </div>
-            )}
-          </Sec>
-
-          <Sec label="Post Type" summary={`${curType?.label||"Post"} · ${videoObj?"Video":imageObj?"Image":"No media"}`} defaultOpen>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-              {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>applyPatch({postType:t.id},{source:"ui"})}>{t.label}</Chip>)}
-            </div>
-            <EditorSubhead label="Media" summary={videoObj?"Video added":imageObj?"Image added":"Optional for every post"} />
-            {renderPhotoPanel()}
-          </Sec>
-
-          {/* Content fields appear right under the type when the type needs text */}
-          {(postType==="quote"||postType==="event"||postType==="text_post"||postType==="texture_text"||postType==="photo_logo")&&(
-            <Sec label="Content" summary={headline||subtext||(postType==="photo_logo"?"No caption":"Add copy")} open={contentOpen} onOpenChange={setContentOpen}>
-              {renderTextPanel()}
-            </Sec>
-          )}
-
-          <Sec label="Brand marks" summary={markTab.charAt(0).toUpperCase()+markTab.slice(1)}>
-            {/* Logos, photo overlays and editable accessories */}
-            <div style={{display:"flex",gap:6,marginBottom:markTab==="overlays"?8:10,alignItems:"center",flexWrap:"wrap"}}>
-              {["primary","secondary","overlays","accessories"].map(g=>(
-                <Chip key={g} on={markTab===g} click={()=>setMarkTab(g)} sm>{g.charAt(0).toUpperCase()+g.slice(1)}</Chip>
-              ))}
-            </div>
-            {!(["overlays","accessories"].includes(markTab))?(
-              renderLogoPanel(markTab)
-            ):(
-              <>
-                <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} style={{display:"none"}} />
-                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Tap to add or edit · × removes from canvas</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:overlayLayers.length?10:0}}>
-                  {overlays.filter(o=>(o.category||"overlays")===markTab).map(o=>{
-                    const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
-                    const placed=!!placedLayer;
-                    const selected=placedLayer?.uid===selOverlay;
-                    return (
-                      <div key={o.id} style={{position:"relative"}}>
-                        <button aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else toggleOverlay(o);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
-                          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`2px solid ${selected?B.tangerine:placed?B.burnham:B.ash+"33"}`,background:selected?B.tangerine+"0F":"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,transition:"all 0.12s"}}>
-                          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.55}} />
-                          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
-                          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:selected?B.tangerine:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>ON</span>}
-                        </button>
-                        <button onClick={e=>{e.stopPropagation(); if(placedLayer) deleteLayer(placedLayer.uid); else if(!o.builtin) setOverlays(prev=>prev.filter(x=>x.id!==o.id));}} title={placed?"Remove from canvas":!o.builtin?"Remove from library":"Add this shape first"}
-                          style={{position:"absolute",top:-6,left:-6,width:18,height:18,borderRadius:9,border:"none",background:(placed||!o.builtin)?B.jet:B.ash,color:"#fff",fontSize:12,lineHeight:"18px",cursor:(placed||!o.builtin)?"pointer":"default",padding:0,opacity:(placed||!o.builtin)?1:0.35}}>×</button>
-                      </div>
-                    );
-                  })}
-                  {markTab==="overlays"&&(
-                    <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG overlay"
-                      style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`2px dashed ${B.ash}`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:700,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
-                      <span style={{fontSize:22,lineHeight:1}}>＋</span>
-                      Add new
-                    </button>
-                  )}
-                </div>
-
-                {renderOverlayPanel()}
-
-              </>
-            )}
-          </Sec>
-
-          {(postType==="quote"||postType==="text_post"||postType==="event"||hasFrameLayer||(mediaObj&&imgT.zoom<0.999))&&(
-            <Sec label="Background" summary={curBg?.label}>
-              {renderBackgroundPanel()}
-            </Sec>
-          )}
-
-          {/* Save current design as a reusable template (appears in the Templates gallery under "Your templates") */}
-          <div style={{marginTop:12,padding:"12px",borderRadius:12,background:"#fff",border:`1px solid ${B.ash}44`}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-              <div>
-                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Before export</div>
-                <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginTop:2}}>Save this full design as a reusable template. It appears in the Templates gallery at the top.</div>
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <button onClick={()=>setAuditOpen(true)} title="Review this design before saving (advisory)"
-                  style={{border:`1.5px solid ${B.burnham}66`,borderRadius:999,background:"transparent",color:B.burnham,cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"8px 11px",whiteSpace:"nowrap"}}>
-                  ✓ AI audit
-                </button>
-                <button onClick={saveDesignTemplate} title="Save this full design as a reusable template"
-                  style={{border:"none",borderRadius:999,background:B.burnham,color:"#fff",cursor:"pointer",fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,padding:"9px 12px",whiteSpace:"nowrap"}}>
-                  Save template
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Export format */}
-          <div style={{display:"flex",gap:6,marginTop:10,marginBottom:8,alignItems:"center"}}>
-            <div style={{display:"flex",gap:6,flex:1}}>{[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
-              <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)} style={{flex:1,padding:"7px",borderRadius:8,border:`1.5px solid ${exportFormat===f?B.burnham:B.ash+"44"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>{l}</button>
-            ))}</div>
-            {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
-          </div>
-          {/* AI audit + Caption writer — advisory helpers; export/save never blocked */}
-          <div style={{display:"flex",gap:8,marginBottom:8}}>
-            <button onClick={()=>setAuditOpen(true)} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
-              flex:1,padding:"11px 8px",background:"transparent",color:B.burnham,
-              border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
-              letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
-            }}><span aria-hidden="true">✓</span> AI audit</button>
-            <button onClick={()=>setCaptionOpen(true)} title="Write a brand-voice caption + hashtags for this design" style={{
-              flex:1,padding:"11px 8px",background:"transparent",color:B.burnham,
-              border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
-              letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
-            }}><span aria-hidden="true">✎</span> Caption</button>
-          </div>
-          <button onClick={download} style={{
-            width:"100%",padding:"14px 40px",background:B.tangerine,color:"#fff",
-            border:"none",borderRadius:40,fontSize:14,fontWeight:700,cursor:"pointer",
-            letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
-          }}>Download {exportFormat.toUpperCase()}</button>
-          <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
-            width:"100%",padding:"11px 40px",marginTop:8,background:"transparent",color:B.burnham,
-            border:`1.5px solid ${B.burnham}66`,borderRadius:40,fontSize:12,fontWeight:700,cursor:"pointer",
-            letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
-          }}>Download all formats</button>
-          <div style={{fontSize:11,color:B.ash,textAlign:"center",marginTop:6}}>{W} × {H} px · {dim.label}</div>
-
-          {/* ASSET HISTORY */}
-          {history.length>0&&(
-            <div style={{marginTop:20,paddingTop:16,borderTop:`1px solid ${B.ash}33`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                <button onClick={()=>setHistOpen(!histOpen)} style={{fontSize:10,fontFamily:F.subtitle,fontWeight:700,letterSpacing:2.5,textTransform:"uppercase",color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:4}}>
-                  Recent Exports ({history.length}) <span style={{fontSize:9,transform:histOpen?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▼</span>
-                </button>
-                {histOpen&&<button onClick={clearHistory} style={{fontSize:11,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Clear all</button>}
-              </div>
-              {histOpen&&(
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(64px, 1fr))",gap:8}}>
-                  {history.map(h=>(
-                    <div key={h.id} style={{textAlign:"center"}}>
-                      <div style={{width:"100%",aspectRatio:"1/1",borderRadius:6,overflow:"hidden",border:`1px solid ${B.ash}33`}}>
-                        <img src={h.thumb} alt={h.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
-                      </div>
-                      <div style={{fontSize:9,color:B.ash,marginTop:3,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.date}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
         {/* ── PREVIEW ── */}
         <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
-          {/* ── ELEMENTS RAIL (desktop): slim vertical strip at the right edge of
-                the preview. Hidden < ~1100px via CSS; the mobile chip strip in the
-                controls column takes over there. */}
-          <div className="wo-rail" role="toolbar" aria-label="Design elements"
-            style={{position:"absolute",top:70,right:10,display:"flex",flexDirection:"column",gap:8,zIndex:8}}>
-            {activeElements.map(RailChip)}
-          </div>
-          <div style={{fontSize:11,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash,marginBottom:10,alignSelf:"flex-start"}}>Preview</div>
           <div ref={previewRef} className="generator-preview-frame"
             style={{width:"100%",maxWidth:820,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef} style={{
@@ -7034,7 +7026,7 @@ export default function App() {
                   title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
                   style={{position:"absolute",top:10,left:10,zIndex:8,display:"inline-flex",alignItems:"center",gap:6,
                     padding:"6px 12px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",
-                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",
+                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
                     cursor:refreshingPhoto?"wait":"pointer",boxShadow:"0 2px 10px rgba(43,80,64,0.14)",opacity:refreshingPhoto?0.7:1}}>
                   <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
                   {refreshingPhoto ? "Refreshing…" : "Refresh photo"}

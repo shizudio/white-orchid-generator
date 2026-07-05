@@ -1,0 +1,67 @@
+<!doctype html>
+<!--
+  The White Orchid — 1080×1350 branded post template.
+  Filled by tools/render.mjs from a JSON spec, then screenshotted.
+  Placeholders: {{PHOTO}} {{EYEBROW}} {{HEAD1}} {{HEAD_ITALIC}} {{PILL}} {{HANDLE}} {{LOGO}}
+  Font/logo paths are relative to this file (tools/). Adjust if you move it.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* Brand tokens — single source of truth */
+  @import url("../the-white-orchid-design-system/project/colors_and_type.css");
+
+  /* Hashed font files (the un-hashed ones are empty LFS placeholders) */
+  @font-face{font-family:"Romie";src:url("../the-white-orchid-design-system/project/uploads/Romie-Regular-cbb51006.otf") format("opentype");font-weight:400;font-style:normal;}
+  @font-face{font-family:"Romie";src:url("../the-white-orchid-design-system/project/uploads/Romie-Italic-0f7e9948.otf") format("opentype");font-weight:400;font-style:italic;}
+  @font-face{font-family:"Syne";src:url("../the-white-orchid-design-system/project/uploads/Syne-VariableFont_wght-6c537669.ttf") format("truetype");font-weight:400 800;font-style:normal;}
+
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{
+    --burnham:#254E48; --burnham-dk:#1B3B36; --smoke:#F5F6E7; --tangerine:#F6644E;
+  }
+  .post{
+    position:relative; width:1080px; height:1350px; overflow:hidden;
+    background:var(--burnham-dk);
+  }
+  .photo{position:absolute; inset:0; width:100%; height:100%; object-fit:cover;}
+  /* Contrast scrims (photos are clean/no-text, so these are light) */
+  .scrim-top{position:absolute; top:0; left:0; right:0; height:48%;
+    background:linear-gradient(180deg, rgba(27,59,54,.94) 0%, rgba(27,59,54,.55) 52%, rgba(27,59,54,0) 100%);}
+  .scrim-bottom{position:absolute; bottom:0; left:0; right:0; height:26%;
+    background:linear-gradient(0deg, rgba(27,59,54,.85) 0%, rgba(27,59,54,0) 100%);}
+
+  .top{position:absolute; top:70px; left:0; right:0; text-align:center; padding:0 90px;}
+  .logo{width:460px; height:auto; display:block; margin:0 auto 26px;}
+  .eyebrow{font-family:"Syne"; font-weight:600; font-size:20px;
+    letter-spacing:.30em; text-transform:uppercase; color:var(--smoke); opacity:.92;}
+  .headline{font-family:"Romie"; font-weight:400; font-size:78px; line-height:1.04;
+    color:var(--smoke); margin-top:26px; text-wrap:balance;}
+  .headline .it{font-style:italic;}
+
+  .footer{position:absolute; bottom:64px; left:0; right:0; text-align:center;}
+  .pill{display:inline-block; font-family:"Syne"; font-weight:700; font-size:19px;
+    letter-spacing:.12em; text-transform:uppercase; color:#fff; background:var(--tangerine);
+    padding:16px 42px; border-radius:999px;}
+  .handle{font-family:"Syne"; font-weight:500; font-size:26px; letter-spacing:.01em;
+    color:var(--smoke); margin-top:24px;}
+</style>
+</head>
+<body>
+  <div class="post">
+    <img class="photo" src="{{PHOTO}}" alt="">
+    <div class="scrim-top"></div>
+    <div class="scrim-bottom"></div>
+    <div class="top">
+      <img class="logo" src="{{LOGO}}" alt="The White Orchid">
+      <div class="eyebrow">{{EYEBROW}}</div>
+      <div class="headline">{{HEAD1}}<br><span class="it">{{HEAD_ITALIC}}</span></div>
+    </div>
+    <div class="footer">
+      <div class="pill">{{PILL}}</div>
+      <div class="handle">{{HANDLE}}</div>
+    </div>
+  </div>
+</body>
+</html>

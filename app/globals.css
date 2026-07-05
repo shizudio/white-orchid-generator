@@ -941,7 +941,7 @@ canvas[role="application"]:focus-visible {
     /* !important: an inline position:relative on the panel (added so the desktop
        rail can absolutely-position against it) would otherwise defeat sticky. */
     position: sticky !important;
-    top: 64px;
+    top: 116px; /* nav (64) + WP-V top bar (52) */
     z-index: 50;
     flex: 0 0 auto !important;
     width: 100%;
@@ -1094,29 +1094,86 @@ canvas[role="application"]:focus-visible {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   ELEMENTS RAIL + CONTEXTUAL INSPECTOR
+   WP-V CHROME — top bar (globals) + contextual inspector.
+   §7 rulings apply to the chrome itself: airy, thin weights (400–600, never
+   700+ except tiny tracked labels), 1–2 ink colours, hairline borders.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* Desktop vertical rail lives beside the preview; only shown when the preview
-   panel has spare horizontal room (>= ~1100px). Hidden otherwise — the mobile
-   horizontal strip in the controls column takes over. */
-.wo-rail { display: none; }
-.wo-strip { display: none; }
-@media (min-width: 1100px) {
-  .wo-rail { display: flex !important; }
+/* ── Top bar — globals only (§2.4): templates, format, type, add, export, undo. */
+.wo-topbar {
+  position: sticky;
+  top: 64px;
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 6px 20px;
+  background: color-mix(in srgb, #ffffff 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-/* Mobile / narrow: hide the desktop rail, show the horizontal chip strip. */
-@media (max-width: 760px) {
-  .wo-rail { display: none !important; }
-  .wo-strip {
-    display: flex !important;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-  .wo-strip::-webkit-scrollbar { display: none; }
+.wo-topbar::-webkit-scrollbar { display: none; }
+.wo-topbtn {
+  font-family: var(--font-syne);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--tw-burnham);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 8px 14px;
+  min-height: 40px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, border-color 140ms ease;
 }
+.wo-topbtn:hover { background: color-mix(in srgb, var(--tw-celadon) 20%, transparent); }
+.wo-topbtn[aria-expanded="true"] { border-color: color-mix(in srgb, var(--tw-burnham) 30%, transparent); background: color-mix(in srgb, var(--tw-celadon) 24%, transparent); }
+.wo-topbtn:disabled { cursor: default; }
+.wo-topbtn-accent { color: #fff; background: var(--tw-tangerine); }
+.wo-topbtn-accent:hover { background: var(--tw-tangerine-dk); }
+.wo-topbtn-accent[aria-expanded="true"] { background: var(--tw-tangerine-dk); border-color: transparent; }
 
-.wo-rail-chip:hover { border-color: var(--tw-burnham) !important; }
+/* Popover panel under the bar. One panel at a time; backdrop click closes. */
+.wo-topmenu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 219;
+  background: transparent;
+}
+.wo-topmenu {
+  position: fixed;
+  top: 122px;
+  left: 20px;
+  z-index: 220;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(37, 78, 72, 0.16);
+  padding: 16px;
+}
+@media (max-width: 760px) {
+  .wo-topbar { top: 64px; padding: 4px 12px; }
+  .wo-topmenu {
+    top: auto;
+    left: 0; right: 0; bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 76vh;
+    border-radius: 18px 18px 0 0;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .wo-topmenu-backdrop { background: rgba(37, 45, 40, 0.35); }
+}
 
 /* ── Inspector: shared shell ── */
 .wo-inspector {
@@ -1132,14 +1189,14 @@ canvas[role="application"]:focus-visible {
    so the two never collide. Below the chat/FAB (z 359/360) in stacking. */
 .wo-inspector-dock {
   position: fixed;
-  /* Dock just LEFT of the vertical rail (rail = 52px wide at right:10) so the
-     rail chips stay visible + clickable to switch elements while editing. */
-  right: 74px;
-  top: 84px;
+  /* (WP-V) The bubbles rail is gone — the inspector docks flush to the right
+     edge, below the top bar, above the Art Director FAB region. */
+  right: 20px;
+  top: 132px;
   bottom: 96px;
   width: 300px;
-  max-width: calc(100vw - 96px);
-  max-height: 70vh;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 200px);
   z-index: 200;
   border-radius: var(--radius-lg, 16px);
 }
