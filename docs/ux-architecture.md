@@ -103,6 +103,24 @@ home. Nothing silently lost. (Grepped section-by-section before deletion.)
 | Elements rail / mobile strip (selection) | Canvas click (primary) + inspector "Elements" layer list (occlusion fallback) |
 | AI-change undo (chat chips) | Top bar → **Undo** (uniform for UI + AI edits) + chat chips |
 
+### 2.7 Amendments (2026-07-05, client-ratified)
+
+- **Undo, properly visible.** A small always-available undo affordance floating
+  near the canvas (top-bar Undo alone is too far from the eye). Keyboard:
+  Cmd+Z / Cmd+Shift+Z (redo). Both documented in the Guide.
+- **Shapes are first-class.** The petal shapes are a signature brand element and
+  must NOT live under generic "Decoration": standalone **Shapes** section beside
+  Logo in the + Add gallery, petal variants as visual tiles.
+- **Sessions: one session = one post.** "New post" starts a session; sessions
+  auto-save continuously with their conversation attached (doubling as drafts
+  AND as the self-improvement capture layer — see docs/self-improvement-loop.md).
+  A "Posts" list (top bar) shows recent sessions as thumbnails; latest ~10
+  visible, older auto-archived (searchable, never deleted). NO blocking
+  clean-up prompts — storage is KBs/session; caps solve tidiness, not storage.
+- **Save-as-template is a moment, not a button.** Keep the Templates-popover
+  path; add a one-line post-export nudge ("Want to reuse this design? Save it
+  as a template.") — the moment of proven success. No persistent button.
+
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
 A selection-only inspector can't add absent elements, and staff don't know the
