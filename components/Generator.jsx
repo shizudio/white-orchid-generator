@@ -6,7 +6,7 @@ import ArtDirectorChat from "./ArtDirectorChat";
 import AuditPanel from "./AuditPanel";
 import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
-import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
+import { runLocalAudit as computeLocalAudit, computeReadyChecklist } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient } from "@/lib/sessions";
 
@@ -2728,6 +2728,10 @@ export default function App() {
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
   const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
   const [topMenu, setTopMenu] = useState(null); // WP-V top bar popover: templates|format|type|add|export|posts
+  // (WP-Y5) Ready-to-post checklist state: the per-format verdicts + which format
+  // rows are expanded. Recomputed when the Export popover opens and after any fix.
+  const [readyCheck, setReadyCheck] = useState(null);   // { ready, needCount, formats[] } | null
+  const [readyExpanded, setReadyExpanded] = useState(null); // dimensionId currently expanded
 
   /* ── (WP-W) SESSIONS — one session = one post (ux-architecture §2.7) ──
      The current session binds this design + its chat conversation under one id;
@@ -5353,11 +5357,19 @@ export default function App() {
         // (WP-U logo-on-photo) contrast assertion: a lockup drawn over a photo must
         // read at >= 3:1 against its sampled backing (post variant-swap/scrim).
         const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3);
+        // (WP-Y5) Ready-to-post capture: normalized text/logo boxes + fitted font px
+        // + canvas dims for the per-format publish gate (thumbnail legibility +
+        // platform safe-area). Boxes are the SAME drawn role rects used above.
+        const _norm=b=>b?{x:b.x/w,y:b.y/h,w:b.w/w,h:b.h/h}:null;
+        const _readyBoxes=textRoles.map(_norm).filter(Boolean);
+        const _readyLogo=_norm(logoBx);
         auditRef.current={
           dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
+          ready:{canvasW:w,canvasH:h,fontPx:{headline:fontMeta.headline||0,subtext:fontMeta.subtext||0,date:fontMeta.date||0},
+                 textBoxes:_readyBoxes,logoBox:_readyLogo,sm:{...sm}},
           archetypeDrift:{
             heroSupportRatio, heroWords:(stripHeroMarkers(heroFinal||"").trim().split(/\s+/).filter(Boolean).length),
             supportFloor:(mat.heroToSupport||8),
@@ -5706,6 +5718,12 @@ export default function App() {
         const ox=ov.x??sm.l,oy=ov.y??sm.t,ow=ov.width??0.76;
         if(ox<sm.l-0.005||oy<sm.t-0.005||ox+ow>1-sm.r+0.005||oy>1-sm.b+0.005)safeZoneViolation=true;
       }
+      // (WP-Y5) Ready-to-post capture on the legacy path — the drawn text block
+      // (textBoundsRef) + logo box, normalized, plus fitted font px + canvas dims.
+      const _normL=b=>b?{x:b.x/w,y:b.y/h,w:b.w/w,h:b.h/h}:null;
+      const _tb=textBoundsRef.current;
+      const _readyBoxesL=_normL(_tb)?[_normL(_tb)]:[];
+      const _readyLogoL=_normL(auditLogo.box);
       auditRef.current={
         dimensionId:dimId,
         hasMedia:!!mediaObj,
@@ -5718,6 +5736,8 @@ export default function App() {
         logo:{...auditLogo},            // {explicit,overlapsText,inFocalBand}
         safeZoneViolation,
         hasText:!!(headline||subtext||attribution||dateText),
+        ready:{canvasW:w,canvasH:h,fontPx:{headline:fontMeta.headline||0,subtext:fontMeta.subtext||0,date:fontMeta.date||0},
+               textBoxes:_readyBoxesL,logoBox:_readyLogoL,sm:{...sm}},
       };
     }
 
@@ -5819,7 +5839,12 @@ export default function App() {
         try {
           const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
           renderScene(c.getContext("2d"), d.w, d.h, { dimensionId: d.id, live: false, captureAudit: true });
-          out.push({ dimensionId: d.id, findings: computeLocalAudit(auditRef.current) });
+          // Deep-clone the snapshot: auditRef.current is reused/restored below, so a
+          // reference would be mutated by the next format's render. The clone lets the
+          // Ready sweep (WP-Y5) re-read the exact per-format signal.
+          let signal = null;
+          try { signal = JSON.parse(JSON.stringify(auditRef.current)); } catch { signal = auditRef.current; }
+          out.push({ dimensionId: d.id, findings: computeLocalAudit(auditRef.current), signal });
         } catch { /* skip a format that can't render this tick */ }
       }
     } finally {
@@ -5829,13 +5854,64 @@ export default function App() {
     return out;
   }, [renderScene]);
 
+  // (WP-Y5) Per-format "Ready to post" verdicts. Reuses the auditAllFormats sweep
+  // (renders each of the 6 formats off-screen), then runs the pure publish gate on
+  // each format's captured signal. Returns { ready, needCount, formats:[verdict] }.
+  const computeReadyAll = useCallback(() => {
+    const swept = auditAllFormats();
+    return computeReadyChecklist(swept.map(s => ({ dimensionId: s.dimensionId, signal: s.signal })));
+  }, [auditAllFormats]);
+
+  // (WP-Y5) Recompute the Ready-to-post checklist into state. Re-renders the live
+  // canvas first (so auditRef is fresh) then sweeps all formats. Deferred callers
+  // (post-fix) wait for the patch's render to settle before recomputing.
+  const refreshReadyCheck = useCallback(() => {
+    try { setReadyCheck(computeReadyAll()); } catch { setReadyCheck(null); }
+  }, [computeReadyAll]);
+
+  // Apply one Ready-to-post fix through THE patch pipeline (undoable). A fix may
+  // target a non-current format (patch.dimensionId) — applyDesignPatch already
+  // switches the live dimension for a dimensionId patch, so per-format fixes (Story
+  // safe-area, colour flip) land on the right format. After the render settles we
+  // recompute the checklist so the fixed format's verdict flips to Ready.
+  const applyReadyFix = useCallback((fix) => {
+    if (!fix) return;
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+    const done = () => raf(() => raf(() => setTimeout(() => refreshReadyCheck(), 60)));
+    // A per-format fix's textLayout/logo override is written against the LIVE
+    // dimension (writeTextLayout closes over dimensionId). setDimensionId is async,
+    // so if the fix targets a different format we must switch FIRST, let the state
+    // flush, then apply the geometry fix — otherwise the override lands on the wrong
+    // format. Global fixes (colour/backdrop) are dimension-agnostic and apply now.
+    const needsSwitch = fix.dimensionId && fix.dimensionId !== dimensionId &&
+      (fix.textLayout || fix.logoPosition || fix.logoSize);
+    if (needsSwitch) {
+      setDimensionId(fix.dimensionId);
+      const rest = { ...fix }; delete rest.dimensionId;
+      raf(() => raf(() => { try { applyDesignPatch(rest, { uiSource: true }); } catch { /* no-op */ } done(); }));
+    } else {
+      try { applyDesignPatch(fix, { uiSource: true }); } catch { /* no-op */ }
+      done();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshReadyCheck, dimensionId]);
+
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.__runWoAudit = () => runLocalAudit();
     window.__runWoAuditAll = () => auditAllFormats();
-  }, [runLocalAudit, auditAllFormats]);
+    // (WP-Y5) per-format Ready-to-post verdicts (verification + future learning pass).
+    window.__woReadyCheck = () => computeReadyAll();
+  }, [runLocalAudit, auditAllFormats, computeReadyAll]);
+
+  // (WP-Y5) Recompute the checklist whenever the Export popover opens. Fresh on
+  // every open so it reflects the latest design; cleared on close to avoid stale
+  // verdicts flashing on the next open before the sweep runs.
+  useEffect(() => {
+    if (topMenu === "export") { setReadyExpanded(null); refreshReadyCheck(); }
+  }, [topMenu, refreshReadyCheck]);
 
   /* ── CALIBRATION BOARD (Commit 4, dev-only) ──────────────────────────────────
      window.__woCalibrationBoard(content?) renders the CURRENT design's content
@@ -7735,6 +7811,16 @@ export default function App() {
           border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
           letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
         }}>Download all formats</button>
+        {/* (WP-Y5) Ready-to-post checklist — per-format GO/FIX gate. Advisory (never
+            blocks export); a fix routes through the one patch pipeline + is undoable. */}
+        <ReadyToPost
+          check={readyCheck}
+          expanded={readyExpanded}
+          setExpanded={setReadyExpanded}
+          onFix={applyReadyFix}
+          onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
+          currentDim={dimensionId}
+        />
         <div style={{display:"flex",gap:8,marginTop:14}}>
           <button onClick={()=>{setAuditOpen(true);setTopMenu(null);}} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
             flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
@@ -8033,6 +8119,79 @@ export default function App() {
           <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
           {renderInspectorPanel()}
         </>
+      )}
+    </div>
+  );
+}
+
+/* ── READY-TO-POST CHECKLIST (WP-Y5) ─────────────────────────────────────────
+   A per-format publish gate in the Export popover: each of the 6 formats shows
+   Ready ✓ or a fix count; expanding a format lists its concrete issues + Fix
+   buttons. Advisory — never blocks export; Export just reflects readiness with a
+   gentle note. On-brand: thin hairlines, airy spacing, restrained ink (feed-
+   grammar §7). Fixes route through onFix (the one patch pipeline) + are undoable
+   via the top-bar Undo. */
+const READY_LABELS = { ig_square:"IG Square", ig_portrait:"IG Portrait", story:"Story / Reel", twitter:"Twitter / X", facebook:"Facebook", banner:"Banner" };
+function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim }) {
+  const formats = check?.formats || [];
+  const loading = !check;
+  const need = check?.needCount || 0;
+  return (
+    <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <span style={{fontSize:10,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash}}>Ready to post</span>
+        {!loading && (
+          <span style={{fontSize:11,fontFamily:F.body,color:need?B.tangerine:B.burnham,fontWeight:600}}>
+            {need ? `${need} ${need===1?"format needs":"formats need"} a look` : "All 6 formats ready"}
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <p style={{fontSize:11,color:B.ash,fontFamily:F.body,margin:"4px 0"}}>Checking every format…</p>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+          {formats.map(f=>{
+            const isOpen = expanded===f.dimensionId;
+            const label = READY_LABELS[f.dimensionId] || f.dimensionId;
+            return (
+              <div key={f.dimensionId}>
+                <button type="button"
+                  onClick={()=>{ if(f.ready) return; setExpanded(isOpen?null:f.dimensionId); if(!isOpen) onSwitchFormat&&onSwitchFormat(f.dimensionId); }}
+                  aria-expanded={isOpen}
+                  style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"7px 2px",background:"none",border:"none",borderRadius:6,
+                    cursor:f.ready?"default":"pointer",textAlign:"left",fontFamily:F.body}}>
+                  <span aria-hidden="true" style={{width:15,height:15,flexShrink:0,display:"grid",placeItems:"center",borderRadius:"50%",
+                    fontSize:10,fontWeight:700,lineHeight:1,
+                    background:f.ready?`${B.celadon}55`:`${B.tangerine}22`,color:f.ready?B.burnham:B.tangerine}}>
+                    {f.ready?"✓":"!"}
+                  </span>
+                  <span style={{flex:1,fontSize:12,color:B.jet,fontWeight:currentDim===f.dimensionId?600:400}}>{label}</span>
+                  <span style={{fontSize:11,color:f.ready?B.ash:B.tangerine,fontFamily:F.body}}>
+                    {f.ready ? "Ready" : `${f.issues.length} ${f.issues.length===1?"fix":"fixes"}${isOpen?" ▾":" ▸"}`}
+                  </span>
+                </button>
+                {isOpen && !f.ready && (
+                  <div style={{padding:"2px 2px 8px 25px",display:"flex",flexDirection:"column",gap:8}}>
+                    {f.issues.map((iss,i)=>(
+                      <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:5}}>
+                        <span style={{fontSize:11.5,color:B.jet,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
+                        {iss.fix ? (
+                          <button type="button" onClick={()=>onFix(iss.fix)}
+                            style={{alignSelf:"flex-start",padding:"5px 12px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
+                              fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:F.subtitle,cursor:"pointer"}}>
+                            Fix
+                          </button>
+                        ) : (
+                          <span style={{alignSelf:"flex-start",fontSize:10,color:B.ash,fontFamily:F.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>Edit the copy to resolve</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
