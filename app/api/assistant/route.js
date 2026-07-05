@@ -210,8 +210,27 @@ function fallbackScene(intent) {
 // plain copy/colour tweak; this matches the vocabulary of a genuine layout request
 // so we can strip an unsolicited archetype swap server-side (keeping the layout put).
 const LAYOUT_INTENT = /\b(layout|poster|compos\w*|archetype|redesign|re-?design|template|big number|big date|date card|quote card|manifesto|photo card|floated card|documentary|full[- ]?bleed|duotone|portrait|credential|different look|another look|different style|switch (it|the) (up|layout)|make it a|turn (it|this) into)\b/i;
+// ── FULL-IMAGE / PANEL-REMOVAL INTENT (WP-W0 specimen fix) ───────────────────
+// The client's exact failing asks: "i want full image post" (AI fiddled with
+// headline/backdrop, claimed a layout switch) and "remove the green solid" (the
+// split layout's solid side PANEL — not a backdrop/overlay — so only an
+// archetypeId change can remove it). Both are LAYOUT requests: they must pass
+// the layout gate AND deterministically land on a photo-dominant archetype.
+const FULL_IMAGE_INTENT = new RegExp([
+  'full[- ]?(image|photo|picture|bleed)',
+  'whole (image|photo|picture|post|frame)',
+  '(photo|image|picture)[^.!?]{0,24}(fills?|filling|covers?|covering)',
+  'fill (the )?(whole |entire |full )?(frame|post|canvas|screen)',
+  'edge[- ]to[- ]edge',
+  '(remove|get rid of|delete|drop|lose|no more|without) (the |that |this )?(green |colou?red |color |solid |big )*(solid|panel|block|band|column|slab)',
+  'green (solid|panel|block|band|column|slab)',
+].map(s => `\\b(${s})\\b`).join('|'), 'i');
+function wantsFullImage(text) {
+  return FULL_IMAGE_INTENT.test(String(text || ''));
+}
 function wantsLayoutChange(text) {
-  return LAYOUT_INTENT.test(String(text || ''));
+  const t = String(text || '');
+  return LAYOUT_INTENT.test(t) || wantsFullImage(t);
 }
 
 // ── LANDING ARCHETYPE SELECTION (Commit 1) ───────────────────────────────────
@@ -726,6 +745,12 @@ PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only b
 
 ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.
 
+LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACTLY):
+- "full image post" / "I want the photo to fill the whole post" / "full bleed" / "edge to edge" → set patch.archetypeId = "documentary" (one clean photo filling the whole frame). Use "full_bleed_duotone" instead ONLY when they ask for the tinted / green / duotone / moody look. Do NOT touch headline or backdropMode for this ask.
+- "remove the green solid" / "remove the panel / the green block / the coloured band" on a split layout (editorial_split, portrait_credential): that solid side panel IS the layout itself — no backdrop, overlay or logo field can remove it. The ONLY correct patch is a layout switch: set patch.archetypeId = "documentary" (or "full_bleed_duotone" for the tinted look) so the photo fills the frame. NEVER answer this with backdropMode / removeOverlays / logo changes.
+- Never say you changed or switched the layout unless patch.archetypeId is actually set to a NEW value in THIS patch. If you cannot express what was asked, say so plainly ("I can't do that yet") and offer the nearest thing you CAN do.
+- If the user asks to ADD an element the current layout cannot show, say which layout can show it and offer to switch — never claim an add that will not render.
+
 VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describe elements by what they LOOK like, not by design terms. Map their words to the right field, and it must Just Work:
 - "small text at the bottom / under the title / a little caption / a note that says …" → subtext
 - "small label at the top / little caps text / the tiny heading above" → microLabel
@@ -932,6 +957,26 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       }
       // petal_window still requires an explicit naming, even under a layout request.
       if (patch.archetypeId === 'petal_window' && !wantsDecoration(lastUserText)) patch.archetypeId = null;
+    }
+  }
+
+  // ── FULL-IMAGE / PANEL-REMOVAL DETERMINISTIC MAPPING (WP-W0 specimen fix) ──
+  // "i want full image post" / "remove the green solid" MUST land as a layout
+  // switch to a photo-dominant archetype. The prompt now carries few-shot
+  // mappings, but this deterministic belt guarantees the patch carries the
+  // right archetype even when the model reaches for backdrop/logo fields again.
+  if (context !== 'landing') {
+    const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    if (wantsFullImage(lastUserText)) {
+      const tinted = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i.test(lastUserText);
+      const target = tinted ? 'full_bleed_duotone' : 'documentary';
+      const pick = patch.archetypeId;
+      if (pick !== 'documentary' && pick !== 'full_bleed_duotone' && designState.archetypeId !== target) {
+        patch.archetypeId = target;
+        // Any backdrop fiddling the model emitted alongside is superseded by the
+        // layout switch — drop it so the patch reads as ONE decisive change.
+        if (patch.backdropMode != null) patch.backdropMode = null;
+      }
     }
   }
 
