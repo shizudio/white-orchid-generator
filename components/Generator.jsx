@@ -7693,6 +7693,10 @@ export default function App() {
             initialMessages={sessionInitialMessages}
             restoreKey={sessionRestoreKey}
             onConversationChange={setSessionConversation}
+            sessionTitle={deriveSessionTitle()}
+            posts={postTiles}
+            onOpenSession={openSession}
+            onRefreshPosts={refreshPostTiles}
           />
         </aside>
         {/* ── PREVIEW ── */}

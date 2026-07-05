@@ -46,6 +46,14 @@ function summarizeKeys(keys) {
 
 const HISTORY_KEY = 'wo-editor-chat';
 
+// (WP-X §3) Empty-state example prompts, rendered as TAPPABLE chips (they send on
+// tap) — not prose the user mistakes for an inert label.
+const EMPTY_EXAMPLES = [
+  'An open house invite for 18 July',
+  'make the background wisteria',
+  'add small text at the bottom that says pickup is at 3pm',
+];
+
 /* ── (WP-W0) CLAIM-VS-RESULT HONESTY CHECK ─────────────────────────────────────
    After a chat patch applies, the AI's narration is verified against RENDER
    TRUTH (what the canvas actually drew — via the renderTruth prop), never
@@ -102,7 +110,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -438,6 +446,25 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
      pair (intent-in-user's-words × wrong-patch). */
   const [fbOpen, setFbOpen] = useState(null);    // message index whose "what did you want?" is open
   const [fbText, setFbText] = useState('');
+
+  /* ── (WP-X §2) CHAT-RAIL HISTORY ── The client kept hunting for her past
+     conversations INSIDE the chatbox; the Posts top-bar button alone wasn't
+     discoverable. A slim header line shows THIS session's title with a "History"
+     affordance; opening it drops a compact list of recent chats — the SAME
+     sessions store the Posts popover reads (title + thumbnail), so there is no
+     second source of truth. Clicking one switches sessions exactly like Posts. */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const canHistory = typeof onOpenSession === 'function';
+  function toggleHistory() {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next && typeof onRefreshPosts === 'function') onRefreshPosts();
+  }
+  function pickSession(id) {
+    setHistoryOpen(false);
+    if (id && id !== sessionId && typeof onOpenSession === 'function') onOpenSession(id);
+  }
+  const recentPosts = Array.isArray(posts) ? posts.slice(0, 8) : [];
   function handleThumbsDown(idx) {
     const turnId = messages[idx]?.turnId;
     if (turnId) enrichVerdict(turnId, { explicit: 'rejection', explicitSignal: 'thumbs_down' });
@@ -492,11 +519,65 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     <section className="wo-chat" aria-label="Art Director">
       <header className="wo-chat-head">
         <span className="wo-chat-title">Art Director</span>
+        {canHistory && (
+          <div className="ad-hist">
+            {sessionTitle ? <span className="ad-hist-cur" title={sessionTitle}>{sessionTitle}</span> : null}
+            <button
+              type="button"
+              className={`ad-hist-toggle${historyOpen ? ' ad-hist-toggle--on' : ''}`}
+              aria-expanded={historyOpen}
+              aria-haspopup="true"
+              title="Recent chats"
+              onClick={toggleHistory}
+            >
+              History <span className="ad-hist-chev" aria-hidden="true">⌄</span>
+            </button>
+          </div>
+        )}
       </header>
+
+      {historyOpen && canHistory && (
+        <>
+          <div className="ad-hist-backdrop" onClick={() => setHistoryOpen(false)} aria-hidden="true" />
+          <div className="ad-hist-menu" role="menu" aria-label="Recent chats">
+            {recentPosts.length === 0 && (
+              <p className="ad-hist-empty">No other chats yet.</p>
+            )}
+            {recentPosts.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                role="menuitem"
+                className={`ad-hist-item${p.id === sessionId ? ' ad-hist-item--current' : ''}`}
+                onClick={() => pickSession(p.id)}
+              >
+                {p.thumb
+                  ? <img className="ad-hist-thumb" src={p.thumb} alt="" />
+                  : <span className="ad-hist-thumb ad-hist-thumb--blank" aria-hidden="true" />}
+                <span className="ad-hist-label">{p.title || 'Untitled post'}</span>
+                {p.id === sessionId && <span className="ad-hist-dot" aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="wo-chat-list" ref={listRef}>
         {messages.length === 0 && !loading && (
-          <p className="ad-empty">Tell me what to make — or what to change. “An open house invite for 18 July”, “make the background wisteria”, “add small text at the bottom that says pickup is at 3pm”.</p>
+          /* (WP-X §3) TAPPABLE EXAMPLES — the client read these as plain text and
+             tried to interact with them. They are now real chips that SEND on tap,
+             consistent with the landing suggestions. */
+          <div className="ad-empty">
+            <p className="ad-empty-lead">Tell me what to make — or what to change. Tap one to try it:</p>
+            <div className="ad-empty-chips">
+              {EMPTY_EXAMPLES.map(ex => (
+                <button key={ex} type="button" className="ad-empty-chip" disabled={loading}
+                  onClick={() => send(ex)}>
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className={`ad-msg ad-msg--${m.role}`}>
