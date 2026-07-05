@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
@@ -2732,6 +2732,7 @@ export default function App() {
   // rows are expanded. Recomputed when the Export popover opens and after any fix.
   const [readyCheck, setReadyCheck] = useState(null);   // { ready, needCount, formats[] } | null
   const [readyExpanded, setReadyExpanded] = useState(null); // dimensionId currently expanded
+  const [stripFixDim, setStripFixDim] = useState(null); // (WP-Y5b) dimensionId whose issues+Fix show inline under the canvas
 
   /* ── (WP-W) SESSIONS — one session = one post (ux-architecture §2.7) ──
      The current session binds this design + its chat conversation under one id;
@@ -5786,6 +5787,15 @@ export default function App() {
     if(typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook
   },[draw,fontsLoaded]);
 
+  // (fix) A format switch resizes the canvas backing buffer. Without a redraw
+  // BEFORE the browser paints, one frame shows the PREVIOUS format's content
+  // stranded in the newly-sized buffer — on wide/short formats that reads as a
+  // band of artwork with a block of ivory dead space below. Repaint
+  // synchronously on any W/H change so a switch is flash-free. Keyed on [W,H]
+  // only (they change solely on a format switch), so this never fires on a
+  // normal edit/drag and adds no interaction jank.
+  useLayoutEffect(()=>{ if(fontsLoaded && canvasRef.current) draw(); }, [W, H]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* ── LOCAL DESIGN AUDIT (Commit 1) ──────────────────────────────────────────
      Free/instant deterministic checks over the CURRENT dimension. Re-renders the
      live canvas first (so auditRef reflects the very latest state even if a React
@@ -8159,6 +8169,44 @@ export default function App() {
             </div>
           )}
 
+          {/* (WP-Y5b) INLINE STRIP FIX — tapping a flagged thumbnail focuses that
+              format AND surfaces its specific issue(s) + one-tap Fix right here under
+              the canvas, so the user never has to open Export to understand/fix a
+              flag. Reuses the SAME readiness engine + applyReadyFix routing as the
+              Export checklist. A "Ready" format shows no panel. Calm/airy per §7. */}
+          {(() => {
+            const f = (readyCheck?.formats || []).find(x => x.dimensionId === stripFixDim);
+            if (!f || f.ready || dimensionId !== stripFixDim) return null;
+            const label = (typeof READY_LABELS !== "undefined" && READY_LABELS[f.dimensionId]) || dim.label;
+            return (
+              <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,padding:"12px 15px",
+                borderRadius:14,background:`${B.wisteria}22`,border:`1px solid ${B.wisteria}`}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:9}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                    <span aria-hidden="true" style={{width:11,height:11,borderRadius:"50%",background:B.wisteria,boxShadow:"0 0 0 1.5px #fff",flexShrink:0}} />
+                    <span style={{fontSize:11.5,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.5,color:B.burnham}}>{label} — worth a look</span>
+                  </span>
+                  <button type="button" aria-label="Dismiss" title="Dismiss" onClick={()=>setStripFixDim(null)}
+                    style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:9}}>
+                  {f.issues.map((iss,i)=>(
+                    <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:5}}>
+                      <span style={{fontSize:12,color:B.jet,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
+                      {iss.fix ? (
+                        <button type="button" onClick={()=>applyReadyFix(iss.fix)}
+                          style={{alignSelf:"flex-start",padding:"5px 14px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
+                            fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Fix</button>
+                      ) : (
+                        <span style={{alignSelf:"flex-start",fontSize:10,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>Edit the copy to resolve</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* (WP-Y2) EVERY-FORMAT SET — the design isn't one canvas + a switcher;
               it's one idea laid out in all 6 ratios at once. This strip IS the set:
               each ratio labelled, each showing its own readiness (✓ / a fix dot)
@@ -8172,8 +8220,10 @@ export default function App() {
           <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:18}}>
             <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:9,flexWrap:"wrap"}}>
               <span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:B.burnham}}>Your post in every format</span>
-              <span style={{fontSize:10.5,fontFamily:F.body,color:readyCheck==null?B.ash:(need?B.tangerine:B.burnham),fontWeight:600}}>
-                {readyCheck==null ? "Checking every format…" : need ? `${need} ${need===1?"format needs":"formats need"} a look` : "All 6 ready to post"}
+              {/* (WP-Y5b) Calm header — "needs a look" reads as a gentle nudge, not an
+                  error. Muted celadon-deep ink (never tangerine; accent is CTA-only). */}
+              <span style={{fontSize:10.5,fontFamily:F.body,color:readyCheck==null?B.ash:(need?B.celadonDeep:B.burnham),fontWeight:600}}>
+                {readyCheck==null ? "Checking every format…" : need ? `${need} to review` : "All 6 ready to post"}
               </span>
             </div>
             <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
@@ -8182,10 +8232,12 @@ export default function App() {
               const tw=Math.max(1,Math.round(72*d.w/d.h));
               const v=readyByDim[d.id];
               const adjusted=dimHasOverride(d.id);
-              // readiness dot: ✓ ready (celadon) · ! needs a look (tangerine) · dim while the sweep hasn't reported yet
+              // (WP-Y5b) readiness dot: quiet celadon check = ready · soft wisteria dot
+              // (no "!", no red) = worth a glance · dim while the sweep hasn't reported.
               const dotReady=v?v.ready:null;
               return (
-                <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})}
+                <button key={d.id} aria-pressed={on}
+                  onClick={()=>{ applyPatch({dimensionId:d.id},{source:"ui"}); setStripFixDim(dotReady===false?d.id:null); }}
                   title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?" · needs a look":dotReady?" · ready":""}${adjusted?" · adjusted for this format":""} — tap to adjust`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
                   <span style={{position:"relative",display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
@@ -8193,10 +8245,10 @@ export default function App() {
                       ? <img src={formatThumbs[d.id]} alt={`${d.label} preview`} style={{maxWidth:"100%",maxHeight:"100%",display:"block"}} />
                       : <span style={{fontSize:9,color:B.ash,fontFamily:FU.subtitle}}>{d.sub}</span>}
                     {dotReady!=null && (
-                      <span aria-hidden="true" title={dotReady?"Ready to post":"Needs a look"}
-                        style={{position:"absolute",top:4,right:4,width:14,height:14,borderRadius:"50%",display:"grid",placeItems:"center",
-                          fontSize:9,fontWeight:800,lineHeight:1,color:"#fff",boxShadow:"0 0 0 1.5px #fff",
-                          background:dotReady?B.burnham:B.tangerine}}>{dotReady?"✓":"!"}</span>
+                      <span aria-hidden="true" title={dotReady?"Ready to post":"Worth a look"}
+                        style={{position:"absolute",top:4,right:4,width:dotReady?11:12,height:dotReady?11:12,borderRadius:"50%",display:"grid",placeItems:"center",
+                          fontSize:8,fontWeight:800,lineHeight:1,color:dotReady?B.burnham:"transparent",boxShadow:"0 0 0 1.5px #fff",
+                          background:dotReady?B.celadon:B.wisteria}}>{dotReady?"✓":""}</span>
                     )}
                     {adjusted && (
                       <span aria-hidden="true" title="Adjusted for this format"
@@ -8269,8 +8321,8 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <span style={{fontSize:10,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash}}>Ready to post</span>
         {!loading && (
-          <span style={{fontSize:11,fontFamily:F.body,color:need?B.tangerine:B.burnham,fontWeight:600}}>
-            {need ? `${need} ${need===1?"format needs":"formats need"} a look` : "All 6 formats ready"}
+          <span style={{fontSize:11,fontFamily:F.body,color:need?B.celadonDeep:B.burnham,fontWeight:600}}>
+            {need ? `${need} to review` : "All 6 formats ready"}
           </span>
         )}
       </div>
@@ -8288,13 +8340,15 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
                   aria-expanded={isOpen}
                   style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"7px 2px",background:"none",border:"none",borderRadius:6,
                     cursor:f.ready?"default":"pointer",textAlign:"left",fontFamily:F.body}}>
+                  {/* (WP-Y5b) calm marks: celadon check = ready · soft wisteria dot
+                      (no "!", no red) = worth a look. Matches the strip's tone. */}
                   <span aria-hidden="true" style={{width:15,height:15,flexShrink:0,display:"grid",placeItems:"center",borderRadius:"50%",
                     fontSize:10,fontWeight:700,lineHeight:1,
-                    background:f.ready?`${B.celadon}55`:`${B.tangerine}22`,color:f.ready?B.burnham:B.tangerine}}>
-                    {f.ready?"✓":"!"}
+                    background:f.ready?`${B.celadon}66`:B.wisteria,color:f.ready?B.burnham:"transparent"}}>
+                    {f.ready?"✓":""}
                   </span>
                   <span style={{flex:1,fontSize:12,color:B.jet,fontWeight:currentDim===f.dimensionId?600:400}}>{label}</span>
-                  <span style={{fontSize:11,color:f.ready?B.ash:B.tangerine,fontFamily:F.body}}>
+                  <span style={{fontSize:11,color:f.ready?B.ash:B.celadonDeep,fontFamily:F.body}}>
                     {f.ready ? "Ready" : `${f.issues.length} ${f.issues.length===1?"fix":"fixes"}${isOpen?" ▾":" ▸"}`}
                   </span>
                 </button>
