@@ -2621,6 +2621,10 @@ export default function App() {
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [brandKit, setBrandKit] = useState(null);
   const [postType, setPostType] = useState("photo_logo");
+  // Live post type aliased so renderScene can honour an offscreen postTypeOverride
+  // (used by the __woLegacyDupGuard regression sweep) without shadowing every
+  // postType reference inside the render.
+  const postTypeLive = postType;
   // Archetype starting-point (Commit 3). null = legacy FORMAT_LAYOUTS path (100%
   // backward compatible). When set, renderScene resolves layout from ARCHETYPES.
   const [archetypeId, setArchetypeId] = useState(null);
@@ -4140,6 +4144,9 @@ export default function App() {
     if(!ctx) return;
     const dimId = opts.dimensionId || MASTER_DIM;
     const live = opts.live !== false;
+    // Offscreen renders (the legacy duplicate-draw guard) may force a specific
+    // postType via opts.postTypeOverride; live renders always use the real state.
+    const postType = (!live && opts.postTypeOverride) ? opts.postTypeOverride : postTypeLive;
     // (P4 FEED BOARD) A non-live render may inject a per-tile background photo via
     // opts.imageOverride (an already-decoded HTMLImageElement) — this SHADOWS the live
     // mediaObj for the whole render so the feed simulation can place real Higgsfield
@@ -4162,6 +4169,18 @@ export default function App() {
     if(live){logoBoxRef.current=null;deadRolesRef.current=[];}
     if(live)roleBoundsRef.current=null;     // (WP-U fix #1) reset per live render; editorial branch repopulates
     const S=Math.min(w,h)/1080;
+    // (STORY DOUBLE-RENDER FIX) Clear the FULL backing store, not just the logical
+    // w×h region. On a live format switch React updates the <canvas width/height>
+    // attributes and runs the redraw effect; if a redraw lands while the backing
+    // store is momentarily a DIFFERENT (e.g. taller) size than this render's (w,h) —
+    // the resize race between the attribute commit and the draw — a plain
+    // clearRect(0,0,w,h) leaves the earlier format's pixels OUTSIDE the w×h box on
+    // the canvas, and they persist as a stacked "ghost" second copy (the 9:16 Story
+    // bug: a wide/short prior frame stranded above the fresh tall render). Clearing
+    // the entire backing store first makes a stale strip impossible regardless of
+    // when the resize commits. The subsequent fill/photo still paint the w×h region.
+    if(ctx.canvas && (ctx.canvas.width!==w || ctx.canvas.height!==h))
+      ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
     const fmt=formatLayoutFor(dimId,postType);
@@ -5921,7 +5940,77 @@ export default function App() {
       } catch (e) { return { error: String(e) }; }
       finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
     };
-    return () => { try { delete window.__woArchStress; delete window.__woCell; } catch {} };
+    /* ── LEGACY DUPLICATE-DRAW GUARD (Story double-render regression) ───────────
+       __woArchStress validates the archetype engine's LAYOUT MODEL — it never
+       exercised the legacy (archetypeId-null) postType painters, so the Story 9:16
+       "whole composition drawn twice, stacked" bug (a stale strip surviving OUTSIDE
+       the render's logical w×h when the <canvas> backing store was momentarily
+       taller than (w,h) during a format switch) passed clean. This sibling guard
+       reproduces that exact class deterministically for EVERY legacy postType on ALL
+       6 formats: it renders into an OVERSIZED backing store, pre-painted with a
+       sentinel colour OUTSIDE the format's (w,h), then asserts renderScene fully
+       cleared that region (no ghost second copy can survive). It also asserts the
+       headline paints in a SINGLE contiguous bright y-band, not two disjoint copies.
+       Returns {pass, offenders:[{postType,dimId,reason}]}. */
+    window.__woLegacyDupGuard = () => {
+      const LEGACY_TYPES = ["photo_logo", "quote", "event", "text_post", "texture_text"];
+      const prev = auditRef.current, prevBounds = textBoundsRef.current, prevPT = null;
+      const offenders = [];
+      try {
+        for (const pt of LEGACY_TYPES) for (const dm of DIMENSIONS) {
+          try {
+            // ── (a) STALE-STRIP RACE (the exact Story bug) ──
+            // Reproduce a format switch where the <canvas> backing store is TALLER +
+            // WIDER than the dims renderScene runs with (a stale-dims / mid-resize
+            // draw). Backing store = format size; pre-paint the WHOLE store with a
+            // sentinel (stands in for the previous format's pixels); then render with
+            // SHORTER logical dims (w-360, h-360). A correct renderScene must clear the
+            // ENTIRE store first, so the strip BELOW/RIGHT of the short box holds NO
+            // sentinel. The pre-fix clearRect(0,0,w,h) left that strip as a ghost.
+            const SHRINK = 360;
+            const rw = Math.max(200, dm.w - SHRINK), rh = Math.max(200, dm.h - SHRINK);
+            const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
+            const ctx = c.getContext("2d", { willReadFrequently: true });
+            ctx.fillStyle = "#ff00ff"; ctx.fillRect(0, 0, c.width, c.height);   // sentinel = stale prior frame
+            renderScene(ctx, rw, rh, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+            let ghost = 0;
+            // Sample strictly OUTSIDE the (rw,rh) render box — any surviving sentinel
+            // magenta here is a stale ghost strip (the stacked second copy).
+            const outPts = [[(rw + dm.w) / 2, dm.h / 2], [dm.w / 2, (rh + dm.h) / 2], [dm.w - 20, dm.h - 20], [rw + 30, rh / 2], [rw / 2, rh + 30]];
+            for (const [x, y] of outPts) {
+              const d = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+              const isSentinel = d[0] > 200 && d[1] < 80 && d[2] > 200;
+              if (isSentinel) ghost++;
+            }
+            if (ghost) { offenders.push({ postType: pt, dimId: dm.id, reason: "stale strip survived outside render box (stacked ghost)" }); continue; }
+            // (b) DUPLICATE TEXT-BAND: on a SECOND fresh, exact-size canvas, count
+            // disjoint bright (light-text) y-bands in the left column region. The
+            // headline for these fixtures is a single line/block, so >1 disjoint band
+            // (separated by a dark gap) means the composition was stacked twice.
+            const c2 = document.createElement("canvas"); c2.width = dm.w; c2.height = dm.h;
+            const x2 = c2.getContext("2d", { willReadFrequently: true });
+            renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+            const rows = 60, colXs = [0.18, 0.32, 0.5].map(f => Math.floor(dm.w * f));
+            let inBand = false, bands = 0;
+            for (let r = 0; r < rows; r++) {
+              const y = Math.floor((r + 0.5) / rows * dm.h);
+              let bright = 0;
+              for (const x of colXs) { const d = x2.getImageData(x, y, 1, 1).data; if (d[0] > 190 && d[1] > 190 && d[2] > 190) bright++; }
+              const lit = bright >= 2;
+              if (lit && !inBand) { bands++; inBand = true; } else if (!lit) inBand = false;
+            }
+            // The logo lockup adds its own small text band near a corner; allow up to
+            // 2 bands (headline + lockup). 3+ disjoint bright bands ⇒ a stacked copy.
+            if (bands >= 3) offenders.push({ postType: pt, dimId: dm.id, reason: `${bands} disjoint text bands (expected ≤2: headline+lockup)` });
+          } catch (e) { offenders.push({ postType: pt, dimId: dm.id, reason: "render error: " + String(e) }); }
+        }
+      } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; void prevPT; }
+      const report = { pass: offenders.length === 0, cells: LEGACY_TYPES.length * DIMENSIONS.length, offenders };
+      // eslint-disable-next-line no-console
+      console.log("[woLegacyDupGuard]", JSON.stringify(report));
+      return report;
+    };
+    return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; } catch {} };
   }, [renderScene]);
 
   /* ── CLIENT-REPRO HARNESS (Commit 4 verification, dev-only) ──────────────────
