@@ -6728,6 +6728,10 @@ export default function App() {
       <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,letterSpacing:0.2,color:B.jet,textAlign:"center",lineHeight:1.25}}>{label}{has?" ·":""}</span>
     </button>
   );
+  // Which copy field carries the "small text under the title" (support role)
+  // for the current post type: quotes draw the ATTRIBUTION as support.
+  const captionFieldId = postType === "quote" ? "attribution" : "subtext";
+  const captionValue = postType === "quote" ? attribution : subtext;
   // Add a text role through THE pipeline with a placeholder the user replaces
   // immediately (the role's input is focused + selected after the add).
   const addTextRole = (patch, focusRole) => {
@@ -6742,8 +6746,8 @@ export default function App() {
     <>
       <MenuHead label="Add to this design" sub="Tap what you want to add — no design words needed." />
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:14}}>
-        <AddTile label="Small text under the title" has={!!(subtext&&subtext.trim())}
-          onClick={()=> (subtext&&subtext.trim()) ? (setTopMenu(null),focusTextField("support")) : addTextRole({ subtext:"A small line under the title" }, "support")}>
+        <AddTile label="Small text under the title" has={!!(captionValue&&captionValue.trim())}
+          onClick={()=> (captionValue&&captionValue.trim()) ? (setTopMenu(null),focusTextField("support")) : addTextRole({ [captionFieldId]:"A small line under the title" }, "support")}>
           {heroBar}
           <rect x="6" y="23" width="20" height="3" rx="1" fill={B.tangerine} opacity="0.9"/>
         </AddTile>
@@ -7052,9 +7056,15 @@ export default function App() {
     if (!heroRegister || inspectorEl != null) return [];
     const roles = textLayout.roles || {};
     const out = [];
-    if (roles.support && !(subtext && subtext.trim())) {
+    const capField = postType === "quote" ? "attribution" : "subtext";
+    // The support REGION is empty only when every copy field that renders
+    // there is empty: quote → attribution; text_post → subtext AND attribution.
+    const capValue = postType === "quote" ? attribution
+      : postType === "text_post" ? ((subtext || "") + (attribution || ""))
+      : subtext;
+    if (roles.support && !(capValue && capValue.trim())) {
       out.push({ key:"support", box: roles.support, minH: 0.05,
-        label:"＋ add text here", patch:{ subtext:"A small line under the title" }, focus:"support" });
+        label:"＋ add text here", patch:{ [capField]:"A small line under the title" }, focus:"support" });
     }
     const eyebrowFallback = !!(attribution && attribution.length <= 28 && subtext);
     if (roles.microLabel && !(microLabel && microLabel.trim()) && !(microLabel == null && eyebrowFallback)) {
@@ -7132,7 +7142,7 @@ export default function App() {
             onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
             onUndo={undoLastAiChange}
             seed={chatSeed}
-            chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(subtext && subtext.trim()), hasDate: !!(dateText && dateText.trim()) }}
+            chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(((postType === "quote" ? attribution : subtext) || "").trim()), hasDate: !!(dateText && dateText.trim()) }}
             onChangePhoto={mediaObj ? refreshPhoto : null}
             onNewPost={startNewPost}
           />
