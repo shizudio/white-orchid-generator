@@ -54,6 +54,17 @@ const EMPTY_EXAMPLES = [
   'add small text at the bottom that says pickup is at 3pm',
 ];
 
+/* A few early sessions were titled with the internal Higgsfield photographer
+   prompt (the title fix now uses the user's brief). Defensively scrub those
+   leaked titles at display time so old sessions read cleanly in the list. */
+const SCENE_PROMPT_LEAK = /ten[- ]year[- ]old|medium format|negative space|warm terracotta|natural warm|full[- ]frame photograph|no text, no/i;
+function cleanTitle(t) {
+  const s = String(t || '').trim();
+  if (!s) return 'Untitled post';
+  if (SCENE_PROMPT_LEAK.test(s)) return 'Untitled post';
+  return s;
+}
+
 /* ── (WP-W0) CLAIM-VS-RESULT HONESTY CHECK ─────────────────────────────────────
    After a chat patch applies, the AI's narration is verified against RENDER
    TRUTH (what the canvas actually drew — via the renderTruth prop), never
@@ -521,7 +532,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         <span className="wo-chat-title">Art Director</span>
         {canHistory && (
           <div className="ad-hist">
-            {sessionTitle ? <span className="ad-hist-cur" title={sessionTitle}>{sessionTitle}</span> : null}
+            {sessionTitle ? <span className="ad-hist-cur" title={cleanTitle(sessionTitle)}>{cleanTitle(sessionTitle)}</span> : null}
             <button
               type="button"
               className={`ad-hist-toggle${historyOpen ? ' ad-hist-toggle--on' : ''}`}
@@ -532,35 +543,34 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             >
               History <span className="ad-hist-chev" aria-hidden="true">⌄</span>
             </button>
+            {historyOpen && (
+              <>
+                <div className="ad-hist-backdrop" onClick={() => setHistoryOpen(false)} aria-hidden="true" />
+                <div className="ad-hist-menu" role="menu" aria-label="Recent chats">
+                  {recentPosts.length === 0 && (
+                    <p className="ad-hist-empty">No other chats yet.</p>
+                  )}
+                  {recentPosts.map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="menuitem"
+                      className={`ad-hist-item${p.id === sessionId ? ' ad-hist-item--current' : ''}`}
+                      onClick={() => pickSession(p.id)}
+                    >
+                      {p.thumb
+                        ? <img className="ad-hist-thumb" src={p.thumb} alt="" />
+                        : <span className="ad-hist-thumb ad-hist-thumb--blank" aria-hidden="true" />}
+                      <span className="ad-hist-label">{cleanTitle(p.title)}</span>
+                      {p.id === sessionId && <span className="ad-hist-dot" aria-hidden="true" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </header>
-
-      {historyOpen && canHistory && (
-        <>
-          <div className="ad-hist-backdrop" onClick={() => setHistoryOpen(false)} aria-hidden="true" />
-          <div className="ad-hist-menu" role="menu" aria-label="Recent chats">
-            {recentPosts.length === 0 && (
-              <p className="ad-hist-empty">No other chats yet.</p>
-            )}
-            {recentPosts.map(p => (
-              <button
-                key={p.id}
-                type="button"
-                role="menuitem"
-                className={`ad-hist-item${p.id === sessionId ? ' ad-hist-item--current' : ''}`}
-                onClick={() => pickSession(p.id)}
-              >
-                {p.thumb
-                  ? <img className="ad-hist-thumb" src={p.thumb} alt="" />
-                  : <span className="ad-hist-thumb ad-hist-thumb--blank" aria-hidden="true" />}
-                <span className="ad-hist-label">{p.title || 'Untitled post'}</span>
-                {p.id === sessionId && <span className="ad-hist-dot" aria-hidden="true" />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
 
       <div className="wo-chat-list" ref={listRef}>
         {messages.length === 0 && !loading && (
