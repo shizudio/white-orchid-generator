@@ -341,6 +341,39 @@ canvas[role="application"]:focus-visible {
 .ad-undo-chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .ad-error { font-family: var(--font-body); font-size: 13px; color: #a43c2d; margin: 0; }
 
+/* (WP-W §3) Feedback chip — thumbs-down only, subtle + on-brand. */
+.ad-row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ad-fb-chip {
+  align-self: flex-start;
+  min-height: 26px;
+  padding: 2px 9px;
+  border: 1px solid var(--line, rgba(37,78,72,0.16));
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: color-mix(in srgb, var(--tw-burnham) 55%, transparent);
+  font-family: var(--font-syne);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.ad-fb-chip:hover { opacity: 1; color: var(--tw-tangerine); border-color: color-mix(in srgb, var(--tw-tangerine) 40%, transparent); }
+.ad-fb-chip--on { opacity: 1; color: var(--tw-tangerine); border-color: color-mix(in srgb, var(--tw-tangerine) 55%, transparent); background: color-mix(in srgb, var(--tw-tangerine) 8%, transparent); cursor: default; }
+.ad-fb-note { display: flex; gap: 6px; align-items: center; margin-top: 6px; align-self: stretch; }
+.ad-fb-note input {
+  flex: 1 1 auto; min-width: 0; min-height: 30px; padding: 4px 10px;
+  border: 1px solid var(--line, rgba(37,78,72,0.18)); border-radius: var(--radius-pill);
+  background: #fff; color: var(--tw-jet); font-family: var(--font-body); font-size: 12px;
+}
+.ad-fb-note button {
+  min-height: 30px; padding: 4px 10px; border: none; border-radius: var(--radius-pill);
+  font-family: var(--font-syne); font-size: 10px; font-weight: 700; cursor: pointer;
+  background: var(--tw-burnham); color: #fff;
+}
+.ad-fb-note button[title="Skip"] { background: transparent; color: color-mix(in srgb, var(--tw-burnham) 60%, transparent); }
+
 .ad-typing { display: inline-flex; gap: 4px; align-items: center; }
 .ad-typing span {
   width: 6px; height: 6px; border-radius: 50%;

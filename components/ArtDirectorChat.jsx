@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { patchHasChanges, PATCH_KEY_LABELS } from '@/lib/design-patch';
+import { logFeedback, enrichVerdict, newTurnId } from '@/lib/sessions';
 
 // Build the "changed: …" line from the keys the editor ACTUALLY changed
 // (true diffs), not the raw patch — the model sometimes echoes unchanged fields.
@@ -33,6 +34,14 @@ function summarizeKeys(keys) {
    - chipCtx: { hasImage, hasCaption, hasDate } — drives the DYNAMIC quick chips
    - onChangePhoto(): deterministic photo refresh (same scene / Library rotation)
    - onNewPost(): reset the canvas to a fresh design (chat history stays)
+
+   WP-W — the conversation is now bound to a SESSION (one session = one post):
+   - sessionId: current session id (tags capture events)
+   - initialMessages / restoreKey: when a session is opened the parent hands its
+     stored conversation in; restoreKey changes → we swap the visible thread.
+   - onConversationChange(messages): every message change is lifted so the
+     parent can auto-save it into the session (design + conversation together).
+   - onNewPostMessages(): the assistant line to seed a fresh session's thread.
 */
 
 const HISTORY_KEY = 'wo-editor-chat';
@@ -65,8 +74,36 @@ const ROLE_LABELS = { hero: 'the title', support: 'the small text', eyebrow: 'th
 const settle = (ms) => new Promise(r => setTimeout(r, ms));
 const logoCenter = (b) => b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : null;
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth }) {
-  const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
+/* ── (WP-W) CAPTURE HELPERS ──────────────────────────────────────────────────
+   isReask: the user rephrasing / repeating the same ask means the previous turn
+   didn't land — an implicit "failure" signal (self-improvement-loop §1). A crude
+   token-overlap heuristic; the learning pass interprets it, so false positives
+   are cheap. compactDiff: a small before/after of just the design fields that
+   actually changed (no blobs) — the training-grade evidence for each turn. */
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+function isReask(prevMsg, nextMsg) {
+  const a = new Set(norm(prevMsg)), b = norm(nextMsg);
+  if (!a.size || !b.length) return false;
+  const overlap = b.filter(w => a.has(w)).length;
+  return overlap / b.length >= 0.6; // ≥60% of the new ask's words echo the last one
+}
+function compactDiff(before, after) {
+  if (!before || !after) return null;
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const diff = {};
+  for (const k of keys) {
+    const bv = before[k], av = after[k];
+    // Skip large blobs (imageSrc dataURLs) — capture is text/JSON only.
+    if (typeof av === 'string' && av.length > 400) { if (bv !== av) diff[k] = { changed: true }; continue; }
+    let bs, as;
+    try { bs = JSON.stringify(bv); as = JSON.stringify(av); } catch { continue; }
+    if (bs !== as) diff[k] = { from: bv ?? null, to: av ?? null };
+  }
+  return Object.keys(diff).length ? diff : null;
+}
+
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange }) {
+  const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -79,29 +116,56 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   // closure are stale. Route the late calls through refs (always fresh).
   const applyRef = useRef(onApplyPatch);
   const truthRef = useRef(renderTruth);
+  const sessionIdRef = useRef(sessionId);
   applyRef.current = onApplyPatch;
   truthRef.current = renderTruth;
+  sessionIdRef.current = sessionId;
+  // The previous turn's id + user message — for implicit verdict enrichment
+  // (a rephrase/re-ask of the same thing marks the previous turn a "failure").
+  const prevTurnRef = useRef(null);
 
-  // Restore per-tab history once — the same conversation continues across the
-  // landing page, the editor, and any number of posts in this tab.
+  // WP-W: is the parent driving sessions? (one session = one post — the
+  // conversation belongs to the session, not the tab.)
+  const sessionMode = typeof onConversationChange === 'function';
+
+  // Restore the conversation once. Session mode → from the parent's stored
+  // conversation; legacy → per-tab sessionStorage (kept so nothing regresses if
+  // the parent hasn't wired sessions).
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(HISTORY_KEY);
-      if (raw) setMessages(JSON.parse(raw));
-    } catch { /* ignore */ }
+    if (sessionMode) {
+      setMessages(Array.isArray(initialMessages) ? initialMessages : []);
+    } else {
+      try {
+        const raw = sessionStorage.getItem(HISTORY_KEY);
+        if (raw) setMessages(JSON.parse(raw));
+      } catch { /* ignore */ }
+    }
     setHydrated(true);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist history (per-tab).
+  // Session SWAP: opening another post (restoreKey changes) replaces the visible
+  // thread with that session's stored conversation. seededRef resets so a fresh
+  // landing handoff can still append.
+  const lastRestoreKey = useRef(restoreKey);
+  useEffect(() => {
+    if (!sessionMode || !hydrated) return;
+    if (restoreKey === lastRestoreKey.current) return;
+    lastRestoreKey.current = restoreKey;
+    setMessages(Array.isArray(initialMessages) ? initialMessages : []);
+  }, [restoreKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the conversation. Session mode → lift to the parent (auto-saved into
+  // the session). Legacy → per-tab sessionStorage. Either way strip the large
+  // base64 thumb (transient chat chrome, not state — would blow the quota).
   useEffect(() => {
     if (!hydrated) return;
-    // Strip the (large base64) thumb before persisting — it would blow the
-    // sessionStorage quota. The thumbnail is transient chat chrome, not state.
-    try {
-      const slim = messages.slice(-40).map(({ thumb, ...rest }) => rest);
-      sessionStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
-    } catch { /* ignore */ }
-  }, [messages, hydrated]);
+    const slim = messages.slice(-60).map(({ thumb, ...rest }) => rest);
+    if (sessionMode) {
+      onConversationChange(slim);
+    } else {
+      try { sessionStorage.setItem(HISTORY_KEY, JSON.stringify(slim.slice(-40))); } catch { /* ignore */ }
+    }
+  }, [messages, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // APPEND the landing handoff exchange exactly once when it arrives — one
   // continuous conversation (§2.1): existing history is never discarded.
@@ -124,14 +188,40 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, loading]);
 
-  const send = useCallback(async (textOverride) => {
+  const send = useCallback(async (textOverride, meta = {}) => {
     const content = String(textOverride ?? input).trim();
     if (!content || loading) return;
     setError('');
-    const nextHistory = [...messages, { role: 'user', content }];
+    // WP-W capture: one turn id per exchange; a rephrase/re-ask of the just-said
+    // thing marks the PREVIOUS turn a failure (implicit verdict enrichment §1).
+    const turnId = newTurnId();
+    const prev = prevTurnRef.current;
+    if (prev && prev.turnId && isReask(prev.content, content)) {
+      enrichVerdict(prev.turnId, { implicit: 'failure', implicitSignal: 'reask' });
+    }
+    const stateBefore = (() => { try { return designState(); } catch { return null; } })();
+    const nextHistory = [...messages, { role: 'user', content, turnId }];
     setMessages(nextHistory);
     setInput('');
     setLoading(true);
+    // Accumulate the honesty verdict as the check runs; logged once at the end.
+    const verdict = { honesty: 'ok', corrected: false, contradictions: [], implicit: null };
+    if (meta.chip) verdict.chip = meta.chip;
+    let loggedPatch = null, loggedChangeKeys = [], loggedReply = '';
+    const commitLog = () => {
+      const stateAfter = (() => { try { return designState(); } catch { return null; } })();
+      logFeedback({
+        turn_id: turnId,
+        session_id: sessionIdRef.current || null,
+        user_message: content,
+        patch: loggedPatch,
+        change_keys: loggedChangeKeys,
+        state_diff: compactDiff(stateBefore, stateAfter),
+        verdict,
+        reply: loggedReply,
+      });
+      prevTurnRef.current = { turnId, content };
+    };
     try {
       const response = await fetch('/api/assistant', {
         method: 'POST',
@@ -149,12 +239,15 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         return;
       }
       const patch = data.patch || {};
+      loggedPatch = patch;
+      loggedReply = String(data.reply || '');
       // (WP-W0) capture render truth BEFORE applying, for claim-vs-result below.
       const truthBefore = typeof truthRef.current === 'function' ? truthRef.current() : null;
       let changeKeys = [];
       if (patchHasChanges(patch)) {
         changeKeys = onApplyPatch(patch) || [];
       }
+      loggedChangeKeys = changeKeys;
       // Image generation (Commit 4): if the server returned a generated image, ingest
       // it as the background (same path as an upload) and show a thumbnail bubble +
       // "changed: photo". A generated image is one undoable action even alongside a
@@ -174,7 +267,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       const providerLabel = photoLanded
         ? (data.imageProvider === 'higgsfield' ? 'Higgsfield' : data.imageProvider === 'openai' ? 'gpt-image-1' : null)
         : null;
-      // Only attach an undo chip when a real change actually landed.
+      // Only attach an undo chip when a real change actually landed. The turnId +
+      // feedbackable flag let the thumbs-down chip enrich THIS turn's verdict, and
+      // undoTurnId ties an Undo click back to the turn it reverts (implicit reject).
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: data.reply || 'Done.',
@@ -182,7 +277,12 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         thumb,
         providerLabel,
         undoIndex: didChange ? Date.now() : null,
+        turnId,
+        undoTurnId: didChange ? turnId : null,
+        feedbackable: true,
       }]);
+      verdict.didChange = didChange;
+      verdict.archetypeBefore = truthBefore?.archetypeId ?? null;
 
       // ── (WP-W0) CLAIM-VS-RESULT VERIFICATION (render truth) ──────────────────
       if (truthBefore && typeof truthRef.current === 'function') {
@@ -195,6 +295,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         //    a patch actually applied ("I can't do that yet" + changed: overlay).
         //    Both directions of dishonesty are corrected: here, own the change.
         if (didChange && /\b(can'?t|cannot|couldn'?t|unable|not (able|possible))\b/i.test(reply)) {
+          verdict.honesty = 'corrected';
+          verdict.corrected = true;
+          verdict.contradictions.push('claimed-inability-but-changed'); // false-negative direction
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: `Correction — that actually worked: I changed the ${summaryParts.join(', ') || 'design'}. Tap Undo if that isn't what you wanted.`,
@@ -218,6 +321,10 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             if (truthAfter.archetypeId !== target) {
               const retryKeys = applyRef.current({ archetypeId: target }) || [];
               if (retryKeys.includes('archetypeId')) {
+                verdict.honesty = 'corrected';
+                verdict.corrected = true;
+                verdict.contradictions.push('claimed-layout-switch-archetype-unchanged'); // false-positive direction
+                verdict.retryTarget = target;
                 setMessages(prev => [...prev, {
                   role: 'assistant',
                   content: "That first change didn't actually switch the layout — my mistake. I've moved you to the full-image layout now, photo edge to edge.",
@@ -229,6 +336,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             }
           }
           if (!corrected && layoutClaim) {
+            verdict.honesty = 'corrected';
+            verdict.corrected = true;
+            verdict.contradictions.push('claimed-layout-switch-archetype-unchanged');
             setMessages(prev => [...prev, {
               role: 'assistant',
               content: "Actually — checking the canvas, the layout didn't change just now. I couldn't do that yet. Try the “Try another layout” chip, or name a layout (full image, split, quote card).",
@@ -244,6 +354,10 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             && (truthAfter.deadRoles || []).includes(role))
           .map(([, role]) => ROLE_LABELS[role] || role);
         if (deadHits.length) {
+          verdict.honesty = 'corrected';
+          verdict.corrected = true;
+          verdict.contradictions.push('field-filled-role-not-drawn');
+          verdict.deadRoles = deadHits;
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: `One honest note — this layout doesn't actually show ${deadHits.join(' or ')}, so it isn't visible on the canvas. Want me to switch to a layout that shows it?`,
@@ -258,6 +372,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           const eps = (truthAfter.canvas?.w || 1080) * 0.01;
           const moved = (!cB && cA) || (cB && cA && (Math.abs(cA.x - cB.x) > eps || Math.abs(cA.y - cB.y) > eps));
           if (!moved) {
+            verdict.honesty = 'corrected';
+            verdict.corrected = true;
+            verdict.contradictions.push('logo-move-not-rendered');
             setMessages(prev => [...prev, {
               role: 'assistant',
               content: "Checking the canvas — the logo didn't actually move there on this layout. I couldn't do that yet.",
@@ -269,6 +386,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
 
         // 4. COMPLETE NO-OP: the AI narrated a change but nothing visible landed.
         if (!didChange && !/\b(can'?t|couldn'?t|unable|sorry|already)\b/i.test(reply) && !/\?\s*$/.test(content)) {
+          verdict.honesty = 'corrected';
+          verdict.corrected = true;
+          verdict.contradictions.push('narrated-change-none-landed');
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: "Honestly — that didn't change anything visible. Could you say it another way, or tap the element on the canvas to edit it directly?",
@@ -278,6 +398,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     } catch {
       setError("I couldn't reach the AI just now. Please try again.");
     } finally {
+      commitLog();
       setLoading(false);
     }
   }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth]);
@@ -297,8 +418,31 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
 
   function handleUndo(idx) {
     onUndo();
+    // (WP-W §1) An Undo click is an IMPLICIT REJECTION of the turn it reverts —
+    // the highest-signal negative we get for free. Enrich that turn's verdict.
+    const undoTurnId = messages[idx]?.undoTurnId;
+    if (undoTurnId) enrichVerdict(undoTurnId, { implicit: 'rejection', implicitSignal: 'undo' });
     // Mark this message's chip as spent and clear any newer undo markers.
     setMessages(prev => prev.map((m, i) => i >= idx ? { ...m, undoIndex: null } : m));
+  }
+
+  /* ── (WP-W §3) FEEDBACK CHIP — "not what I meant" ── A subtle thumbs-down on
+     each AI reply. Tapping logs an explicit rejection for that turn and reveals a
+     skippable one-line "what did you want?" input — the highest-grade training
+     pair (intent-in-user's-words × wrong-patch). */
+  const [fbOpen, setFbOpen] = useState(null);    // message index whose "what did you want?" is open
+  const [fbText, setFbText] = useState('');
+  function handleThumbsDown(idx) {
+    const turnId = messages[idx]?.turnId;
+    if (turnId) enrichVerdict(turnId, { explicit: 'rejection', explicitSignal: 'thumbs_down' });
+    setMessages(prev => prev.map((m, i) => i === idx ? { ...m, feedback: 'down' } : m));
+    setFbOpen(idx); setFbText('');
+  }
+  function submitFbNote(idx) {
+    const note = fbText.trim();
+    const turnId = messages[idx]?.turnId;
+    if (note && turnId) enrichVerdict(turnId, { explicit: 'rejection', wanted: note.slice(0, 400) });
+    setFbOpen(null); setFbText('');
   }
 
   function handleNewPost() {
@@ -325,7 +469,17 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     ? { label: 'Rewrite caption', msg: 'Rewrite the caption — keep it short and warm.' }
     : { label: '+ Add caption', msg: 'Add a small line of caption text under the headline.' });
   if (!ctx.hasDate) chips.push({ label: '+ Add date', msg: 'Add a date line to this design.' });
-  chips.push({ label: 'Try another layout', msg: 'Try another layout for this design — keep my words.' });
+  // "Try another layout" is itself a rejection of the current layout — log the
+  // rejected archetype+variant (self-improvement-loop §1) before asking for a new one.
+  chips.push({ label: 'Try another layout', act: () => {
+    let rejected = null;
+    try { const s = designState(); rejected = { archetypeId: s?.archetypeId ?? null, archVariant: s?.archVariant ?? null }; } catch { /* ignore */ }
+    if (rejected && rejected.archetypeId) {
+      logFeedback({ turn_id: newTurnId(), session_id: sessionIdRef.current || null,
+        user_message: '[chip] Try another layout', verdict: { implicit: 'layout_rejection', rejected } });
+    }
+    send('Try another layout for this design — keep my words.', { chip: 'try_another_layout' });
+  } });
   chips.push({ label: 'New post', act: handleNewPost });
 
   return (
@@ -352,16 +506,45 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             {m.role === 'assistant' && m.summary && (
               <div className="ad-changed">changed: {m.summary}</div>
             )}
-            {m.role === 'assistant' && m.undoIndex !== null && m.undoIndex !== undefined && (
-              <button
-                type="button"
-                className="ad-undo-chip"
-                disabled={i !== lastPatchedMsgIdx}
-                title={i === lastPatchedMsgIdx ? 'Undo this change' : 'Only the latest change can be undone'}
-                onClick={() => handleUndo(i)}
-              >
-                ↶ Undo
-              </button>
+            <div className="ad-row-actions">
+              {m.role === 'assistant' && m.undoIndex !== null && m.undoIndex !== undefined && (
+                <button
+                  type="button"
+                  className="ad-undo-chip"
+                  disabled={i !== lastPatchedMsgIdx}
+                  title={i === lastPatchedMsgIdx ? 'Undo this change' : 'Only the latest change can be undone'}
+                  onClick={() => handleUndo(i)}
+                >
+                  ↶ Undo
+                </button>
+              )}
+              {/* (WP-W §3) FEEDBACK CHIP — thumbs-down only. Subtle, on-brand. */}
+              {m.role === 'assistant' && m.feedbackable && (
+                <button
+                  type="button"
+                  className={`ad-fb-chip${m.feedback === 'down' ? ' ad-fb-chip--on' : ''}`}
+                  aria-pressed={m.feedback === 'down'}
+                  title="Not what I meant"
+                  onClick={() => handleThumbsDown(i)}
+                >
+                  <span aria-hidden="true">⌄</span> Not what I meant
+                </button>
+              )}
+            </div>
+            {/* Skippable "what did you want?" — the highest-grade training pair. */}
+            {m.role === 'assistant' && fbOpen === i && (
+              <form className="ad-fb-note" onSubmit={e => { e.preventDefault(); submitFbNote(i); }}>
+                <input
+                  type="text"
+                  value={fbText}
+                  onChange={e => setFbText(e.target.value)}
+                  placeholder="What did you want? (optional)"
+                  aria-label="What did you want instead?"
+                  autoFocus
+                />
+                <button type="submit" title="Send">Send</button>
+                <button type="button" title="Skip" onClick={() => setFbOpen(null)}>Skip</button>
+              </form>
             )}
           </div>
         ))}
