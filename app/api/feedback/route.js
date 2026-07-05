@@ -68,13 +68,14 @@ export async function POST(request) {
     // Enrichment path: a follow-up POST with the same turn_id updates that row
     // (undo → rejection, re-ask → failure, export → success). Otherwise insert.
     if (turnId) {
-      const { data: existing } = await supabase
+      const found = await supabase
         .from('ai_feedback_events')
         .select('id')
         .eq('brand_id', BRAND_ID)
         .eq('turn_id', turnId)
-        .maybeSingle()
-        .catch(() => ({ data: null }));
+        .maybeSingle();
+      if (found.error && isMissingConfig(found.error)) return unconfigured();
+      const existing = found.data;
       if (existing?.id) {
         // Merge only the fields present in this enrichment call (don't clobber the
         // original patch/diff with nulls).
