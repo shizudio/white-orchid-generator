@@ -70,6 +70,39 @@ at design tools. The architecture is therefore chat-first.
 - The floating chat overlay.
 - The static multi-section tool panel.
 
+### 2.6 Appendix — old-panel capability mapping (WP-V Stage 2 migration audit)
+
+Every capability of the deleted left tool panel + bubbles rail, and its new
+home. Nothing silently lost. (Grepped section-by-section before deletion.)
+
+| Old panel capability | New home |
+|---|---|
+| Templates gallery (starter cards) | Top bar → **Templates** popover |
+| "Your templates" (cloud/local, sync badges, delete) | Top bar → Templates popover |
+| Newer-draft-from-another-device banner (load/dismiss) | Top bar → Templates popover (badge dot on the button while pending) |
+| Save current design as template | Top bar → Templates popover → "Save current design" |
+| Archetypes grid (12 layouts + none, variant cycling) | Top bar → Templates popover → "Layouts" section; also chat ("try another layout") |
+| Format grid (6 dimensions) + drop-hint note | Top bar → **Format** popover (+ live format strip under the canvas) |
+| Post type chips | Top bar → **Post type** popover |
+| Media: sample photos / Library / Upload | Photo inspector (select the photo); **+ Add → Photo** when no media |
+| Video: upload / play / restart / save / saved list | Photo inspector → Video tab |
+| Midjourney launcher | Photo inspector |
+| Photo quick transforms (center/50/75/fill/0°) | Photo inspector |
+| Content fields (headline/subtext/attribution/date/eyebrow/pill) | Text inspector (click any text on canvas); chat; ghost slots |
+| Typography (font-size steps, scale/width/leading, align, 9-grid) | Text inspector |
+| Text backdrop (auto/band/none) + text colour | Text inspector |
+| Logo variants (primary/secondary), 9-grid placement, size | Logo inspector (click the logo) |
+| Overlays / accessories gallery + upload | **+ Add** gallery ("Decoration"); per-layer editing in the overlay inspector |
+| Overlay layer controls (mode/colours/size/rotate/opacity) | Overlay inspector (click the shape) |
+| Background swatches + opacity | Background inspector (click empty canvas) |
+| Export format PNG/JPG + Download + Download all formats | Top bar → **Export** popover |
+| AI audit | Top bar → Export popover |
+| Caption writer | Top bar → Export popover |
+| Brand guardrails tooltip | Top bar → Export popover |
+| Recent exports history (+ clear) | Top bar → Export popover |
+| Elements rail / mobile strip (selection) | Canvas click (primary) + inspector "Elements" layer list (occlusion fallback) |
+| AI-change undo (chat chips) | Top bar → **Undo** (uniform for UI + AI edits) + chat chips |
+
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
 A selection-only inspector can't add absent elements, and staff don't know the
