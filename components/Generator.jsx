@@ -8,6 +8,7 @@ import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
+import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient } from "@/lib/sessions";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -2722,7 +2723,24 @@ export default function App() {
   const [chatSeed, setChatSeed] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
   const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
-  const [topMenu, setTopMenu] = useState(null); // WP-V top bar popover: templates|format|type|add|export
+  const [topMenu, setTopMenu] = useState(null); // WP-V top bar popover: templates|format|type|add|export|posts
+
+  /* ── (WP-W) SESSIONS — one session = one post (ux-architecture §2.7) ──
+     The current session binds this design + its chat conversation under one id;
+     both auto-save (debounced) locally always, and to the cloud when configured.
+     A session supersedes the old single-row draft as the working document. */
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionConversation, setSessionConversation] = useState([]); // lifted from the chat
+  const [sessionRestoreKey, setSessionRestoreKey] = useState(0);      // bump → chat swaps its thread
+  const [sessionInitialMessages, setSessionInitialMessages] = useState([]);
+  const [postTiles, setPostTiles] = useState([]);       // Posts list (merged cloud+local)
+  const [archivedTiles, setArchivedTiles] = useState(null); // fetched on demand ("Show older")
+  const [sessionCloudCfg, setSessionCloudCfg] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState(""); // AI-derived from the brief
+  // Post-export save-as-template nudge (ux-architecture §2.7). Shown once per
+  // session after a successful export; dismissal is remembered per session.
+  const [exportNudge, setExportNudge] = useState(false);
+  const nudgeDismissedRef = useRef(new Set());
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
@@ -3356,6 +3374,17 @@ export default function App() {
     setGenBrief(null);
     setActiveTemplateName("");
     closeInspector();
+    // (WP-W) New post = a NEW session: fresh design + fresh conversation bound
+    // under a new id. The chat swaps to an empty thread (restoreKey bump); the
+    // prior session is already saved and stays in the Posts list.
+    const nid = newSessionId();
+    setSessionId(nid);
+    setCurrentSessionId(nid);
+    setSessionTitle("");
+    setSessionConversation([]);
+    setSessionInitialMessages([]);
+    setSessionRestoreKey(k => k + 1);
+    setExportNudge(false);
   };
 
   // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
@@ -3687,12 +3716,11 @@ export default function App() {
           else if (r.tooLarge) markLocalOnly(t.id);
         }
       }
-      // Draft: if the cloud working-doc is newer than our local save, offer to load it (never auto-clobber).
-      const { configured: draftCfg, draft } = await fetchDraft('current');
-      if (draftCfg && draft?.updated_at) {
-        const localTs = Number(await sGet(SK_DOC_TS)) || 0;
-        if (Date.parse(draft.updated_at) > localTs + 1500) setNewerDraft(draft);
-      }
+      // (WP-W) The cross-device DRAFT is superseded by SESSIONS — a session is the
+      // working document, and the Posts list surfaces cross-device work. The old
+      // single-row draft push + "newer draft" banner are retired so there is ONE
+      // persistence story in the UI (ux-architecture §2.7). The legacy
+      // design_drafts table is left intact server-side; we simply stop driving it.
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3708,17 +3736,52 @@ export default function App() {
   useEffect(() => { if (ready) sSet(SK_OVL, overlays); }, [overlays, ready]);
   useEffect(() => { if (ready) sSet(SK_TPL, designTemplates); }, [designTemplates, ready]);
 
-  /* ── Cross-device draft autosave: debounced (≥3s) cloud push of the working doc ── */
-  const draftPushTimer = useRef(null);
+  /* ── (WP-W) Session init — restore the current session or mint a new one ──
+     Runs once ready. If a current session exists (this or another device), open
+     its design + conversation so work continues seamlessly across reloads.
+     Otherwise mint a fresh session bound to the current (default/landing) state.
+     A pending landing handoff (a brand-new "generate" flow) always starts a NEW
+     session so the generated post is its own post. */
+  const sessionInitRef = useRef(false);
   useEffect(() => {
-    if (!ready || !cloudTplConfigured) return;
-    if (draftPushTimer.current) clearTimeout(draftPushTimer.current);
-    draftPushTimer.current = setTimeout(() => {
-      sSet(SK_DOC_TS, Date.now()); // keep local ts in step with what we're pushing
-      pushDraft({ id:'current', state:{ overlayLayers }, deviceLabel:(typeof navigator!=='undefined'?navigator.platform:'') || 'device' });
-    }, 3200);
-    return () => { if (draftPushTimer.current) clearTimeout(draftPushTimer.current); };
-  }, [overlayLayers, ready, cloudTplConfigured]);
+    if (!ready || sessionInitRef.current) return;
+    sessionInitRef.current = true;
+    installFeedbackDump();
+    (async () => {
+      // A fresh landing handoff → this is a brand-new post; start a clean session.
+      let landingPending = false;
+      try { landingPending = !!sessionStorage.getItem("wo-landing-plan"); } catch { /* ignore */ }
+
+      const existingId = getCurrentSessionId();
+      if (existingId && !landingPending) {
+        // Restore the session (cloud first, then local).
+        let rec = null;
+        const { configured, session } = await cloudGetSession(existingId);
+        if (configured && session) { setSessionCloudCfg(true); rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [] }; }
+        else { const local = localGetSession(existingId); if (local) rec = { id: local.id, title: local.title, state: local.state, conversation: local.conversation || [] }; }
+        if (rec && rec.state && Object.keys(rec.state).length) {
+          applyDesignTemplate({ state: rec.state });
+          setSessionId(rec.id);
+          setSessionTitle(rec.title || "");
+          setSessionConversation(rec.conversation);
+          setSessionInitialMessages(rec.conversation);
+          setSessionRestoreKey(k => k + 1);
+          refreshPostTiles();
+          return;
+        }
+      }
+      // No restorable session (or a new landing flow) → mint one bound to current state.
+      const nid = existingId && !landingPending ? existingId : newSessionId();
+      setSessionId(nid);
+      setCurrentSessionId(nid);
+      refreshPostTiles();
+    })();
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── (WP-W) Cross-device draft autosave RETIRED — the SESSION autosave (design
+        + conversation) is now the single working-doc persistence path. The old
+        design_drafts push is intentionally removed so there is exactly one
+        persistence story in the UI. Local overlay persistence (SK_DOC) stays. ── */
 
   /* ── Keep overlay Image objects loaded (assetId -> Image) ── */
   useEffect(() => {
@@ -6111,6 +6174,15 @@ export default function App() {
     const id = Date.now().toString(36);
     const date = new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"});
     setHistory(prev => [{id, thumb, label, date}, ...prev].slice(0, MAX_HIST));
+    // (WP-W §1) Export is an implicit SUCCESS for this session's accepted patches.
+    // Mark the most recent turns' verdict so the learning pass reads it.
+    try {
+      const lastTurn = [...sessionConversation].reverse().find(m => m.turnId);
+      if (lastTurn?.turnId) enrichVerdictClient(lastTurn.turnId, { implicit: "success", implicitSignal: "export" });
+    } catch { /* non-blocking */ }
+    // (ux-architecture §2.7) Save-as-template moment — the gentle post-export
+    // nudge, shown once per session, dismissal remembered (don't nag).
+    if (sessionId && !nudgeDismissedRef.current.has(sessionId)) setExportNudge(true);
   };
 
   /* ── Download every format via off-screen renderScene ── */
@@ -6530,6 +6602,97 @@ export default function App() {
     // Soft-delete cloud rows (uuid ids). Local-only "dt_*" ids never hit the API.
     if (cloudTplConfigured && /^[0-9a-f-]{36}$/i.test(id)) cloudDeleteTemplate(id);
   };
+
+  /* ── (WP-W) SESSIONS — auto-save, restore, Posts list, open ──────────────────
+     One session = one post. The design (currentTemplateState) + the chat
+     conversation auto-save together, debounced, locally always and to the cloud
+     when configured. This supersedes the old single-row draft as the working
+     document — a session IS the draft, with its conversation attached. */
+
+  // AI-derived-ish title: the generate brief's headline/scene, else the current
+  // headline, else the first user message, else the post type. Kept short.
+  const deriveSessionTitle = () => {
+    const clip = (s) => String(s || "").trim().replace(/\s+/g, " ").slice(0, 60);
+    if (sessionTitle) return sessionTitle;
+    const brief = genBrief?.headline || genBrief?.scene;
+    if (brief) return clip(brief);
+    if (headline && headline.trim()) return clip(headline);
+    const firstUser = sessionConversation.find(m => m.role === "user" && m.content);
+    if (firstUser) return clip(firstUser.content);
+    if (subtext && subtext.trim()) return clip(subtext);
+    return (curType?.label || "Post");
+  };
+
+  // Merge cloud + local tiles for the Posts list. Cloud wins on id; local-only
+  // sessions still appear. Called on mount and after opening the Posts popover.
+  const refreshPostTiles = useCallback(async () => {
+    const local = localGetAllSessions().map(s => ({ id: s.id, title: s.title, thumb: s.thumb, updatedAt: s.updatedAt, local: true }));
+    const { configured, sessions } = await cloudListSessions();
+    if (configured) setSessionCloudCfg(true);
+    setPostTiles(mergeSessionTiles(local, configured ? sessions : []));
+  }, []);
+
+  // Debounced session auto-save. Any design or conversation change reschedules a
+  // save ≥2.5s later. Never blocks the UI (localSaveSession is sync + tiny; the
+  // cloud push is fire-and-forget inside saveSession).
+  const sessionSaveTimer = useRef(null);
+  const doSaveSession = useCallback(() => {
+    if (!sessionId) return;
+    let thumb = null;
+    try { thumb = templateThumb(); } catch { /* canvas not ready — skip thumb */ }
+    const title = deriveSessionTitle();
+    const rec = { id: sessionId, title, thumb, state: currentTemplateState(), conversation: sessionConversation, updatedAt: Date.now() };
+    saveSession(rec).then(r => { if (r?.configured) setSessionCloudCfg(true); });
+  }, [sessionId, sessionConversation, sessionTitle, genBrief, headline, subtext]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!ready || !sessionId) return;
+    if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
+    sessionSaveTimer.current = setTimeout(doSaveSession, 2500);
+    return () => { if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current); };
+    // Design-state deps: the fields currentTemplateState serializes. Conversation too.
+  }, [ready, sessionId, sessionConversation, postType, archetypeId, archVariant, dimensionId,
+      bgColor, bgAlpha, textColorId, backdropMode, headline, subtext, attribution, dateText,
+      selectedLogoId, logoPosition, logoSize, overlayLayers, image, photoTreatment, heroRegister,
+      microLabel, pillText, typeLayouts, fontSizes, doSaveSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open a session from the Posts list: restore its design + conversation exactly.
+  const openSession = async (id) => {
+    if (!id || id === sessionId) { setTopMenu(null); return; }
+    // Prefer the cloud (freshest cross-device); fall back to the local copy.
+    let rec = null;
+    const { configured, session } = await cloudGetSession(id);
+    if (configured && session) {
+      rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [] };
+    } else {
+      const local = localGetSession(id);
+      if (local) rec = { id: local.id, title: local.title, state: local.state, conversation: local.conversation || [] };
+    }
+    if (!rec) { setTopMenu(null); return; }
+    // Restore the design through the same full path a template uses.
+    applyDesignTemplate({ state: rec.state });
+    setSessionId(rec.id);
+    setCurrentSessionId(rec.id);
+    setSessionTitle(rec.title || "");
+    setActiveTemplateName("");
+    setGenBrief(null);
+    setSessionConversation(rec.conversation);
+    setSessionInitialMessages(rec.conversation);
+    setSessionRestoreKey(k => k + 1);
+    setExportNudge(false);
+    closeInspector();
+    setTopMenu(null);
+  };
+
+  // Load older (archived) sessions on demand — never blocking, never deleted.
+  const loadArchivedTiles = async () => {
+    const { configured, sessions } = await cloudListSessions({ archived: true });
+    setArchivedTiles(configured ? mergeSessionTiles([], sessions) : []);
+  };
+  // Opening the Posts popover refreshes the tiles (and resets "Show older").
+  useEffect(() => {
+    if (topMenu === "posts") { setArchivedTiles(null); refreshPostTiles(); }
+  }, [topMenu, refreshPostTiles]);
 
   // Load a newer cross-device draft (user-gated — never auto-clobbers local work).
   const loadNewerDraft = () => {
@@ -7222,6 +7385,37 @@ export default function App() {
     </div>
   );
   const topMenuContent = () => {
+    if (topMenu === "posts") {
+      const Tile = ({ t }) => (
+        <div style={{position:"relative"}}>
+          <button onClick={()=>openSession(t.id)} title={t.title || "Untitled post"} aria-current={t.id===sessionId}
+            style={{width:"100%",aspectRatio:"1/1",borderRadius:9,border:`2px solid ${t.id===sessionId?B.burnham:B.ash+"33"}`,background:B.whiteSmoke,cursor:"pointer",padding:0,overflow:"hidden",display:"block"}}>
+            {t.thumb?<img src={t.thumb} alt={t.title||"post"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />:<span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,textTransform:"uppercase"}}>Post</span>}
+          </button>
+          <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{t.title || "Untitled"}</div>
+        </div>
+      );
+      return (
+        <>
+          <MenuHead label="Posts" sub="Each post is its own session — design and conversation saved together. Open any to keep working." />
+          <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"0 0 8px",gap:8}}>
+            <button onClick={()=>{startNewPost();setTopMenu(null);}} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer"}}>＋ New post</button>
+            <span title={sessionCloudCfg?"Posts sync across your devices":"Saved on this device"} style={{fontSize:9,fontFamily:F.body,color:sessionCloudCfg?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{sessionCloudCfg?"◆ Synced":"◇ This device"}</span>
+          </div>
+          {postTiles.length===0
+            ? <p style={{fontSize:12,fontFamily:F.body,color:B.ash,lineHeight:1.5,margin:"4px 0"}}>No saved posts yet — start making one and it will appear here automatically.</p>
+            : <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{postTiles.map(t=><Tile key={t.id} t={t} />)}</div>}
+          {archivedTiles===null
+            ? <button onClick={loadArchivedTiles} style={{width:"100%",marginTop:12,padding:"8px 12px",borderRadius:999,border:`1px solid ${B.ash}44`,background:"transparent",color:B.burnham,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.6,cursor:"pointer"}}>Show older</button>
+            : archivedTiles.length>0 && (
+              <>
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase",margin:"14px 0 8px"}}>Older</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>{archivedTiles.map(t=><Tile key={t.id} t={t} />)}</div>
+              </>
+            )}
+        </>
+      );
+    }
     if (topMenu === "format") return (
       <>
         <MenuHead label="Format" sub="The canvas size. Every format keeps its own smart layout." />
@@ -7417,6 +7611,7 @@ export default function App() {
   })();
 
   const topBarButtons = [
+    { id:"posts", label:"Posts" },
     { id:"templates", label:"Templates", badge:!!newerDraft },
     { id:"format", label:`Format · ${dim.label}` },
     { id:"type", label:`Type · ${curType?.label||"Post"}` },
@@ -7483,6 +7678,10 @@ export default function App() {
             chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(((postType === "quote" ? attribution : subtext) || "").trim()), hasDate: !!(dateText && dateText.trim()) }}
             onChangePhoto={mediaObj ? refreshPhoto : null}
             onNewPost={startNewPost}
+            sessionId={sessionId}
+            initialMessages={sessionInitialMessages}
+            restoreKey={sessionRestoreKey}
+            onConversationChange={setSessionConversation}
           />
         </aside>
         {/* ── PREVIEW ── */}
@@ -7543,6 +7742,22 @@ export default function App() {
                       <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
                     </button>
                   )}
+                </div>
+              )}
+              {/* ── (WP-W) SAVE-AS-TEMPLATE MOMENT (ux-architecture §2.7) ── One
+                    gentle inline nudge after a successful export — the moment of
+                    proven success. One tap saves via the existing template path;
+                    dismissal is remembered per session (don't nag). ── */}
+              {exportNudge && (
+                <div role="status" style={{position:"absolute",left:"50%",bottom:14,transform:"translateX(-50%)",zIndex:9,
+                  display:"inline-flex",alignItems:"center",gap:12,maxWidth:"92%",
+                  padding:"10px 14px",borderRadius:14,background:"rgba(255,255,255,0.97)",
+                  border:`1px solid ${B.ash}44`,boxShadow:"0 6px 24px rgba(43,80,64,0.18)"}}>
+                  <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Want to reuse this design? Save it as a template.</span>
+                  <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                    style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
+                  <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                    style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
                 </div>
               )}
               {/* ── GHOST SLOTS — faint dashed add-affordances in empty role
