@@ -6190,6 +6190,10 @@ export default function App() {
       else if (step === "addOverlay") { const asset = DEFAULT_OVERLAYS.find(o=>o.id===(arg||"acc-spark")); if (asset) { noteManualEdit("overlay"); const t=suggestPlacement(asset.kind,asset.ratio,W,H); setOverlayLayers(prev=>[...prev.filter(l=>l.assetId!==asset.id),{uid:"ol_"+Math.random().toString(36).slice(2),assetId:asset.id,mode:"overlay",master:t,byDim:{}}]); } }
       else if (step === "dragHero") updateTextLayout({ x: arg?.x ?? 0.12, y: arg?.y ?? 0.20 });   // = canvas drag
       else if (step === "placeLogo") placeLogo(arg || { position: "top-left" });   // = logo grid click (Commit 3 verification)
+      // (WP-Y5 verification) drive copy through the real patch pipeline so the
+      // Ready-to-post checklist can be exercised on a deliberately-failing design
+      // (e.g. a long caption that shrinks below the feed-thumbnail floor).
+      else if (step === "setCopy") applyDesignPatch(arg || {}, { uiSource: true });
       return step;
     };
     // Read the current live design fingerprint (hero geometry + colour + overlay count).
