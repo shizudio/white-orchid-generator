@@ -37,7 +37,35 @@ function summarizeKeys(keys) {
 
 const HISTORY_KEY = 'wo-editor-chat';
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost }) {
+/* ── (WP-W0) CLAIM-VS-RESULT HONESTY CHECK ─────────────────────────────────────
+   After a chat patch applies, the AI's narration is verified against RENDER
+   TRUTH (what the canvas actually drew — via the renderTruth prop), never
+   against the patch it emitted. Two live client specimens drove this:
+   1. "i want full image post" → AI claimed a layout switch, archetype never
+      changed. 2. "move logo to the centre" → patch said logo position changed,
+      the drawn mark never moved; "add title" → field applied, nothing rendered.
+   On a mismatch the chat SELF-CORRECTS in the same conversation: a layout
+   intent retries deterministically through archetypeId; anything else gets an
+   honest admission — the AI never again reports success the render contradicts.
+   (Logging/capture is WP-W proper; this is the minimal trust fix.) */
+const LAYOUT_CLAIM = /\b(layout|full[- ]?(image|bleed)|switch(ed)?|redesign(ed)?|composition|new look)\b/i;
+// Mirrors FULL_IMAGE_INTENT in app/api/assistant/route.js (kept in sync by hand).
+const FULL_IMAGE_INTENT = new RegExp([
+  'full[- ]?(image|photo|picture|bleed)',
+  'whole (image|photo|picture|post|frame)',
+  '(photo|image|picture)[^.!?]{0,24}(fills?|filling|covers?|covering)',
+  'fill (the )?(whole |entire |full )?(frame|post|canvas|screen)',
+  'edge[- ]to[- ]edge',
+  '(remove|get rid of|delete|drop|lose|no more|without) (the |that |this )?(green |colou?red |color |solid |big )*(solid|panel|block|band|column|slab)',
+  'green (solid|panel|block|band|column|slab)',
+].map(s => `\\b(${s})\\b`).join('|'), 'i');
+const TINTED_INTENT = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i;
+const ROLE_OF_FIELD = { headline: 'hero', subtext: 'support', microLabel: 'eyebrow', dateText: 'date', pillText: 'pill' };
+const ROLE_LABELS = { hero: 'the title', support: 'the small text', eyebrow: 'the little label', date: 'the date', pill: 'the button' };
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+const logoCenter = (b) => b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : null;
+
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -114,6 +142,8 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         return;
       }
       const patch = data.patch || {};
+      // (WP-W0) capture render truth BEFORE applying, for claim-vs-result below.
+      const truthBefore = typeof renderTruth === 'function' ? renderTruth() : null;
       let changeKeys = [];
       if (patchHasChanges(patch)) {
         changeKeys = onApplyPatch(patch) || [];
@@ -146,12 +176,88 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         providerLabel,
         undoIndex: didChange ? Date.now() : null,
       }]);
+
+      // ── (WP-W0) CLAIM-VS-RESULT VERIFICATION (render truth) ──────────────────
+      if (truthBefore && typeof renderTruth === 'function') {
+        await settle(650); // let the patched state render (draw effect commits)
+        const truthAfter = renderTruth();
+        const reply = String(data.reply || '');
+        const archChanged = truthAfter.archetypeId !== truthBefore.archetypeId;
+
+        // 1. LAYOUT: the user asked for (or the AI claimed) a layout change, but
+        //    the archetype never changed → deterministic retry, else admission.
+        const layoutIntent = FULL_IMAGE_INTENT.test(content);
+        const layoutClaim = LAYOUT_CLAIM.test(reply) && /\b(switch(ed)?|chang(ed|ing)|moved to|now (uses|a|the)|done)\b/i.test(reply);
+        if ((layoutIntent || (layoutClaim && changeKeys.length > 0)) && !archChanged) {
+          let corrected = false;
+          if (layoutIntent) {
+            const target = TINTED_INTENT.test(content) ? 'full_bleed_duotone' : 'documentary';
+            if (truthAfter.archetypeId !== target) {
+              const retryKeys = onApplyPatch({ archetypeId: target }) || [];
+              if (retryKeys.includes('archetypeId')) {
+                setMessages(prev => [...prev, {
+                  role: 'assistant',
+                  content: "That first change didn't actually switch the layout — my mistake. I've moved you to the full-image layout now, photo edge to edge.",
+                  summary: 'archetype',
+                  undoIndex: Date.now(),
+                }]);
+                corrected = true;
+              }
+            }
+          }
+          if (!corrected && layoutClaim) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: "Actually — checking the canvas, the layout didn't change just now. I couldn't do that yet. Try the “Try another layout” chip, or name a layout (full image, split, quote card).",
+            }]);
+          }
+          setLoading(false);
+          return;
+        }
+
+        // 2. TEXT ROLES: a field the patch filled that the layout never drew.
+        const deadHits = Object.entries(ROLE_OF_FIELD)
+          .filter(([field, role]) => typeof patch[field] === 'string' && patch[field].trim()
+            && (truthAfter.deadRoles || []).includes(role))
+          .map(([, role]) => ROLE_LABELS[role] || role);
+        if (deadHits.length) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `One honest note — this layout doesn't actually show ${deadHits.join(' or ')}, so it isn't visible on the canvas. Want me to switch to a layout that shows it?`,
+          }]);
+          setLoading(false);
+          return;
+        }
+
+        // 3. LOGO: a placement patch that the render ignored (specimen B).
+        if (changeKeys.includes('logoPosition')) {
+          const cB = logoCenter(truthBefore.logoBox), cA = logoCenter(truthAfter.logoBox);
+          const eps = (truthAfter.canvas?.w || 1080) * 0.01;
+          const moved = (!cB && cA) || (cB && cA && (Math.abs(cA.x - cB.x) > eps || Math.abs(cA.y - cB.y) > eps));
+          if (!moved) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: "Checking the canvas — the logo didn't actually move there on this layout. I couldn't do that yet.",
+            }]);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // 4. COMPLETE NO-OP: the AI narrated a change but nothing visible landed.
+        if (!didChange && !/\b(can'?t|couldn'?t|unable|sorry|already)\b/i.test(reply) && !/\?\s*$/.test(content)) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: "Honestly — that didn't change anything visible. Could you say it another way, or tap the element on the canvas to edit it directly?",
+          }]);
+        }
+      }
     } catch {
       setError("I couldn't reach the AI just now. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage]);
+  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth]);
 
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }

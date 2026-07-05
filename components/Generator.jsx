@@ -7392,6 +7392,7 @@ export default function App() {
             onApplyPatch={(patch) => applyPatch(patch, { harmonize: true })}
             onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
             onUndo={undoLastAiChange}
+            renderTruth={renderTruth}
             seed={chatSeed}
             chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(((postType === "quote" ? attribution : subtext) || "").trim()), hasDate: !!(dateText && dateText.trim()) }}
             onChangePhoto={mediaObj ? refreshPhoto : null}
