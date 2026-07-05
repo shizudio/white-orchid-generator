@@ -1175,6 +1175,92 @@ canvas[role="application"]:focus-visible {
   .wo-topmenu-backdrop { background: rgba(37, 45, 40, 0.35); }
 }
 
+/* ── Chat — THE PRIMARY RAIL (WP-V Stage 3, §2.1). A flex sibling of the
+   canvas: it structurally CANNOT overlap it. Desktop: left column. Mobile:
+   under the canvas. Chrome follows §7 — airy, thin, hairline borders. ── */
+.wo-chat-col {
+  flex: 0 0 340px;
+  min-width: 280px;
+  order: 1;
+  border-right: 1px solid var(--line);
+  background: var(--bg-raised, #fff);
+  display: flex;
+  flex-direction: column;
+  /* Fill the viewport below nav (64) + top bar (52); own scroll region. */
+  height: calc(100vh - 116px);
+  position: sticky;
+  top: 116px;
+}
+.generator-preview-panel { order: 2; }
+.wo-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.wo-chat-head {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.wo-chat-title {
+  font-family: var(--font-syne);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tw-burnham);
+}
+.wo-chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wo-chat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 2px;
+}
+.wo-chat-chip {
+  font-family: var(--font-syne);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--tw-burnham);
+  background: color-mix(in srgb, var(--tw-celadon) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tw-celadon-deep) 32%, transparent);
+  border-radius: 999px;
+  padding: 6px 12px;
+  min-height: 32px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease;
+}
+.wo-chat-chip:hover { background: color-mix(in srgb, var(--tw-celadon) 34%, transparent); }
+.wo-chat-chip:disabled { opacity: 0.45; cursor: default; }
+
+@media (max-width: 767px) {
+  /* Mobile (§2.1): chat docks UNDER the canvas — preview first, chat second. */
+  .wo-chat-col {
+    order: 3;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    max-height: 60vh;
+    position: static;
+    border-right: none;
+    border-top: 1px solid var(--line);
+  }
+  .wo-chat-list { min-height: 180px; }
+}
+
 /* ── Inspector: shared shell ── */
 .wo-inspector {
   display: flex;

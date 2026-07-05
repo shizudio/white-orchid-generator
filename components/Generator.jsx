@@ -2694,7 +2694,6 @@ export default function App() {
   const [aiUndoStack, setAiUndoStack] = useState([]);
   // Floating Art Director chat: controlled open state + one-time seed from the
   // landing page handoff (sessionStorage "wo-landing-plan").
-  const [chatOpen, setChatOpen] = useState(false);
   const [chatSeed, setChatSeed] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
   const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
@@ -3271,6 +3270,28 @@ export default function App() {
     if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays) tags.push("overlay");
     if (patch.photoTransform || patch.imageSrc || patch.removeImage || patch.photoTreatment || patch.photoFrameType) tags.push("photo");
     return tags;
+  };
+
+  /* ── NEW POST (WP-V Stage 3) — the chat's "New post" chip. Resets the canvas
+     to a fresh default design as ONE undoable action while the conversation
+     continues (landing + editor are one continuous conversation; §2.1). ── */
+  const startNewPost = () => {
+    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    restoreSnapshot({
+      postType: "photo_logo", archetypeId: null, dimensionId: "ig_square",
+      headline: "", subtext: "", attribution: "", dateText: "",
+      bgColor: "burnham", bgAlpha: 1, textColorId: "auto",
+      selectedLogoId: "p3-ivory", logoPosition: "bottom-center", logoSize: "m",
+      backdropMode: "auto", photoTreatment: "none", photoFrame: { type: "none" },
+      microLabel: "", pillText: "", heroRegister: "",
+      typeLayouts: freshTypeLayouts(), userLogoTouched: false,
+      logoByDim: {}, typeLayoutsByDim: {}, fontSizes: freshFontSizes(),
+      overlayLayers: [], markTab: "primary",
+      image: SAMPLE_IMAGES[0].full, imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 }, imgTByDim: {},
+    });
+    setGenBrief(null);
+    setActiveTemplateName("");
+    closeInspector();
   };
 
   // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
@@ -6998,6 +7019,21 @@ export default function App() {
       )}
 
       <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
+        {/* ── CHAT — THE PRIMARY RAIL (WP-V Stage 3, §2.1). A flex SIBLING of
+              the canvas: docked LEFT on desktop, UNDER the canvas on mobile.
+              It can never overlap the canvas in any state. ── */}
+        <aside className="wo-chat-col">
+          <ArtDirectorChat
+            designState={chatDesignState}
+            onApplyPatch={(patch) => applyPatch(patch, { harmonize: true })}
+            onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
+            onUndo={undoLastAiChange}
+            seed={chatSeed}
+            chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(subtext && subtext.trim()), hasDate: !!(dateText && dateText.trim()) }}
+            onChangePhoto={mediaObj ? refreshPhoto : null}
+            onNewPost={startNewPost}
+          />
+        </aside>
         {/* ── PREVIEW ── */}
         <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
           <div ref={previewRef} className="generator-preview-frame"
@@ -7057,19 +7093,6 @@ export default function App() {
         </div>
       </div>
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
-      {/* Floating Art Director — mounted at the top level (never inside a Sec /
-          transformed ancestor) so its fixed panel anchors to the viewport. */}
-      <ArtDirectorChat
-        designState={chatDesignState}
-        onApplyPatch={(patch) => applyDesignPatch(patch, { harmonize: true })}
-        onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
-        onUndo={undoLastAiChange}
-        onTryAnother={regenerateDesign}
-        canTryAnother={!!genBrief}
-        open={chatOpen}
-        setOpen={setChatOpen}
-        seed={chatSeed}
-      />
       {/* AI Audit — advisory design review. Top-level mount (never inside a
           transformed ancestor) so its fixed panel anchors to the viewport. */}
       <AuditPanel

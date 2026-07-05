@@ -14,69 +14,48 @@ function summarizeKeys(keys) {
   return labels.join(', ');
 }
 
-/* Floating conversational Art Director for the editor.
+/* The Art Director — THE PRIMARY RAIL (WP-V Stage 3, ux-architecture §2.1).
 
-   Mounted at the TOP LEVEL of the Generator tree (never inside a Sec / any
-   transformed ancestor) so its position:fixed panel anchors to the viewport
-   rather than being trapped in the ~400px controls column.
+   No longer a floating overlay: the chat is a permanent docked column.
+   Desktop: docked LEFT beside the canvas (a flex sibling — it can NEVER
+   overlap the canvas in any state). Mobile (<768px): docked UNDER the canvas.
+
+   The landing (generate) flow and the editor are ONE continuous conversation:
+   the landing exchange is appended to the per-tab history (never replaces it),
+   so nothing the user said is discarded.
 
    Props:
    - designState(): () => compact, blob-free current design snapshot
    - onApplyPatch(patch): apply a patch, returns array of applied change keys
-   - onUndo(): undo the most recent AI change (LIFO)
-   - undoDepth: number — how many AI changes can still be undone (for chip gating)
-   - open / setOpen: controlled open state (landing handoff can force-open)
-   - seed: { originalMessage, reply } | null — seeds history once on open
+   - onGenerateImage(dataUrl): ingest a generated background photo
+   - onUndo(): undo the most recent change (LIFO)
+   - seed: { originalMessage, reply } | null — landing handoff exchange
+   - chipCtx: { hasImage, hasCaption, hasDate } — drives the DYNAMIC quick chips
+   - onChangePhoto(): deterministic photo refresh (same scene / Library rotation)
+   - onNewPost(): reset the canvas to a fresh design (chat history stays)
 */
 
 const HISTORY_KEY = 'wo-editor-chat';
-// Per-tab count of messages the user has actually SEEN (panel opened at least once
-// with them present). unread = messages appended while the panel was closed, i.e.
-// messages.length - seenCount. Persisted so a tab refresh (history restored) shows
-// no spurious dot for an exchange already read.
-const SEEN_KEY = 'wo-editor-chat-seen';
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, onTryAnother, canTryAnother, open, setOpen, seed }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?}
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [regenerating, setRegenerating] = useState(false); // "Try another design" in flight
   const [error, setError] = useState('');
   const [hydrated, setHydrated] = useState(false);
-  const [seenCount, setSeenCount] = useState(0); // messages the user has seen (panel opened)
   const listRef = useRef(null);
   const inputRef = useRef(null);
-  const launcherRef = useRef(null);
   const seededRef = useRef(false);
 
-  // Restore per-tab history + seen-count once. If the panel is already open on
-  // mount (unusual — handoff seeds it closed) treat everything as seen.
+  // Restore per-tab history once — the same conversation continues across the
+  // landing page, the editor, and any number of posts in this tab.
   useEffect(() => {
-    let restored = [];
     try {
       const raw = sessionStorage.getItem(HISTORY_KEY);
-      if (raw) { restored = JSON.parse(raw); setMessages(restored); }
+      if (raw) setMessages(JSON.parse(raw));
     } catch { /* ignore */ }
-    try {
-      const s = parseInt(sessionStorage.getItem(SEEN_KEY) || '', 10);
-      // A restored history is content the user saw in this tab before the refresh,
-      // so default seenCount to its length (no spurious dot); a stored value wins.
-      setSeenCount(Number.isFinite(s) ? s : restored.length);
-    } catch { setSeenCount(restored.length); }
     setHydrated(true);
   }, []);
-
-  // Persist the seen-count per tab.
-  useEffect(() => {
-    if (!hydrated) return;
-    try { sessionStorage.setItem(SEEN_KEY, String(seenCount)); } catch { /* ignore */ }
-  }, [seenCount, hydrated]);
-
-  // Opening the panel marks every current message as seen (clears the dot). Also
-  // keep seen in step while the panel stays open so live replies don't re-flag.
-  useEffect(() => {
-    if (open) setSeenCount(messages.length);
-  }, [open, messages.length]);
 
   // Persist history (per-tab).
   useEffect(() => {
@@ -89,39 +68,29 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     } catch { /* ignore */ }
   }, [messages, hydrated]);
 
-  // Seed from the landing handoff exactly once when it arrives.
+  // APPEND the landing handoff exchange exactly once when it arrives — one
+  // continuous conversation (§2.1): existing history is never discarded.
   useEffect(() => {
-    if (!seed || seededRef.current) return;
+    if (!seed || !hydrated || seededRef.current) return;
     seededRef.current = true;
     setMessages(prev => {
-      // Avoid duplicating if history already restored the same exchange.
-      if (prev.length) return prev;
-      const seeded = [];
+      const last = prev[prev.length - 1];
+      // Dedupe: a tab refresh restores the same exchange from history.
+      if (last && seed.reply && last.role === 'assistant' && last.content === seed.reply) return prev;
+      const seeded = [...prev];
       if (seed.originalMessage) seeded.push({ role: 'user', content: seed.originalMessage });
       if (seed.reply) seeded.push({ role: 'assistant', content: seed.reply });
       return seeded;
     });
-  }, [seed]);
+  }, [seed, hydrated]);
 
   // Scroll to bottom on new messages / loading.
   useEffect(() => {
-    if (open && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages, loading, open]);
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages, loading]);
 
-  // Focus management + Escape to close.
-  useEffect(() => {
-    if (open) {
-      const t = setTimeout(() => inputRef.current?.focus(), 40);
-      const onKey = e => { if (e.key === 'Escape') { setOpen(false); } };
-      document.addEventListener('keydown', onKey);
-      return () => { clearTimeout(t); document.removeEventListener('keydown', onKey); };
-    }
-    // Return focus to the launcher when closing.
-    launcherRef.current?.focus();
-  }, [open, setOpen]);
-
-  const send = useCallback(async () => {
-    const content = input.trim();
+  const send = useCallback(async (textOverride) => {
+    const content = String(textOverride ?? input).trim();
     if (!content || loading) return;
     setError('');
     const nextHistory = [...messages, { role: 'user', content }];
@@ -165,7 +134,6 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       if (photoLanded) summaryParts.push('photo');
       const didChange = changeKeys.length > 0 || photoLanded;
       // Which provider made the photo (Higgsfield primary, gpt-image-1 fallback).
-      // Shown subtly under the thumbnail so it's clear where an image came from.
       const providerLabel = photoLanded
         ? (data.imageProvider === 'higgsfield' ? 'Higgsfield' : data.imageProvider === 'openai' ? 'gpt-image-1' : null)
         : null;
@@ -190,10 +158,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   }
 
   // An undo chip is valid only while its change is still on top of the LIFO
-  // stack. After apply, stack depth increments; the newest message's undoIndex
-  // equals the depth just before it landed. It's undoable iff no newer AI
-  // change has landed since — i.e. it's the most recent assistant message that
-  // carried a patch.
+  // stack — i.e. it's the most recent assistant message that carried a patch.
   const lastPatchedMsgIdx = (() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'assistant' && messages[i].undoIndex !== null && messages[i].undoIndex !== undefined) return i;
@@ -207,125 +172,100 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     setMessages(prev => prev.map((m, i) => i >= idx ? { ...m, undoIndex: null } : m));
   }
 
-  // (Generation-first, Commit 3) "Try another design" — regenerate a whole new
-  // composition from the same brief. onTryAnother() runs the generate→poll→
-  // reconstruct pipeline and resolves { ok }. Shows an in-flight note and a soft
-  // failure line; on success the editor already holds the new design.
-  async function handleTryAnother() {
-    if (regenerating || typeof onTryAnother !== 'function') return;
-    setRegenerating(true);
-    setError('');
-    setMessages(prev => [...prev, { role: 'assistant', content: 'Composing another design from your brief…' }]);
-    let res;
-    try { res = await onTryAnother(); } catch { res = { ok: false }; }
-    setRegenerating(false);
-    setMessages(prev => [...prev, res?.ok
-      ? { role: 'assistant', content: 'Here’s a different take — still fully editable. Try another if you like.' }
-      : { role: 'assistant', content: 'I couldn’t compose another one just now. Your current design is unchanged — you can keep editing or try again.' }]);
+  function handleNewPost() {
+    if (typeof onNewPost !== 'function') return;
+    onNewPost();
+    setMessages(prev => [...prev, { role: 'assistant', content: 'Fresh canvas — tell me what the next post is about.' }]);
+    inputRef.current?.focus();
   }
 
-  // Unread = messages appended while the panel was closed. Never negative; only
-  // meaningful when closed (opening zeroes it via the effect above).
-  const unread = !open && hydrated ? Math.max(0, messages.length - seenCount) : 0;
+  function handleChangePhoto() {
+    if (typeof onChangePhoto !== 'function') return;
+    onChangePhoto();
+    setMessages(prev => [...prev, { role: 'assistant', content: 'Swapping in a fresh photo — your words and layout stay put.' }]);
+  }
+
+  /* ── DYNAMIC QUICK-ACTION CHIPS (§2.1) ──
+     The top asks, one tap away. Chips adapt to the design: when the design
+     LACKS a caption/date, the chip becomes "+ Add …" (vocabulary-free adding —
+     the AI maps it to the right role and teaches the term back). */
+  const ctx = chipCtx || {};
+  const chips = [];
+  if (ctx.hasImage && typeof onChangePhoto === 'function') chips.push({ label: 'Change photo', act: handleChangePhoto });
+  chips.push(ctx.hasCaption
+    ? { label: 'Rewrite caption', msg: 'Rewrite the caption — keep it short and warm.' }
+    : { label: '+ Add caption', msg: 'Add a small line of caption text under the headline.' });
+  if (!ctx.hasDate) chips.push({ label: '+ Add date', msg: 'Add a date line to this design.' });
+  chips.push({ label: 'Try another layout', msg: 'Try another layout for this design — keep my words.' });
+  chips.push({ label: 'New post', act: handleNewPost });
 
   return (
-    <>
-      <button
-        ref={launcherRef}
-        type="button"
-        className={`ad-launcher${unread ? ' ad-launcher--unread' : ''}`}
-        aria-label={open ? 'Close Art Director' : unread ? `Open Art Director (${unread} unread)` : 'Open Art Director'}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span aria-hidden="true">{open ? '×' : '✦'}</span>
-        {unread > 0 && (
-          <span className="ad-launcher-badge" aria-hidden="true">{unread > 9 ? '9+' : unread}</span>
+    <section className="wo-chat" aria-label="Art Director">
+      <header className="wo-chat-head">
+        <span className="wo-chat-title">Art Director</span>
+      </header>
+
+      <div className="wo-chat-list" ref={listRef}>
+        {messages.length === 0 && !loading && (
+          <p className="ad-empty">Tell me what to make — or what to change. “An open house invite for 18 July”, “make the background wisteria”, “add small text at the bottom that says pickup is at 3pm”.</p>
         )}
-      </button>
-
-      {open && (
-        <section className="ad-panel" role="dialog" aria-label="Art Director" aria-modal="false">
-          <header className="ad-panel-head">
-            <span className="ad-panel-title">Art Director</span>
-            <button type="button" className="ad-panel-close" onClick={() => setOpen(false)} aria-label="Close">×</button>
-          </header>
-
-          <div className="ad-panel-list" ref={listRef}>
-            {messages.length === 0 && !loading && (
-              <p className="ad-empty">Tell me what to change — “make the background wisteria”, “switch to a story format”, “add the orchid frame”.</p>
+        {messages.map((m, i) => (
+          <div key={i} className={`ad-msg ad-msg--${m.role}`}>
+            <div className="ad-bubble">{m.content}</div>
+            {m.role === 'assistant' && m.thumb && (
+              <img className="ad-thumb" src={m.thumb} alt="Generated image applied to the design" />
             )}
-            {messages.map((m, i) => (
-              <div key={i} className={`ad-msg ad-msg--${m.role}`}>
-                <div className="ad-bubble">{m.content}</div>
-                {m.role === 'assistant' && m.thumb && (
-                  <img className="ad-thumb" src={m.thumb} alt="Generated image applied to the design" />
-                )}
-                {m.role === 'assistant' && m.providerLabel && (
-                  <div className="ad-provider" style={{ fontSize: 10, opacity: 0.5, marginTop: 2, letterSpacing: '0.02em' }}>
-                    photo · {m.providerLabel}
-                  </div>
-                )}
-                {m.role === 'assistant' && m.summary && (
-                  <div className="ad-changed">changed: {m.summary}</div>
-                )}
-                {m.role === 'assistant' && m.undoIndex !== null && m.undoIndex !== undefined && (
-                  <button
-                    type="button"
-                    className="ad-undo-chip"
-                    disabled={i !== lastPatchedMsgIdx}
-                    title={i === lastPatchedMsgIdx ? 'Undo this change' : 'Only the latest change can be undone'}
-                    onClick={() => handleUndo(i)}
-                  >
-                    ↶ Undo
-                  </button>
-                )}
-              </div>
-            ))}
-            {loading && (
-              <div className="ad-msg ad-msg--assistant">
-                <div className="ad-bubble ad-typing"><span /><span /><span /></div>
+            {m.role === 'assistant' && m.providerLabel && (
+              <div className="ad-provider" style={{ fontSize: 10, opacity: 0.5, marginTop: 2, letterSpacing: '0.02em' }}>
+                photo · {m.providerLabel}
               </div>
             )}
-            {error && <p className="ad-error" role="alert">{error}</p>}
-          </div>
-
-          {canTryAnother && (
-            <div className="ad-try-another-row" style={{ padding: '0 12px 8px', display: 'flex' }}>
+            {m.role === 'assistant' && m.summary && (
+              <div className="ad-changed">changed: {m.summary}</div>
+            )}
+            {m.role === 'assistant' && m.undoIndex !== null && m.undoIndex !== undefined && (
               <button
                 type="button"
-                onClick={handleTryAnother}
-                disabled={regenerating || loading}
-                title="Generate a completely different design from the same request"
-                style={{
-                  fontFamily: 'var(--font-syne, sans-serif)', fontSize: 12, fontWeight: 600,
-                  letterSpacing: '0.03em', color: 'var(--fg, #254E48)', cursor: regenerating ? 'default' : 'pointer',
-                  background: 'color-mix(in srgb, var(--tw-celadon, #B4D6C0) 30%, transparent)',
-                  border: '1px solid color-mix(in srgb, var(--tw-celadon-deep, #8bbfa0) 45%, transparent)',
-                  borderRadius: 18, padding: '7px 14px', width: '100%', minHeight: 40,
-                  opacity: regenerating ? 0.6 : 1, transition: 'opacity 140ms',
-                }}
+                className="ad-undo-chip"
+                disabled={i !== lastPatchedMsgIdx}
+                title={i === lastPatchedMsgIdx ? 'Undo this change' : 'Only the latest change can be undone'}
+                onClick={() => handleUndo(i)}
               >
-                {regenerating ? 'Composing…' : '✦ Try another design'}
+                ↶ Undo
               </button>
-            </div>
-          )}
+            )}
+          </div>
+        ))}
+        {loading && (
+          <div className="ad-msg ad-msg--assistant">
+            <div className="ad-bubble ad-typing"><span /><span /><span /></div>
+          </div>
+        )}
+        {error && <p className="ad-error" role="alert">{error}</p>}
+      </div>
 
-          <form className="ad-input-row" onSubmit={e => { e.preventDefault(); send(); }}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              rows={1}
-              placeholder="Ask for a change…"
-              aria-label="Message the Art Director"
-              disabled={loading}
-            />
-            <button type="submit" aria-label="Send" disabled={loading || !input.trim()}>↑</button>
-          </form>
-        </section>
-      )}
-    </>
+      <div className="wo-chat-chips" role="toolbar" aria-label="Quick actions">
+        {chips.map(c => (
+          <button key={c.label} type="button" className="wo-chat-chip" disabled={loading}
+            onClick={() => (c.act ? c.act() : send(c.msg))}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      <form className="ad-input-row" onSubmit={e => { e.preventDefault(); send(); }}>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          placeholder="Say it to change it…"
+          aria-label="Message the Art Director"
+          disabled={loading}
+        />
+        <button type="submit" aria-label="Send" disabled={loading || !input.trim()}>↑</button>
+      </form>
+    </section>
   );
 }
