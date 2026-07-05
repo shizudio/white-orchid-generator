@@ -33,6 +33,15 @@ function isMissingConfig(err) {
   const msg = String(err?.message || err || '');
   return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
 }
+// (WP-Y1a) The group_* columns are added by a later idempotent migration
+// (lib/schema.sql). Before it runs, writing/selecting them errors with 42703
+// (undefined_column) or a "column … does not exist" PostgREST message. We detect
+// that specifically so a cloud DB that has design_sessions but NOT the group
+// columns still saves standalone sessions (we retry without the group fields).
+function isMissingColumn(err) {
+  const msg = String(err?.message || err || '');
+  return err?.code === '42703' || /column .* does not exist|group_id|group_title|group_order/i.test(msg);
+}
 
 // GET /api/sessions            → list latest LIST_CAP unarchived (thumbnails, no heavy state)
 // GET /api/sessions?archived=1 → list archived (fetch-on-demand "Show older")
@@ -44,25 +53,39 @@ export async function GET(request) {
   const id = params.get('id');
   const archived = params.get('archived') === '1';
 
+  // (WP-Y1a) Include the group_* columns when present. If the migration hasn't run
+  // (42703), retry with the base column set so listing/opening standalone sessions
+  // never breaks — the cloud simply omits group data until schema.sql is applied.
+  const SINGLE_COLS = 'id, title, thumb, state, conversation, created_at, updated_at, archived';
+  const LIST_COLS = 'id, title, thumb, created_at, updated_at, archived';
+  const GROUP_COLS = ', group_id, group_title, group_order';
+
   try {
     if (id) {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('design_sessions')
-        .select('id, title, thumb, state, conversation, created_at, updated_at, archived')
+        .select(SINGLE_COLS + GROUP_COLS)
         .eq('id', id)
         .eq('brand_id', BRAND_ID)
         .maybeSingle();
+      if (error && isMissingColumn(error)) {
+        ({ data, error } = await supabase
+          .from('design_sessions').select(SINGLE_COLS)
+          .eq('id', id).eq('brand_id', BRAND_ID).maybeSingle());
+      }
       if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
       return Response.json({ session: data || null, configured: true });
     }
     // List view — omit the heavy `state`/`conversation` blobs; just enough for tiles.
-    const { data, error } = await supabase
+    const listQuery = (cols) => supabase
       .from('design_sessions')
-      .select('id, title, thumb, created_at, updated_at, archived')
+      .select(cols)
       .eq('brand_id', BRAND_ID)
       .eq('archived', archived)
       .order('updated_at', { ascending: false })
       .limit(archived ? 50 : LIST_CAP);
+    let { data, error } = await listQuery(LIST_COLS + GROUP_COLS);
+    if (error && isMissingColumn(error)) ({ data, error } = await listQuery(LIST_COLS));
     if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ sessions: data || [], configured: true });
   } catch (err) {
@@ -108,13 +131,29 @@ export async function POST(request) {
     archived: false,
     updated_at: new Date().toISOString(),
   };
+  // (WP-Y1a) Optional group fields — nullable, absent for a standalone post. Only
+  // attached to the row when supplied so the un-migrated-DB retry below is clean.
+  if (typeof body?.groupId === 'string' && body.groupId) row.group_id = body.groupId.slice(0, 80);
+  else if (body?.groupId === null) row.group_id = null;
+  if (typeof body?.groupTitle === 'string') row.group_title = body.groupTitle.slice(0, TITLE_MAX);
+  if (Number.isInteger(body?.groupOrder)) row.group_order = body.groupOrder;
 
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('design_sessions')
       .upsert(row)
       .select('id, title, thumb, created_at, updated_at, archived')
       .single();
+    // If the group_* columns aren't in the DB yet, retry without them so the
+    // standalone session still saves (cloud group persistence needs schema.sql).
+    if (error && isMissingColumn(error)) {
+      const { group_id, group_title, group_order, ...base } = row; // eslint-disable-line no-unused-vars
+      ({ data, error } = await supabase
+        .from('design_sessions')
+        .upsert(base)
+        .select('id, title, thumb, created_at, updated_at, archived')
+        .single());
+    }
     if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
 
     // Auto-archive everything beyond the latest LIST_CAP unarchived rows. Fire-and-
