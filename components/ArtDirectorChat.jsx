@@ -117,9 +117,14 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   const applyRef = useRef(onApplyPatch);
   const truthRef = useRef(renderTruth);
   const sessionIdRef = useRef(sessionId);
+  // designState is called AGAIN in commitLog() from an async continuation to get
+  // the AFTER snapshot; the send() closure's own designState is stale by then, so
+  // route the after-read through a ref (always the freshest prop) like truthRef.
+  const designStateRef = useRef(designState);
   applyRef.current = onApplyPatch;
   truthRef.current = renderTruth;
   sessionIdRef.current = sessionId;
+  designStateRef.current = designState;
   // The previous turn's id + user message — for implicit verdict enrichment
   // (a rephrase/re-ask of the same thing marks the previous turn a "failure").
   const prevTurnRef = useRef(null);
@@ -209,7 +214,8 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     if (meta.chip) verdict.chip = meta.chip;
     let loggedPatch = null, loggedChangeKeys = [], loggedReply = '';
     const commitLog = () => {
-      const stateAfter = (() => { try { return designState(); } catch { return null; } })();
+      const readAfter = designStateRef.current || designState;
+      const stateAfter = (() => { try { return readAfter(); } catch { return null; } })();
       logFeedback({
         turn_id: turnId,
         session_id: sessionIdRef.current || null,
