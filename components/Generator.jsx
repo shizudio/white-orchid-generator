@@ -8,7 +8,7 @@ import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
-import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient } from "@/lib/sessions";
+import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient } from "@/lib/sessions";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -6751,6 +6751,18 @@ export default function App() {
   const deleteLayer = (uid) => applyPatch({ removeOverlay: uid }, { source: "ui" });
   const saveOverlays = () => { sSet(SK_DOC, overlayLayers); sSet(SK_DOC_TS, Date.now()); setOverlayDirty(false); };
   const clonePlain = value => JSON.parse(JSON.stringify(value));
+  // (WP-Y1a) Campaign-readiness of the stored session `state` — VERIFIED, no gap.
+  // A session persists exactly this object; on reopen applyDesignTemplate({state})
+  // restores it. It already captures everything needed to (a) re-render ALL 6
+  // formats (WP-Y2): archetypeId+archVariant, the per-dimension override maps
+  // logoByDim/imgTByDim/typeLayoutsByDim, fontSizes, overlayLayers, content, colors
+  // and imageSrc — auto-layout fills the rest deterministically; and (b) recompute
+  // readiness (WP-Y5): computeReadyAll() derives verdicts purely from the restored
+  // state via the off-screen auditAllFormats sweep, so nothing readiness-specific
+  // needs storing. A campaign (WP-P1) can thus persist N of these under one groupId
+  // and re-render/re-audit the whole set additively. Only known non-portable case:
+  // a >900 KB photo dataURL is dropped from imageSrc (line below) — the design still
+  // re-renders, the source photo is device-local (pre-existing cloud-eligibility rule).
   const currentTemplateState = () => ({
     postType, archetypeId, archVariant, dimensionId, bgColor, bgAlpha, textColorId, exportFormat, backdropMode,
     photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, pillText, heroRegister,
@@ -6913,7 +6925,14 @@ export default function App() {
     let thumb = null;
     try { thumb = templateThumb(); } catch { /* canvas not ready — skip thumb */ }
     const title = deriveSessionTitle();
-    const rec = { id: sessionId, title, thumb, state: currentTemplateState(), conversation: sessionConversation, updatedAt: Date.now() };
+    // (WP-Y1a) Preserve any group assignment across autosaves. groupId is null for
+    // a standalone post (the norm) — this is a pure pass-through that never changes
+    // standalone behavior; it only stops an autosave from wiping a session's group.
+    const prior = localGetSession(sessionId);
+    const rec = {
+      id: sessionId, title, thumb, state: currentTemplateState(), conversation: sessionConversation, updatedAt: Date.now(),
+      groupId: prior?.groupId ?? null, groupTitle: prior?.groupTitle, groupOrder: prior?.groupOrder,
+    };
     saveSession(rec).then(r => { if (r?.configured) setSessionCloudCfg(true); });
   }, [sessionId, sessionConversation, sessionTitle, genBrief, headline, subtext]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -6935,12 +6954,20 @@ export default function App() {
     let rec = null;
     const { configured, session } = await cloudGetSession(id);
     if (configured && session) {
-      rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [] };
+      // (WP-Y1a) Carry group fields from the cloud so a cross-device group survives;
+      // they're undefined on an un-migrated DB and simply stay null (standalone).
+      rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [],
+        groupId: session.group_id ?? null, groupTitle: session.group_title, groupOrder: session.group_order };
     } else {
       const local = localGetSession(id);
-      if (local) rec = { id: local.id, title: local.title, state: local.state, conversation: local.conversation || [] };
+      if (local) rec = { id: local.id, title: local.title, state: local.state, conversation: local.conversation || [],
+        groupId: local.groupId ?? null, groupTitle: local.groupTitle, groupOrder: local.groupOrder };
     }
     if (!rec) { setTopMenu(null); return; }
+    // (WP-Y1a) Mirror the opened session (incl. any group fields) into the local
+    // store so the next autosave preserves its group even if it was cloud-only.
+    localSaveSession({ id: rec.id, title: rec.title, state: rec.state, conversation: rec.conversation,
+      groupId: rec.groupId ?? null, groupTitle: rec.groupTitle, groupOrder: rec.groupOrder });
     // Restore the design through the same full path a template uses.
     applyDesignTemplate({ state: rec.state });
     setSessionId(rec.id);
