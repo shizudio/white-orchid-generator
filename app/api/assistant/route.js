@@ -967,6 +967,16 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // right archetype even when the model reaches for backdrop/logo fields again.
   if (context !== 'landing') {
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    // Strip UNSOLICITED logo-placement echoes (the model mirrors designState
+    // fields into the patch): a placement field PINS the logo client-side
+    // (userLogoTouched), which overrides the archetype's logo restraint — only
+    // allowed when the user actually talked about the logo/mark. logoId stays
+    // (legit contrast swaps on colour changes).
+    if ((patch.logoPosition != null || patch.logoSize != null)
+        && !/\b(logo|mark|lock-?up|wordmark|emblem|brand)\b/i.test(lastUserText)) {
+      patch.logoPosition = null;
+      patch.logoSize = null;
+    }
     if (wantsFullImage(lastUserText)) {
       const tinted = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i.test(lastUserText);
       const target = tinted ? 'full_bleed_duotone' : 'documentary';

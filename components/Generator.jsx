@@ -1696,7 +1696,12 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
         the post's single accent (one-accent rule) so it appears only on accent variants.
    `ink` is the resolved field ink; `accent` is the resolved accent hex (or null);
    `avoid` is a list of px boxes the furniture must not overprint (hero/support/label/
-   photo) — any item intersecting is skipped so we never clutter or collide (#15/#16). */
+   photo) — any item intersecting is skipped so we never clutter or collide (#15/#16).
+   (WP-W0 specimen 4) EVERY drawn item now reports its box through `onDrawn` so
+   furniture is click-selectable (dead clicks are impossible, ux-architecture §2.2):
+   the caller keys items with `_key` (stable furn_<type>_<i>) or `_role` (a real text
+   role, e.g. the index token acting as the micro-label carrier). Items may also
+   carry `colorOverride` (hex) from the design's furnitureOverrides. */
 function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
   if(!Array.isArray(items)||!items.length) return;
   const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
@@ -1731,11 +1736,12 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
     if(clash(bx)) continue;
     if(it.type==="rule"||it.type==="underline"){
       ctx.globalAlpha=it.alpha==null?(it.type==="underline"?0.55:0.32):it.alpha;
-      ctx.fillStyle=ink;
+      ctx.fillStyle=it.colorOverride||ink;
       ctx.fillRect(it.x*w, it.y*h, (it.w||0.1)*w, hair);
+      if(onDrawn) onDrawn(it._role||it._key||`furn_${it.type}`, bx);
     }else if(it.type==="index"){
       ctx.globalAlpha=it.alpha==null?0.7:it.alpha;
-      ctx.fillStyle=ink;
+      ctx.fillStyle=it.colorOverride||ink;
       const s=(it.size||0.030)*h;
       ctx.font=`400 ${s}px ${F.subtitle}`;  // (R1) lighter index token (Syne 400 floor)
       ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
@@ -1743,9 +1749,10 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       const tx=it.align==="right"?it.x*w:it.align==="center"?it.x*w:it.x*w;
       ctx.fillText(String(it.text==null?"01":it.text).toUpperCase(), tx, it.y*h);
       ctx.letterSpacing="0px";
+      if(onDrawn) onDrawn(it._role||it._key||`furn_${it.type}`, bx);
     }else if(it.type==="counterweight"){
       ctx.globalAlpha=it.alpha==null?0.6:it.alpha;
-      ctx.fillStyle=ink;
+      ctx.fillStyle=it.colorOverride||ink;
       const s=(it.size||0.024)*h;
       ctx.font=`400 ${s}px ${F.subtitle}`;  // (R1) lighter counterweight line
       ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
@@ -1753,6 +1760,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       const tx=it.x*w;
       ctx.fillText(String(it.text==null?"thewhiteorchid.co":it.text), tx, it.y*h);
       ctx.letterSpacing="0px";
+      if(onDrawn) onDrawn(it._role||it._key||`furn_${it.type}`, bx);
     }else if(it.type==="badge"){
       // (R2a) ACCENT PILL — the one accent as a filled lozenge with a caps label
       // (Higgsfield "NOW ENROLLING" reference). On accent tiles it surfaces the resolved
@@ -1783,7 +1791,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       ctx.textAlign="left"; ctx.textBaseline="alphabetic";
       ctx.fillText(txt, px0+padX, py0+padY+bs*0.82);
       ctx.letterSpacing="0px";
-      if(onDrawn) onDrawn("pill", {x:px0, y:py0, w:pillW, h:pillH});
+      if(onDrawn) onDrawn(it._role||"pill", {x:px0, y:py0, w:pillW, h:pillH});
     }
   }
   ctx.restore();
@@ -2549,6 +2557,14 @@ export default function App() {
   // ({hero,support,eyebrow,date,pill} in export px) so canvas hit-testing can map a
   // click on ANY text role to its own inspector input — not just the hero/header.
   const roleBoundsRef = useRef(null);
+  // (WP-W0) RENDER TRUTH — the FINAL drawn logo box ({x,y,w,h,position,mark?} in
+  // export px) from the last live render, and the roles whose CONTENT is non-empty
+  // but drew NO box (silently-dead fields). Both feed the chat honesty check and
+  // the inspector's "Not shown in this layout" marking. Refs are written inside
+  // renderScene; the draw effect syncs deadRoles into state (guarded, no loops).
+  const logoBoxRef = useRef(null);
+  const deadRolesRef = useRef([]);
+  const [deadRoles, setDeadRoles] = useState([]);
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
   const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
@@ -2578,6 +2594,12 @@ export default function App() {
   // Overlay assets: library + placed layers
   const [overlays, setOverlays] = useState([]);            // [{id,name,dataUrl,kind,ratio}]
   const [overlayLayers, setOverlayLayers] = useState([]);  // [{uid,assetId,master,byDim}]
+  // (WP-W0 specimen 4) Per-piece FURNITURE overrides, keyed furn_<type>_<i> on the
+  // active archetype's furniture list: { hidden?, color? (brand token), widthScale? }.
+  // Makes hairline rules / index tokens / url lines first-class: selectable,
+  // recolourable, deletable — through the patch pipeline (furnitureUpdate), so
+  // undo/redo cover them. Reset on a fresh archetype materialization.
+  const [furnitureOverrides, setFurnitureOverrides] = useState({});
   const [selOverlay, setSelOverlay] = useState(null);      // selected layer uid
   const [overlayChromeVisible, setOverlayChromeVisible] = useState(false);
   const [overlayDirty, setOverlayDirty] = useState(false);
@@ -2904,6 +2926,7 @@ export default function App() {
     typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: JSON.parse(JSON.stringify(overlayLayers)),
+    furnitureOverrides: JSON.parse(JSON.stringify(furnitureOverrides)),
     markTab,
     // Photo source + transform (Commit 4): an in-chat generated image replaces the
     // background through the AI path, so undo must restore the previous photo too.
@@ -3024,6 +3047,9 @@ export default function App() {
     setTypeLayoutsByDim({});
     if (mat.motifLayers) setOverlayLayers(mat.motifLayers);
     else setOverlayLayers(prev => prev.filter(l => !l.motif));
+    // (WP-W0) a fresh archetype brings fresh furniture — stale per-piece overrides
+    // (keyed by the OLD archetype's item indexes) must not hide/recolour the new set.
+    setFurnitureOverrides({});
     setSelOverlay(null);
   };
   // Back-compat alias — older call sites (dev hook, patch path) call applyArchetype.
@@ -3124,7 +3150,14 @@ export default function App() {
     }
     // A logo placement patch must behave exactly like a human click: pin the
     // logo globally on the master dim, or write a per-dim override elsewhere.
-    const posChanged = inList(patch.logoPosition, "logoPosition") && patch.logoPosition !== logoPosition;
+    // (WP-W0 specimen B) RENDER-TRUTH-AWARE PLACEMENT — compare against BOTH the
+    // pinned state field and the position actually RENDERED (the archetype /
+    // format default when un-pinned): "move the logo to the centre" must apply
+    // even when the stale state field already says "center" while the canvas
+    // draws the mark top-left. (Unsolicited placement echoes are stripped
+    // server-side, so a placement field here is always a deliberate ask.)
+    const renderedLogoPos = logoBoxRef.current?.position || logoPosition;
+    const posChanged = inList(patch.logoPosition, "logoPosition") && (patch.logoPosition !== logoPosition || patch.logoPosition !== renderedLogoPos);
     const sizeChanged = inList(patch.logoSize, "logoSize") && patch.logoSize !== logoSize;
     if (posChanged || sizeChanged) {
       const nextPos = posChanged ? patch.logoPosition : logoPosition;
@@ -3220,6 +3253,23 @@ export default function App() {
       setImageObj(null);
       applied.push("removeImage");
     }
+    // (WP-W0 specimen 4) furnitureUpdate — ONE furniture piece (hairline rule /
+    // index token / url line), keyed furn_<type>_<i> on the active archetype's
+    // furniture list: { key, hidden?, color? (brand token), widthScale? }.
+    // Client-only (CLIENT_PATCH_KEYS) — the AI grammar cannot produce it.
+    if (patch.furnitureUpdate && typeof patch.furnitureUpdate === "object" && typeof patch.furnitureUpdate.key === "string") {
+      const { key, hidden, color, widthScale } = patch.furnitureUpdate;
+      setFurnitureOverrides(prev => {
+        const cur = { ...(prev[key] || {}) };
+        if (hidden === true) cur.hidden = true;
+        else if (hidden === false) delete cur.hidden;
+        if (color === "") delete cur.color;               // "" = back to Auto (layout ink)
+        else if (typeof color === "string" && B[color]) cur.color = color;
+        if (typeof widthScale === "number" && Number.isFinite(widthScale)) cur.widthScale = Math.max(0.25, Math.min(3, widthScale));
+        return { ...prev, [key]: cur };
+      });
+      applied.push("furnitureUpdate");
+    }
 
     // A UI-sourced patch never clobbers the live selection (photo drags emit
     // patches mid-gesture); AI patches keep the historical deselect.
@@ -3267,7 +3317,7 @@ export default function App() {
     if (patch.textLayout || patch.fontSizes || typeof patch.headline === "string" || typeof patch.subtext === "string" ||
         typeof patch.attribution === "string" || typeof patch.dateText === "string" ||
         typeof patch.microLabel === "string" || typeof patch.pillText === "string") tags.push("text");
-    if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays) tags.push("overlay");
+    if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays || patch.furnitureUpdate) tags.push("overlay");
     if (patch.photoTransform || patch.imageSrc || patch.removeImage || patch.photoTreatment || patch.photoFrameType) tags.push("photo");
     return tags;
   };
@@ -3286,7 +3336,7 @@ export default function App() {
       microLabel: "", pillText: "", heroRegister: "",
       typeLayouts: freshTypeLayouts(), userLogoTouched: false,
       logoByDim: {}, typeLayoutsByDim: {}, fontSizes: freshFontSizes(),
-      overlayLayers: [], markTab: "primary",
+      overlayLayers: [], furnitureOverrides: {}, markTab: "primary",
       image: SAMPLE_IMAGES[0].full, imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 }, imgTByDim: {},
     });
     setGenBrief(null);
@@ -3336,6 +3386,7 @@ export default function App() {
     setFontSizes(s.fontSizes || freshFontSizes());
     const layers = (s.overlayLayers || []).map(l => ({ ...l, uid: "ol_" + Math.random().toString(36).slice(2) }));
     setOverlayLayers(layers);
+    setFurnitureOverrides(s.furnitureOverrides || {});
     setSelOverlay(null);
     setMarkTab(s.markTab || ((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary"));
     // Restore the photo source + transform if this snapshot captured them (Commit 4).
@@ -3361,6 +3412,19 @@ export default function App() {
     });
   };
   const undoCreativePlan = () => undoLastAiChange();
+
+  /* ── (WP-W0) RENDER TRUTH ── what is ACTUALLY on the canvas after the last
+     live render: archetype, the drawn logo box/position, per-role drawn boxes
+     and the silently-dead roles. The chat honesty check verifies the AI's
+     claims against THIS — never against the patch it emitted (specimen B:
+     "changed: logo position" while the canvas never moved the logo). */
+  const renderTruth = () => ({
+    archetypeId, logoPosition, userLogoTouched,
+    logoBox: logoBoxRef.current ? { ...logoBoxRef.current } : null,
+    roleBounds: roleBoundsRef.current ? JSON.parse(JSON.stringify(roleBoundsRef.current)) : null,
+    deadRoles: [...(deadRolesRef.current || [])],
+    canvas: { w: W, h: H },
+  });
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
   const chatDesignState = () => ({
@@ -3459,6 +3523,8 @@ export default function App() {
     window.__woArchFontMeta = () => fontMetaRef.current;
     window.__woArchTextBounds = () => textBoundsRef.current;
     window.__woRoleBounds = () => roleBoundsRef.current;   // (WP-U fix #1) per-role hit boxes
+    // (WP-W0) RENDER TRUTH — what's actually on the canvas (verification + honesty).
+    window.__woTruth = () => renderTruth();
     window.__woArchetypeIds = ARCHETYPE_IDS;
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
@@ -3966,6 +4032,8 @@ export default function App() {
     // shape boundary and prefers the clear solid-bg region (Commit 2c).
     let frameBox=null;
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
+    // (WP-W0) render-truth refs reset per live render; the paths that draw re-set them.
+    if(live){logoBoxRef.current=null;deadRolesRef.current=[];}
     if(live)roleBoundsRef.current=null;     // (WP-U fix #1) reset per live render; editorial branch repopulates
     const S=Math.min(w,h)/1080;
     ctx.clearRect(0,0,w,h);
@@ -4020,6 +4088,9 @@ export default function App() {
       // in the live focal check. Captured on every captureAudit render, not only live.
       const _logoBox={x:lx-lSz/2,y:ly-lSz/2,w:lSz,h:lSz};
       if(live||opts.captureAudit) auditLogo.box=_logoBox;
+      // (WP-W0) render truth: the FINAL drawn lockup box + resolved position, so
+      // the chat honesty check verifies "logo moved" against what's on the canvas.
+      if(live) logoBoxRef.current={..._logoBox,position:place.position};
       if(live){
         auditLogo.explicit=!!logoBase.explicit;
         auditLogo.overlapsText=!!place.overlapsText;
@@ -4565,6 +4636,24 @@ export default function App() {
       // support text: subtext, else attribution (if not already used as the eyebrow),
       // else the headline (for big_number where the date is the hero).
       const supportText = stripHeroMarkers(ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "");
+      // ── (WP-W0 specimen 3) NO SILENTLY-DEAD ROLES ────────────────────────────
+      // An archetype without an authored support / eyebrow box used to swallow
+      // content the user typed (inspector field filled, canvas unchanged, nothing
+      // to click). Synthesize a compact box in the hero's text block instead —
+      // support under the hero (above it when the hero hugs the bottom safe
+      // margin, e.g. documentary's whisper line), eyebrow above — and let the
+      // reflow engine de-collide or drop it like any authored role. Roles that
+      // still can't fit surface as deadRoles in the inspector (render truth).
+      const hasIdxCarrier = !mat.roles?.microLabel && (mat.furniture||[]).some(it=>it&&it.type==="index");
+      if(supportText && !supBox && heroBox){
+        const belowY=(heroBox.y+heroBox.h)/h+0.015;
+        const fitsBelow = belowY <= 1-sm.b-0.055;
+        const synthY = fitsBelow ? belowY : Math.max(sm.t, heroBox.y/h-0.075);
+        supBox=clampBox({x:heroBox.x/w, y:synthY, w:heroBox.w/w, h:0.06});
+      }
+      if(eyebrow && !labelBox && heroBox && !hasIdxCarrier){
+        labelBox=clampBox({x:heroBox.x/w, y:Math.max(sm.t, heroBox.y/h-0.075), w:heroBox.w/w, h:0.05});
+      }
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
       if(mat.fullBleed && mediaObj && heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
@@ -4862,11 +4951,37 @@ export default function App() {
       //                        has no authored badge, a default one is added so
       //                        "+ Button" works on any editorial design.
       const furnitureBase = (() => {
-        const base = mat.furniture || [];
-        if (pillText == null) return base;
-        if (pillText === "") return base.filter(it => !(it && it.type === "badge"));
-        if (base.some(it => it && it.type === "badge")) return base.map(it => (it && it.type === "badge") ? { ...it, text: pillText } : it);
-        return [...base, { type: "badge", text: pillText, x: 0.08, y: 0.86, size: 0.022, align: "left", color: "softTangerine" }];
+        // (WP-W0 specimen 4) stable per-piece keys FIRST (index into the authored
+        // archetype furniture list) so furnitureOverrides keys survive the pill /
+        // eyebrow mappings below; a user-added pill (no authored badge) gets its own.
+        let base = (mat.furniture || []).map((it, i) => it ? { ...it, _key: `furn_${it.type}_${i}` } : it).filter(Boolean);
+        if (pillText === "") base = base.filter(it => it.type !== "badge");
+        else if (typeof pillText === "string" && pillText) {
+          base = base.some(it => it.type === "badge")
+            ? base.map(it => it.type === "badge" ? { ...it, text: pillText } : it)
+            : [...base, { type: "badge", text: pillText, x: 0.08, y: 0.86, size: 0.022, align: "left", color: "softTangerine", _key: "furn_badge_user" }];
+        }
+        // The small INDEX token doubles as the MICRO-LABEL CARRIER on tiles whose
+        // layout has no eyebrow box (quote_margin's "ON PLAY"): microLabel state
+        // overrides its text exactly like pillText overrides the badge (null =
+        // authored, "" = removed, text = override), and it reports as the "eyebrow"
+        // role so clicking it opens the text inspector's eyebrow input. (Live
+        // design only — the calibration board renders authored furniture as-is.)
+        if (hasIdxCarrier && !overrideArch) {
+          if (microLabel === "") base = base.filter(it => it.type !== "index");
+          else base = base.map(it => it.type === "index"
+            ? { ...it, _role: "eyebrow", ...(typeof microLabel === "string" && microLabel ? { text: microLabel } : {}) }
+            : it);
+        }
+        // Per-piece overrides (hidden / colour / width) from the design state.
+        base = base.filter(it => !(furnitureOverrides[it._key] && furnitureOverrides[it._key].hidden)).map(it => {
+          const ov = furnitureOverrides[it._key]; if (!ov) return it;
+          const out = { ...it };
+          if (ov.color && B[ov.color]) out.colorOverride = B[ov.color];
+          if (typeof ov.widthScale === "number" && (it.type === "rule" || it.type === "underline")) out.w = (it.w || 0.1) * ov.widthScale;
+          return out;
+        });
+        return base;
       })();
       if(furnitureBase && furnitureBase.length){
         const avoid=[
@@ -4947,10 +5062,30 @@ export default function App() {
         const isCentered=/center/.test(markPos);
         const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
         const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
-        const fieldLight=hexLuminance(fieldColor)>0.5;
-        const pickMark=brandLogoForContext(dimId, "mark", hexLuminance(fieldColor), logoSeed);
-        // The mark variants are green-only; on a LIGHT field draw the real badge as-is, on a
-        // DARK field the green badge would vanish, so tint the orchid-petal to ivory instead.
+        // (WP-W0 coordinator item 3) MARK CONTRAST — on a photo the FIELD colour says
+        // nothing about what's actually UNDER the mark (the specimen: an ivory mark
+        // sitting on white orchid blossoms). Sample the already-drawn canvas beneath
+        // the mark box and tint for THAT backing; the flat-field luminance remains
+        // the fallback when sampling is unavailable (tainted canvas / headless).
+        let markBackLum=hexLuminance(fieldColor);
+        if(mediaObj){
+          try{
+            const N=8,sc=document.createElement("canvas");sc.width=N;sc.height=N;
+            const sctx=sc.getContext("2d",{willReadFrequently:true});
+            const sx=Math.max(0,cx-mSz/2),sy=Math.max(0,cy-mSz/2);
+            const sw=Math.min(w-sx,mSz),sh=Math.min(h-sy,mSz);
+            if(sw>2&&sh>2){
+              sctx.drawImage(ctx.canvas,sx,sy,sw,sh,0,0,N,N);
+              const d=sctx.getImageData(0,0,N,N).data;let sum=0,n=0;
+              for(let i=0;i<d.length;i+=4){sum+=getLuminance(d[i],d[i+1],d[i+2]);n++;}
+              if(n)markBackLum=sum/n;
+            }
+          }catch(_){/* keep the field fallback */}
+        }
+        const fieldLight=markBackLum>0.5;
+        const pickMark=brandLogoForContext(dimId, "mark", markBackLum, logoSeed);
+        // The mark variants are green-only; on a LIGHT backing draw the real badge as-is,
+        // on a DARK backing the green badge would vanish, so tint the orchid-petal to ivory.
         // NOTE: the small corner MARK is intentionally allowed to sit quietly near text in
         // a corner (it's a tiny quiet glyph, not a lockup), so it is NOT registered in the
         // logo↔text collision assertion (auditLogo.box) — only the full lockup is.
@@ -4964,9 +5099,13 @@ export default function App() {
           if(orchid){
             const markColor=fieldLight?B.burnham:B.whiteSmoke;
             const tinted=tintedAccessory(orchid,markColor);
-            if(tinted) containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9);
+            if(tinted){ containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9); drew=true; }
           }
         }
+        // (WP-W0) render truth + clickability: the drawn mark IS the logo — publish
+        // its box so "move the logo" verifies against the canvas and a click on the
+        // mark selects the Logo element (dead clicks are impossible, §2.2).
+        if(drew&&live) logoBoxRef.current={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz,position:markPos,mark:true};
       } else if(drawLockup){
         // (Crops addendum) WIDE-FORMAT LOCKUP CAP — outside the brand bookends the
         // lockup must never be the largest element on a tile; on the wide formats
@@ -5140,7 +5279,21 @@ export default function App() {
         if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
         if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
       });
-      if(live) roleBoundsRef.current=_roleB; // (WP-U fix #1) publish per-role hit boxes
+      if(live){
+        roleBoundsRef.current=_roleB; // (WP-U fix #1) publish per-role hit boxes
+        // ── (WP-W0) RENDER-TRUTH ROLE AUDIT ── any role whose CONTENT is non-empty
+        // but which drew NO box this render is a silently-dead field. The draw
+        // effect syncs this ref into state (guarded) so the inspector marks the
+        // field and the chat honesty check never claims an add that didn't render.
+        const _expect={
+          hero: !!String(heroFinal||"").trim(),
+          support: !!String(supportText||"").trim(),
+          eyebrow: !!String(eyebrow||"").trim(),
+          date: !isBigNum && !!String(ccDateText||"").trim(),
+          pill: furnitureBase.some(it=>it.type==="badge"&&String(it.text||"").trim()),
+        };
+        deadRolesRef.current=Object.keys(_expect).filter(r=>_expect[r]&&!_roleB[r]);
+      }
       return; // single-path editorial render complete.
     }
 
@@ -5356,7 +5509,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister]);
+  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback(() => {
@@ -5373,6 +5526,10 @@ export default function App() {
     setDropHint(prev=>prev===next?prev:next);
     const ov=logoOverlapRef.current;
     setLogoOverlapHint(prev=>prev===ov?prev:ov);
+    // (WP-W0) sync silently-dead roles from the render-truth ref (guarded — the
+    // same no-loop pattern as dropHint above).
+    const dr=deadRolesRef.current||[];
+    setDeadRoles(prev=>prev.join(",")===dr.join(",")?prev:dr);
     if(typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook
   },[draw,fontsLoaded]);
 
@@ -5394,6 +5551,7 @@ export default function App() {
       // old clean audit and never repaired a fresh text↔logo collision.
       JSON.stringify(typeLayouts), archetypeId, archVariant,
       overlayLayers.map(l => l.assetId + (l.mode || "frame")).join(","),
+      JSON.stringify(furnitureOverrides),   // (WP-W0) furniture edits re-audit too
       !!(imageObj || videoObj), image,
     ]);
   const runLocalAudit = useCallback(() => {
@@ -5960,11 +6118,25 @@ export default function App() {
     // (via onPanEnd → focusTextField(role)), so every text role is click-editable,
     // not just the header. Small roles are tested before the (larger) hero box.
     const rb=roleBoundsRef.current;
+    // (WP-W0 specimen 4) GENEROUS HIT TARGETS — thin elements (a hairline rule, a
+    // small index token) get a minimum ~24 display-px tap area. Boxes are in
+    // export px; convert the display minimum through the canvas scale.
+    const _kx=W/rect.width;
+    const _minHit=Math.max(28, 24*_kx);
+    const _hitBox=(b)=>{const ex=Math.max(0,(_minHit-b.w)/2),ey=Math.max(0,(_minHit-b.h)/2);return {x:b.x-ex-10,y:b.y-ey-10,w:b.w+2*(ex+10),h:b.h+2*(ey+10)};};
+    const _inHit=(b)=>{const hb=_hitBox(b);return px>=hb.x&&px<=hb.x+hb.w&&py>=hb.y&&py<=hb.y+hb.h;};
     if(rb){
-      const rPad=10;
-      for(const role of ["pill","eyebrow","date","support","hero"]){
+      // Text roles first (small before hero), then FURNITURE pieces (hairline
+      // rules / index tokens / url lines) — every drawn element is selectable
+      // (dead clicks are impossible, ux-architecture §2.2).
+      const furnKeys=Object.keys(rb).filter(k=>k.startsWith("furn_"));
+      for(const role of ["pill","eyebrow","date","support",...furnKeys,"hero"]){
         const b=rb[role]; if(!b) continue;
-        if(px>=b.x-rPad&&px<=b.x+b.w+rPad&&py>=b.y-rPad&&py<=b.y+b.h+rPad){
+        if(_inHit(b)){
+          if(role.startsWith("furn_")){
+            selectElement(role);   // minimal furniture inspector (colour/width/delete)
+            return;
+          }
           setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
           setInspectorEl("text");
           dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
@@ -5972,6 +6144,12 @@ export default function App() {
           return;
         }
       }
+    }
+    // (WP-W0) the drawn LOGO (lockup or corner mark) is clickable too — selecting
+    // it opens the Logo inspector (previously only reachable from the layer list).
+    if(logoBoxRef.current&&_inHit(logoBoxRef.current)){
+      selectElement("logo");
+      return;
     }
     if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
       setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
@@ -6474,17 +6652,42 @@ export default function App() {
       </> : null}
       {/* (WP-U fix #1) EYEBROW — the small caps label was baked at materialization
           (microLabel) and had NO edit field, so it looked uneditable. Shown whenever
-          an eyebrow is on the canvas or the archetype carries the role. */}
-      {(microLabel || (heroRegister && typeLayouts[postType]?.roles?.microLabel)) ?
+          an eyebrow is on the canvas or the archetype carries the role.
+          (WP-W0 specimen 4) Also shown when the archetype's INDEX furniture token
+          (e.g. quote_margin's "ON PLAY") is the micro-label carrier — editing this
+          field re-writes that token. */}
+      {(()=>{
+        const archIdx = archetypeId ? (ARCHETYPES_BY_ID[archetypeId]?.furniture||[]).find(f=>f&&f.type==="index") : null;
+        const idxCarrier = !!archIdx && !!heroRegister && !typeLayouts[postType]?.roles?.microLabel;
+        return (microLabel || idxCarrier || (heroRegister && typeLayouts[postType]?.roles?.microLabel)) ?
         <In data-wo-role="eyebrow" placeholder="Eyebrow (small caps label)" maxLength={28}
-          value={microLabel ?? ((attribution && attribution.length<=28 && subtext) ? attribution : "")}
-          onChange={e=>applyPatch({microLabel:e.target.value},{source:"ui"})} mt /> : null}
+          value={microLabel ?? (idxCarrier ? String(archIdx.text ?? "") : ((attribution && attribution.length<=28 && subtext) ? attribution : ""))}
+          onChange={e=>applyPatch({microLabel:e.target.value},{source:"ui"})} mt /> : null;
+      })()}
       {/* (WP-U fix #1) PILL — the accent badge label (archetype furniture) is now editable. */}
       {(()=>{const badge=archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.furniture||[]).find(f=>f&&f.type==="badge"):null;
         // (WP-V) Also shown when the user ADDED a pill via + Add / chat
         // (pillText non-null) on a design without an authored badge.
         return (badge || pillText != null) ? <In data-wo-role="pill" placeholder="Pill label (e.g. NOW ENROLLING)" maxLength={30}
           value={pillText ?? badge?.text ?? ""} onChange={e=>applyPatch({pillText:e.target.value},{source:"ui"})} mt /> : null;})()}
+      {/* (WP-W0 specimen 3) RENDER-TRUTH DEAD FIELDS — a filled field this layout
+          does not draw is marked honestly, with a one-tap layout switch that
+          preserves all content (materialization keeps copy fields). */}
+      {deadRoles.length>0 && (()=>{
+        const DEAD_LABELS={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button"};
+        const target = mediaObj ? "editorial_split" : "label_headline";
+        return (
+          <div role="note" style={{margin:"6px 0 12px",padding:"9px 11px",borderRadius:9,border:`1px solid ${B.tangerine}55`,background:`${B.tangerine}10`,fontSize:11,fontFamily:F.body,color:B.burnham,lineHeight:1.5}}>
+            <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>Not shown in this layout:</strong> {deadRoles.map(r=>DEAD_LABELS[r]||r).join(", ")}.
+            {archetypeId!==target && (
+              <button type="button" onClick={()=>applyPatch({archetypeId:target},{source:"ui"})}
+                style={{display:"block",marginTop:7,padding:"6px 11px",borderRadius:999,border:`1px solid ${B.burnham}44`,background:"transparent",color:B.burnham,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.5,cursor:"pointer"}}>
+                Switch to a layout that shows it
+              </button>
+            )}
+          </div>
+        );
+      })()}
       <EditorSubhead label="Typography" summary="Editorial auto-fit" />
       <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
@@ -6658,6 +6861,40 @@ export default function App() {
     );
   };
 
+  /* ── FURNITURE INSPECTOR (WP-W0 specimen 4) ──
+     Hairline rules / index tokens / url lines are drawn archetype furniture —
+     now first-class: selectable on canvas (roleBounds), listed in the layer
+     list, and editable here (colour, width for rules, delete). All edits emit
+     furnitureUpdate patches through THE pipeline → undo/redo by construction. */
+  const furnitureMetaFor = (key) => {
+    const m = /^furn_([a-z]+)_(\w+)$/.exec(String(key||"")); if(!m) return null;
+    return { type:m[1], key };
+  };
+  const FURN_LABELS = { rule:"Hairline rule", underline:"Underline", index:"Small label", counterweight:"URL line", badge:"Pill" };
+  const renderFurniturePanel = (key) => {
+    const meta = furnitureMetaFor(key); if(!meta) return null;
+    const ov = furnitureOverrides[key] || {};
+    const isLine = meta.type==="rule"||meta.type==="underline";
+    const FURN_COLORS = ["burnham","whiteSmoke","jet","tangerine","wisteria","celadon"];
+    return (
+      <>
+        <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:12}}>
+          A small editorial detail of this layout. Recolour it, {isLine?"resize it, ":""}or use Delete above to remove it.
+        </div>
+        <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Colour</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
+          <button aria-pressed={!ov.color} title="Auto (layout ink)" onClick={()=>applyPatch({furnitureUpdate:{key,color:""}},{source:"ui"})}
+            style={{width:34,height:34,borderRadius:"50%",border:!ov.color?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:"#fff",display:"grid",placeItems:"center",fontFamily:FU.subtitle,fontSize:8,fontWeight:800,color:B.jet,cursor:"pointer"}}>AUTO</button>
+          {FURN_COLORS.map(id=>{const on=ov.color===id;return (
+            <button key={id} aria-pressed={on} title={id} onClick={()=>applyPatch({furnitureUpdate:{key,color:id}},{source:"ui"})}
+              style={{width:34,height:34,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[id],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />
+          );})}
+        </div>
+        {isLine && <Slider label="Width" min={0.5} max={2} step={0.05} value={ov.widthScale??1} suffix={Math.round((ov.widthScale??1)*100)+"%"} onChange={v=>applyPatch({furnitureUpdate:{key,widthScale:v}},{source:"ui"})} />}
+        <div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.45}}>Deleting is undoable — Cmd+Z brings it back.</div>
+      </>
+    );
+  };
   /* ── ELEMENTS RAIL model (Commit 2) ──
      One chip per ACTIVE element of the design, in z-order:
      Background (always) · Photo (media) · Text (post type has copy) ·
@@ -6673,6 +6910,13 @@ export default function App() {
     ...overlayLayers.map(l => {
       const a = overlays.find(o => o.id === l.assetId);
       return { key:l.uid, label:a?.name || "Overlay", icon:"✦", thumb:a?.dataUrl||a?.src, overlay:true };
+    }),
+    // (WP-W0 specimen 4) drawn FURNITURE pieces (hairline rules / index tokens /
+    // url lines) from the last live render — occluded or tiny targets stay
+    // reachable through the layer list even when hard to tap on canvas.
+    ...Object.keys(roleBoundsRef.current || {}).filter(k => k.startsWith("furn_")).map(k => {
+      const meta = furnitureMetaFor(k);
+      return { key:k, label:FURN_LABELS[meta?.type] || "Detail", icon:"—" };
     }),
   ];
   // Which rail chip is active given the current selection sources.
@@ -6705,6 +6949,11 @@ export default function App() {
         {renderLogoPanel(["primary","secondary"].includes(markTab)?markTab:"primary")}
       </>
     ) };
+    // (WP-W0 specimen 4) furniture piece by key
+    if (String(inspectorEl).startsWith("furn_")) {
+      const meta = furnitureMetaFor(inspectorEl);
+      return { title: FURN_LABELS[meta?.type] || "Detail", body: renderFurniturePanel(inspectorEl) };
+    }
     // overlay by uid
     const layer = overlayLayers.find(l => l.uid === inspectorEl);
     if (!layer) return null;
@@ -6840,6 +7089,8 @@ export default function App() {
   const inspectorRemove = (() => {
     if (inspectorEl === "text") return { label:"Clear text", act:()=>applyPatch({ headline:"", subtext:"", attribution:"", dateText:"", microLabel:"", pillText:"" }, { source:"ui" }) };
     if (inspectorEl === "photo") return { label: videoObj ? "Remove video" : "Remove photo", act:()=>{ applyPatch({ removeImage:true }, { source:"ui" }); closeInspector(); } };
+    // (WP-W0 specimen 4) furniture delete — hides the piece via the pipeline (undoable).
+    if (inspectorEl && String(inspectorEl).startsWith("furn_")) return { label:"Delete", act:()=>{ applyPatch({ furnitureUpdate:{ key:inspectorEl, hidden:true } }, { source:"ui" }); closeInspector(); } };
     if (inspectorEl && !["bg","logo","text","photo"].includes(inspectorEl)) return { label:"Delete", act:()=>deleteLayer(inspectorEl) };
     return null;
   })();
