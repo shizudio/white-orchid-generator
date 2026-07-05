@@ -74,6 +74,13 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const seededRef = useRef(false);
+  // (WP-W0) The claim-vs-result verification runs in an ASYNC continuation —
+  // by then the parent has re-rendered and the props captured in send()'s
+  // closure are stale. Route the late calls through refs (always fresh).
+  const applyRef = useRef(onApplyPatch);
+  const truthRef = useRef(renderTruth);
+  applyRef.current = onApplyPatch;
+  truthRef.current = renderTruth;
 
   // Restore per-tab history once — the same conversation continues across the
   // landing page, the editor, and any number of posts in this tab.
@@ -143,7 +150,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       }
       const patch = data.patch || {};
       // (WP-W0) capture render truth BEFORE applying, for claim-vs-result below.
-      const truthBefore = typeof renderTruth === 'function' ? renderTruth() : null;
+      const truthBefore = typeof truthRef.current === 'function' ? truthRef.current() : null;
       let changeKeys = [];
       if (patchHasChanges(patch)) {
         changeKeys = onApplyPatch(patch) || [];
@@ -178,22 +185,38 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       }]);
 
       // ── (WP-W0) CLAIM-VS-RESULT VERIFICATION (render truth) ──────────────────
-      if (truthBefore && typeof renderTruth === 'function') {
+      if (truthBefore && typeof truthRef.current === 'function') {
         await settle(650); // let the patched state render (draw effect commits)
-        const truthAfter = renderTruth();
+        const truthAfter = truthRef.current();
         const reply = String(data.reply || '');
         const archChanged = truthAfter.archetypeId !== truthBefore.archetypeId;
+
+        // 0. INVERSE CONTRADICTION (specimen 5): the reply claims INABILITY while
+        //    a patch actually applied ("I can't do that yet" + changed: overlay).
+        //    Both directions of dishonesty are corrected: here, own the change.
+        if (didChange && /\b(can'?t|cannot|couldn'?t|unable|not (able|possible))\b/i.test(reply)) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `Correction — that actually worked: I changed the ${summaryParts.join(', ') || 'design'}. Tap Undo if that isn't what you wanted.`,
+          }]);
+          setLoading(false);
+          return;
+        }
 
         // 1. LAYOUT: the user asked for (or the AI claimed) a layout change, but
         //    the archetype never changed → deterministic retry, else admission.
         const layoutIntent = FULL_IMAGE_INTENT.test(content);
-        const layoutClaim = LAYOUT_CLAIM.test(reply) && /\b(switch(ed)?|chang(ed|ing)|moved to|now (uses|a|the)|done)\b/i.test(reply);
+        // A CLAIM is past-tense ("I switched the layout"), never an OFFER or a
+        // question ("would you like to switch to a layout that can?").
+        const layoutClaim = LAYOUT_CLAIM.test(reply)
+          && /\b(switched|changed|updated|moved you|now (a|uses|on))\b/i.test(reply)
+          && !/\b(would you like|want me to|shall i|can'?t|couldn'?t|does not|doesn'?t)\b/i.test(reply);
         if ((layoutIntent || (layoutClaim && changeKeys.length > 0)) && !archChanged) {
           let corrected = false;
           if (layoutIntent) {
             const target = TINTED_INTENT.test(content) ? 'full_bleed_duotone' : 'documentary';
             if (truthAfter.archetypeId !== target) {
-              const retryKeys = onApplyPatch({ archetypeId: target }) || [];
+              const retryKeys = applyRef.current({ archetypeId: target }) || [];
               if (retryKeys.includes('archetypeId')) {
                 setMessages(prev => [...prev, {
                   role: 'assistant',

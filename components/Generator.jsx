@@ -3162,7 +3162,10 @@ export default function App() {
     // draws the mark top-left. (Unsolicited placement echoes are stripped
     // server-side, so a placement field here is always a deliberate ask.)
     const renderedLogoPos = logoBoxRef.current?.position || logoPosition;
-    const posChanged = inList(patch.logoPosition, "logoPosition") && (patch.logoPosition !== logoPosition || patch.logoPosition !== renderedLogoPos);
+    // A placement patch with NO logo currently drawn (photo-restraint archetypes,
+    // logoUse:"none") is also a real change: pinning surfaces the lockup there.
+    const logoDrawn = !!logoBoxRef.current;
+    const posChanged = inList(patch.logoPosition, "logoPosition") && (patch.logoPosition !== logoPosition || patch.logoPosition !== renderedLogoPos || !logoDrawn);
     const sizeChanged = inList(patch.logoSize, "logoSize") && patch.logoSize !== logoSize;
     if (posChanged || sizeChanged) {
       const nextPos = posChanged ? patch.logoPosition : logoPosition;
@@ -3286,7 +3289,12 @@ export default function App() {
     // re-arm (they only advance the round counter, handled in the effect). Audit
     // "apply" flows never pass harmonize:true, so they're excluded by construction.
     if (opts.harmonize === true && !amendUndo) {
-      harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
+      harmonizeRef.current = { armed: true, rounds: 0, applied: [],
+        // (WP-W0 specimen B) an explicit logo placement in THIS patch is a
+        // deliberate ask ("move the logo to the centre") — the silent pass must
+        // never immediately relocate it (user is the boss, Task 1). Colour /
+        // backdrop fixes still apply.
+        avoidLogoGeo: patch.logoPosition != null || patch.logoSize != null };
     }
 
     return applied;
@@ -3455,12 +3463,18 @@ export default function App() {
      and the silently-dead roles. The chat honesty check verifies the AI's
      claims against THIS — never against the patch it emitted (specimen B:
      "changed: logo position" while the canvas never moved the logo). */
+  // State snapshot via a per-render ref: the chat calls renderTruth() from an
+  // ASYNC continuation holding a stale prop closure — refs always read fresh.
+  const truthStateRef = useRef({});
+  truthStateRef.current = { archetypeId, logoPosition, userLogoTouched, W, H };
   const renderTruth = () => ({
-    archetypeId, logoPosition, userLogoTouched,
+    archetypeId: truthStateRef.current.archetypeId,
+    logoPosition: truthStateRef.current.logoPosition,
+    userLogoTouched: truthStateRef.current.userLogoTouched,
     logoBox: logoBoxRef.current ? { ...logoBoxRef.current } : null,
     roleBounds: roleBoundsRef.current ? JSON.parse(JSON.stringify(roleBoundsRef.current)) : null,
     deadRoles: [...(deadRolesRef.current || [])],
-    canvas: { w: W, h: H },
+    canvas: { w: truthStateRef.current.W, h: truthStateRef.current.H },
   });
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
@@ -4682,14 +4696,19 @@ export default function App() {
       // margin, e.g. documentary's whisper line), eyebrow above — and let the
       // reflow engine de-collide or drop it like any authored role. Roles that
       // still can't fit surface as deadRoles in the inspector (render truth).
+      // Synthesis applies ONLY when the archetype NEVER authored the role (the
+      // silently-dead-field bug) — a role authored on master but dropped for a
+      // short format is the §6 controlled-degradation contract (surfaced via
+      // deadRoles / dropHint honestly, never re-invented into a collision).
+      // scheduleRows is excluded: its subtext IS the rows, drawn in the hero zone.
       const hasIdxCarrier = !mat.roles?.microLabel && (mat.furniture||[]).some(it=>it&&it.type==="index");
-      if(supportText && !supBox && heroBox){
+      if(supportText && !supBox && heroBox && !provArch?.elements?.support && mat.special!=="scheduleRows"){
         const belowY=(heroBox.y+heroBox.h)/h+0.015;
         const fitsBelow = belowY <= 1-sm.b-0.055;
         const synthY = fitsBelow ? belowY : Math.max(sm.t, heroBox.y/h-0.075);
         supBox=clampBox({x:heroBox.x/w, y:synthY, w:heroBox.w/w, h:0.06});
       }
-      if(eyebrow && !labelBox && heroBox && !hasIdxCarrier){
+      if(eyebrow && !labelBox && heroBox && !hasIdxCarrier && !provArch?.elements?.microLabel){
         labelBox=clampBox({x:heroBox.x/w, y:Math.max(sm.t, heroBox.y/h-0.075), w:heroBox.w/w, h:0.05});
       }
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
@@ -5921,7 +5940,11 @@ export default function App() {
       // (Commit 3) GEOMETRY RESTRAINT — when this sequence was armed by a manual
       // burst that touched the LOGO, never move/resize the logo the user just
       // placed; colour/backdrop fixes still apply.
-      if (h.avoidLogoGeo) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
+      // (WP-W0 specimen B) Also whenever the logo is explicitly PINNED
+      // (userLogoTouched): explicit placement ALWAYS wins (WP-U Task 1 rule) —
+      // the silent pass must never relocate it on a later unrelated patch
+      // ("add title" used to bounce a centre-pinned logo to top-left).
+      if (h.avoidLogoGeo || userLogoTouched) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
       if (!Object.keys(fix).length) continue;
       const key = f.id + ":" + JSON.stringify(fix);
       if (h.applied.includes(key)) continue;
@@ -5975,7 +5998,9 @@ export default function App() {
     // Same global colour-flip conflict guard as the AI pass.
     const tcVotes = new Set(fails.map(f => f.fix.textColorId).filter(Boolean));
     const flipConflict = tcVotes.size > 1;
-    const avoidLogoGeo = touched.has("logo");
+    // (WP-W0) an explicitly PINNED logo is never relocated by the silent pass —
+    // explicit placement always wins (WP-U Task 1 rule).
+    const avoidLogoGeo = touched.has("logo") || userLogoTouched;
     const fixPatch = {};
     for (const f of fails) {
       let fix = f.fix;
@@ -7082,9 +7107,12 @@ export default function App() {
         const shapeTile=(o)=>{
           const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
           const placed=!!placedLayer;
+          // Petal marks are ivory-coloured assets — a soft celadon backing keeps
+          // them visible on the white tile (accessories stay on white).
+          const tileBg=(o.builtin&&o.category==="overlays")?`${B.celadonDeep}2e`:"#fff";
           return (
             <button key={o.id} aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else{toggleOverlay(o);}setTopMenu(null);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
-              style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:"#fff",padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+              style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
               <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
               <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
               {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}

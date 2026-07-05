@@ -750,6 +750,10 @@ LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACT
 - "remove the green solid" / "remove the panel / the green block / the coloured band" on a split layout (editorial_split, portrait_credential): that solid side panel IS the layout itself — no backdrop, overlay or logo field can remove it. The ONLY correct patch is a layout switch: set patch.archetypeId = "documentary" (or "full_bleed_duotone" for the tinted look) so the photo fills the frame. NEVER answer this with backdropMode / removeOverlays / logo changes.
 - Never say you changed or switched the layout unless patch.archetypeId is actually set to a NEW value in THIS patch. If you cannot express what was asked, say so plainly ("I can't do that yet") and offer the nearest thing you CAN do.
 - If the user asks to ADD an element the current layout cannot show, say which layout can show it and offer to switch — never claim an add that will not render.
+- "move the logo to the centre / middle" → logoPosition "center" (the true middle of the canvas), NOT "bottom-center". Only say "bottom" when the user says bottom.
+- The logo CAN always be placed at any 9-grid position on ANY layout via logoPosition — never claim a layout can't hold the logo, and never offer a layout switch for a logo move.
+- "change the shape" / "a different petal" / "swap this shape" (a petal/shape overlay is already placed — see designState.overlays): set removeOverlays true AND addOverlay with a DIFFERENT petal asset than the one placed (orchid-petal, shape-1, shape-2, shape-3), keeping the same mode. This IS supported — never claim you can't swap a shape.
+- CONSISTENCY RULE: if you set ANY patch field, your reply must describe that change. NEVER say "I can't do that" while also emitting a patch — if something truly isn't possible, leave every patch field null and say so.
 
 VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describe elements by what they LOOK like, not by design terms. Map their words to the right field, and it must Just Work:
 - "small text at the bottom / under the title / a little caption / a note that says …" → subtext
@@ -976,6 +980,46 @@ Current design state (compact): ${JSON.stringify(designState)}`;
         && !/\b(logo|mark|lock-?up|wordmark|emblem|brand)\b/i.test(lastUserText)) {
       patch.logoPosition = null;
       patch.logoSize = null;
+    }
+    // Strip an UNSOLICITED photo-treatment/frame tweak (the model reaches for
+    // these on unrelated asks — e.g. re-toning the photo during a logo move).
+    if ((patch.photoTreatment != null || patch.photoFrameType != null)
+        && !/\b(photo|image|picture|tone|tint\w*|duotone|grain|wash|frame|mask|petal|full[- ]?bleed)\b/i.test(lastUserText)) {
+      patch.photoTreatment = null;
+      patch.photoFrameType = null;
+    }
+    // DETERMINISTIC LOGO-PLACEMENT MAPPING (WP-W0 specimen B): the model narrated
+    // "moved to the center" while patching top-left. When the user names a slot
+    // in their own words, the patch carries THAT slot — the user is the boss.
+    if (/\b(logo|mark|lock-?up|wordmark|emblem)\b/i.test(lastUserText)
+        && /\b(move|put|place|position|drop|stick|cent(er|re)|middle|corner|top|bottom|left|right)\b/i.test(lastUserText)) {
+      const t = lastUserText.toLowerCase();
+      const top = /\btop\b|\bupper\b/.test(t), bottom = /\bbottom\b|\blower\b/.test(t);
+      const left = /\bleft\b/.test(t), right = /\bright\b/.test(t);
+      const centre = /\bcent(er|re)\b|\bmiddle\b/.test(t);
+      const slot = top && left ? 'top-left' : top && right ? 'top-right'
+        : bottom && left ? 'bottom-left' : bottom && right ? 'bottom-right'
+        : top ? 'top-center' : bottom ? 'bottom-center'
+        : left ? 'mid-left' : right ? 'mid-right'
+        : centre ? 'center' : null;
+      if (slot && patch.logoPosition !== slot) patch.logoPosition = slot;
+    }
+    // DETERMINISTIC SHAPE SWAP (WP-W0 specimen 5): "change another shape" /
+    // "different petal" on a design with a placed brand shape swaps it for the
+    // next variant in the ring (or the model's own different pick). The model
+    // claimed "I can't do that yet" while emitting an overlay patch — this belt
+    // guarantees the swap lands regardless.
+    const SHAPE_RING = ['orchid-petal', 'shape-1', 'shape-2', 'shape-3'];
+    const SHAPE_SWAP_INTENT = /\b(chang\w*|swap\w*|switch\w*|different|another|next|new)\b[^.!?]{0,24}\b(shape|petal|orchid)\b|\b(shape|petal)\b[^.!?]{0,16}\b(chang\w*|swap\w*|switch\w*)\b/i;
+    if (SHAPE_SWAP_INTENT.test(lastUserText) && Array.isArray(designState.overlays)) {
+      const cur = designState.overlays.find(o => SHAPE_RING.includes(o.assetId));
+      if (cur) {
+        const modelPick = patch.addOverlay && SHAPE_RING.includes(patch.addOverlay.assetId) && patch.addOverlay.assetId !== cur.assetId
+          ? patch.addOverlay.assetId
+          : SHAPE_RING[(SHAPE_RING.indexOf(cur.assetId) + 1) % SHAPE_RING.length];
+        patch.addOverlay = { assetId: modelPick, mode: cur.mode || 'frame' };
+        patch.removeOverlays = true;   // applyDesignPatch removes before it adds
+      }
     }
     if (wantsFullImage(lastUserText)) {
       const tinted = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i.test(lastUserText);
