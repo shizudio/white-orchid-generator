@@ -114,6 +114,17 @@ create table if not exists design_sessions (
 );
 create index if not exists design_sessions_brand_idx on design_sessions (brand_id, archived, updated_at desc);
 
+-- (WP-Y1a) Campaign FOUNDATION — a nullable "set"/group abstraction over sessions.
+-- A standalone post has all three columns null and behaves exactly as before. A
+-- campaign (WP-P1, later) = N sessions sharing group_id, ordered by group_order.
+-- Idempotent; run once in Supabase → SQL Editor. Absent columns degrade gracefully
+-- (the client keeps groups in localStorage until these are added), so standalone
+-- sessions are never affected by whether this migration has run.
+alter table design_sessions add column if not exists group_id    text;
+alter table design_sessions add column if not exists group_title  text;
+alter table design_sessions add column if not exists group_order  int;
+create index if not exists design_sessions_group_idx on design_sessions (brand_id, group_id, group_order);
+
 -- AI feedback events (WP-W / self-improvement-loop §1 — the capture layer).
 -- One row per chat turn: the user's verbatim message, the patch emitted, a
 -- compact before/after design diff, the renderTruth honesty verdict (incl. any
