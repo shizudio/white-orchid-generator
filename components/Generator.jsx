@@ -3519,12 +3519,22 @@ export default function App() {
 
   const localAuditCacheRef = useRef({ sig: null, findings: null });
 
+  // A landing handoff means "this is a brand-new post → start a fresh session".
+  // The consume effect below runs on mount (synchronous) and REMOVES the
+  // sessionStorage flag; sessionInit runs later (gated on `ready`) and can no
+  // longer see it. So the consume effect stamps this ref — sessionInit reads the
+  // ref, never sessionStorage — otherwise a landing flow with a prior session on
+  // the device is mis-read as "returning", the old session is restored, and the
+  // restoreKey swap wipes the just-seeded landing exchange (the client's bug).
+  const landingPendingRef = useRef(false);
+
   // Consume the landing handoff once on mount: apply the starting design and
   // open the chat seeded with the exchange so the conversation continues.
   useEffect(() => {
     let raw;
     try { raw = sessionStorage.getItem("wo-landing-plan"); } catch { raw = null; }
     if (!raw) return;
+    landingPendingRef.current = true; // tell sessionInit to mint a fresh session
     try { sessionStorage.removeItem("wo-landing-plan"); } catch { /* ignore */ }
     let handoff;
     try { handoff = JSON.parse(raw); } catch { return; }
@@ -3749,8 +3759,9 @@ export default function App() {
     installFeedbackDump();
     (async () => {
       // A fresh landing handoff → this is a brand-new post; start a clean session.
-      let landingPending = false;
-      try { landingPending = !!sessionStorage.getItem("wo-landing-plan"); } catch { /* ignore */ }
+      // Read the REF the consume effect stamped (that effect already removed the
+      // sessionStorage flag by now), NOT sessionStorage — see landingPendingRef.
+      const landingPending = landingPendingRef.current;
 
       const existingId = getCurrentSessionId();
       if (existingId && !landingPending) {
