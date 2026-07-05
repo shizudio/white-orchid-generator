@@ -373,16 +373,46 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           return;
         }
 
-        // 2. TEXT ROLES: a field the patch filled that the layout never drew.
-        const deadHits = Object.entries(ROLE_OF_FIELD)
+        // 2. TEXT ROLES: a field the patch filled that the layout genuinely can't
+        // draw. The common legacy case — a caption on a photo_logo / texture_text —
+        // now RENDERS in the legacy path (see renderScene), so it no longer trips
+        // here. What remains are roles no legacy layout paints on this post type
+        // (e.g. an eyebrow, or a date on photo_logo). For those, AUTO-PROMOTE to a
+        // layout that shows the role (materialize — copy travels) so it's visible,
+        // then confirm; fall back to an honest offer only if the promotion doesn't
+        // cover it. This replaces the old dead-end "didn't change anything" no-op.
+        const deadFields = Object.entries(ROLE_OF_FIELD)
           .filter(([field, role]) => typeof patch[field] === 'string' && patch[field].trim()
-            && (truthAfter.deadRoles || []).includes(role))
-          .map(([, role]) => ROLE_LABELS[role] || role);
+            && (truthAfter.deadRoles || []).includes(role));
+        const deadHits = deadFields.map(([, role]) => ROLE_LABELS[role] || role);
         if (deadHits.length) {
           verdict.honesty = 'corrected';
           verdict.corrected = true;
           verdict.contradictions.push('field-filled-role-not-drawn');
           verdict.deadRoles = deadHits;
+          const onLegacy = !truthAfter.archetypeId;
+          const promoteTarget = designState?.hasImage ? 'editorial_split' : 'manifesto';
+          let promoted = false;
+          if (onLegacy && truthAfter.archetypeId !== promoteTarget) {
+            const retryKeys = applyRef.current({ archetypeId: promoteTarget }) || [];
+            promoted = retryKeys.includes('archetypeId');
+          }
+          if (promoted) {
+            await settle(650);
+            const t2 = truthRef.current();
+            const stillDead = deadFields.some(([, role]) => (t2.deadRoles || []).includes(role));
+            if (!stillDead) {
+              verdict.retryTarget = promoteTarget;
+              setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: `The previous layout couldn't show ${deadHits.join(' or ')}, so I moved you to a layout that does — it's on the canvas now. Tap Undo if you'd rather keep the old one.`,
+                summary: 'archetype',
+                undoIndex: Date.now(),
+              }]);
+              setLoading(false);
+              return;
+            }
+          }
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: `One honest note — this layout doesn't actually show ${deadHits.join(' or ')}, so it isn't visible on the canvas. Want me to switch to a layout that shows it?`,

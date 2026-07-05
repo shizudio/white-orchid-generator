@@ -2621,6 +2621,10 @@ export default function App() {
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [brandKit, setBrandKit] = useState(null);
   const [postType, setPostType] = useState("photo_logo");
+  // Live post type aliased so renderScene can honour an offscreen postTypeOverride
+  // (used by the __woLegacyDupGuard regression sweep) without shadowing every
+  // postType reference inside the render.
+  const postTypeLive = postType;
   // Archetype starting-point (Commit 3). null = legacy FORMAT_LAYOUTS path (100%
   // backward compatible). When set, renderScene resolves layout from ARCHETYPES.
   const [archetypeId, setArchetypeId] = useState(null);
@@ -4140,6 +4144,9 @@ export default function App() {
     if(!ctx) return;
     const dimId = opts.dimensionId || MASTER_DIM;
     const live = opts.live !== false;
+    // Offscreen renders (the legacy duplicate-draw guard) may force a specific
+    // postType via opts.postTypeOverride; live renders always use the real state.
+    const postType = (!live && opts.postTypeOverride) ? opts.postTypeOverride : postTypeLive;
     // (P4 FEED BOARD) A non-live render may inject a per-tile background photo via
     // opts.imageOverride (an already-decoded HTMLImageElement) — this SHADOWS the live
     // mediaObj for the whole render so the feed simulation can place real Higgsfield
@@ -4162,6 +4169,18 @@ export default function App() {
     if(live){logoBoxRef.current=null;deadRolesRef.current=[];}
     if(live)roleBoundsRef.current=null;     // (WP-U fix #1) reset per live render; editorial branch repopulates
     const S=Math.min(w,h)/1080;
+    // (STORY DOUBLE-RENDER FIX) Clear the FULL backing store, not just the logical
+    // w×h region. On a live format switch React updates the <canvas width/height>
+    // attributes and runs the redraw effect; if a redraw lands while the backing
+    // store is momentarily a DIFFERENT (e.g. taller) size than this render's (w,h) —
+    // the resize race between the attribute commit and the draw — a plain
+    // clearRect(0,0,w,h) leaves the earlier format's pixels OUTSIDE the w×h box on
+    // the canvas, and they persist as a stacked "ghost" second copy (the 9:16 Story
+    // bug: a wide/short prior frame stranded above the fresh tall render). Clearing
+    // the entire backing store first makes a stale strip impossible regardless of
+    // when the resize commits. The subsequent fill/photo still paint the w×h region.
+    if(ctx.canvas && (ctx.canvas.width!==w || ctx.canvas.height!==h))
+      ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
     ctx.clearRect(0,0,w,h);
     // Per-format spec composition defaults for this dimension + post type.
     const fmt=formatLayoutFor(dimId,postType);
@@ -5433,11 +5452,30 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
         const preUsed=hf.lines.length*hf.lineHeight;
-        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
+        // (LEGACY CAPTION) A caption on photo_logo used to have no slot — added copy
+        // rendered nothing and the AI reported "no change". Now the caption (subtext)
+        // draws as a light line UNDER the headline, sized to a readable floor and
+        // dropped only when there's genuinely no room above the bottom safe margin.
+        const capText=stripHeroMarkers(subtext||"");
+        let capFit=null,capGap=0,capH=0;
+        if(capText){
+          capGap=Math.max(20*S,hf.size*0.42);
+          const capRoom=Math.max(0,(1-sm.b)*h-(by+preUsed+capGap));
+          const capFloor=mf("body",30*S*scale*fm("content"),24*S);
+          if(capRoom>=capFloor*1.1){
+            capFit=fitText(ctx,capText,s=>`400 ${s}px ${F.body}`,30*S*scale*fm("content"),bw,capRoom,1.34,capFloor);
+            if(capFit.lines.length>Math.max(1,fmt.maxLines?.details??2)){capFit=null;dropped.push("Caption");}
+            else capH=capFit.lines.length*capFit.lineHeight;
+          }else dropped.push("Caption");
+        }
+        // Backdrop/colour resolved over the WHOLE text block (headline + caption).
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3};
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
         if(mediaObj&&!photoBox){resolveZoneTc(tbox);drawBackdrop(tbox);}
-        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
-        putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        setTextBounds(used);endText();
+        putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3});
       }else{putLogo();if(live)textBoundsRef.current=null;}
     }else if(postType==="quote"){
       // (WP-U green-filter fix) the full-frame brand tint (a whole-canvas green wash
@@ -5546,11 +5584,75 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
         const preUsed=hf.lines.length*hf.lineHeight;
-        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
+        // (LEGACY CAPTION) caption under the overlay headline — same treatment as
+        // photo_logo so an added caption renders instead of silently dying.
+        const capText=stripHeroMarkers(subtext||"");
+        let capFit=null,capGap=0,capH=0;
+        if(capText){
+          capGap=Math.max(20*S,hf.size*0.4);
+          const capRoom=Math.max(0,(1-sm.b)*h-(by+preUsed+capGap));
+          const capFloor=mf("body",30*S*scale*fm("content"),24*S);
+          if(capRoom>=capFloor*1.1){
+            capFit=fitText(ctx,capText,s=>`400 ${s}px ${F.body}`,30*S*scale*fm("content"),bw,capRoom,1.34,capFloor);
+            if(capFit.lines.length>Math.max(1,fmt.maxLines?.details??2)){capFit=null;dropped.push("Caption");}
+            else capH=capFit.lines.length*capFit.lineHeight;
+          }else dropped.push("Caption");
+        }
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3};
         if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}
-        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        setTextBounds(used);endText();
         putLogo(tbox);
       }else{setTextBounds(h*0.12);putLogo();}
+    }
+
+    // ── (LEGACY DEAD-ROLE HONESTY) ──────────────────────────────────────────
+    // The legacy postType layouts above are HEADLINE-CENTRIC: each draws only the
+    // roles its template supports (photo_logo/texture_text draw the headline alone;
+    // quote draws headline + one credit; event draws headline + date + details;
+    // text_post draws intro + headline + subtext). When a NON-editorial (archetypeId
+    // null) design gains a role its layout can't draw — the client adding a caption
+    // to a photo_logo post — the copy lands in state but paints NOTHING, so the
+    // render-truth check saw no change and the assistant fired "that didn't change
+    // anything visible" on every attempt (the legacy twin of the WP-W0 dead-field
+    // bug, which only covered the archetype path). Mark those filled-but-undrawable
+    // roles here so the SAME inspector dead-field banner + one-tap layout switch and
+    // the chat honesty check treat legacy designs honestly instead of no-op looping.
+    // (Editorial renders return earlier and set deadRolesRef themselves.)
+    if(live){
+      // Roles each legacy layout actually paints (everything else, if filled, is dead).
+      const LEGACY_DRAWS={
+        photo_logo:["headline","subtext"],     // caption now painted under the headline
+        texture_text:["headline","subtext"],   // caption now painted under the overlay headline
+        quote:["headline","credit"],           // credit = attribution||subtext
+        event:["headline","date","subtext"],
+        text_post:["subtext","headline","attribution"],
+      };
+      const drawn=LEGACY_DRAWS[postType]||["headline"];
+      // Whether each legacy FIELD is painted by THIS layout.
+      const paintsSubtext=()=>{
+        if(drawn.includes("subtext")) return true;
+        // quote uses attribution||subtext as its single credit line — subtext is
+        // only painted (as credit) when there is no attribution.
+        if(postType==="quote" && !String(attribution||"").trim()) return true;
+        return false;
+      };
+      const paintsAttribution=()=>{
+        if(drawn.includes("attribution")) return true;
+        if(postType==="quote") return true;    // attribution is the quote credit
+        return false;
+      };
+      // Publish dead roles in the SAME editorial role vocabulary the inspector
+      // banner + chat honesty check consume (hero/support/eyebrow/date), so a legacy
+      // caption add is caught by the existing dead-role path (offer to switch layout)
+      // instead of falling through to the "didn't change anything" no-op message.
+      const dead=[];
+      if(String(subtext||"").trim() && !paintsSubtext()) dead.push("support");
+      if(String(attribution||"").trim() && !paintsAttribution() && !dead.includes("support")) dead.push("support");
+      if(String(dateText||"").trim() && !drawn.includes("date")) dead.push("date");
+      if(String(microLabel||"").trim()) dead.push("eyebrow");   // no legacy layout paints an eyebrow
+      deadRolesRef.current=dead;
     }
 
     // Surface dropped-copy info for the live dimension only (spec §6 step 5 hint).
@@ -5921,7 +6023,81 @@ export default function App() {
       } catch (e) { return { error: String(e) }; }
       finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
     };
-    return () => { try { delete window.__woArchStress; delete window.__woCell; } catch {} };
+    /* ── LEGACY DUPLICATE-DRAW GUARD (Story double-render regression) ───────────
+       __woArchStress validates the archetype engine's LAYOUT MODEL — it never
+       exercised the legacy (archetypeId-null) postType painters, so the Story 9:16
+       "whole composition drawn twice, stacked" bug (a stale strip surviving OUTSIDE
+       the render's logical w×h when the <canvas> backing store was momentarily
+       taller than (w,h) during a format switch) passed clean. This sibling guard
+       reproduces that exact class deterministically for EVERY legacy postType on ALL
+       6 formats: it renders into an OVERSIZED backing store, pre-painted with a
+       sentinel colour OUTSIDE the format's (w,h), then asserts renderScene fully
+       cleared that region (no ghost second copy can survive). It also asserts the
+       headline paints in a SINGLE contiguous bright y-band, not two disjoint copies.
+       Returns {pass, offenders:[{postType,dimId,reason}]}. */
+    window.__woLegacyDupGuard = () => {
+      const LEGACY_TYPES = ["photo_logo", "quote", "event", "text_post", "texture_text"];
+      const prev = auditRef.current, prevBounds = textBoundsRef.current, prevPT = null;
+      const offenders = [];
+      try {
+        for (const pt of LEGACY_TYPES) for (const dm of DIMENSIONS) {
+          try {
+            // ── (a) STALE-STRIP RACE (the exact Story bug) ──
+            // Reproduce a format switch where the <canvas> backing store is TALLER +
+            // WIDER than the dims renderScene runs with (a stale-dims / mid-resize
+            // draw). Backing store = format size; pre-paint the WHOLE store with a
+            // sentinel (stands in for the previous format's pixels); then render with
+            // SHORTER logical dims (w-360, h-360). A correct renderScene must clear the
+            // ENTIRE store first, so the strip BELOW/RIGHT of the short box holds NO
+            // sentinel. The pre-fix clearRect(0,0,w,h) left that strip as a ghost.
+            const SHRINK = 360;
+            const rw = Math.max(200, dm.w - SHRINK), rh = Math.max(200, dm.h - SHRINK);
+            const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
+            const ctx = c.getContext("2d", { willReadFrequently: true });
+            ctx.fillStyle = "#ff00ff"; ctx.fillRect(0, 0, c.width, c.height);   // sentinel = stale prior frame
+            renderScene(ctx, rw, rh, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+            let ghost = 0;
+            // Sample strictly OUTSIDE the (rw,rh) render box — any surviving sentinel
+            // magenta here is a stale ghost strip (the stacked second copy).
+            const outPts = [[(rw + dm.w) / 2, dm.h / 2], [dm.w / 2, (rh + dm.h) / 2], [dm.w - 20, dm.h - 20], [rw + 30, rh / 2], [rw / 2, rh + 30]];
+            for (const [x, y] of outPts) {
+              const d = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+              const isSentinel = d[0] > 200 && d[1] < 80 && d[2] > 200;
+              if (isSentinel) ghost++;
+            }
+            if (ghost) { offenders.push({ postType: pt, dimId: dm.id, reason: "stale strip survived outside render box (stacked ghost)" }); continue; }
+            // (b) DUPLICATE TEXT-BAND — only for the HEADLINE-CENTRIC types whose
+            // painted text is predictable (headline + optional short caption + the
+            // corner lockup). Multi-line types (quote/event/text_post) legitimately
+            // stack several text bands, so the band count isn't a duplication signal
+            // there — check (a) is the universal duplicate-draw guard for them.
+            const BAND_CHECK_TYPES = ["photo_logo", "texture_text"];
+            if (BAND_CHECK_TYPES.includes(pt)) {
+              const c2 = document.createElement("canvas"); c2.width = dm.w; c2.height = dm.h;
+              const x2 = c2.getContext("2d", { willReadFrequently: true });
+              renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+              const rows = 60, colXs = [0.18, 0.32, 0.5].map(f => Math.floor(dm.w * f));
+              let inBand = false, bands = 0;
+              for (let r = 0; r < rows; r++) {
+                const y = Math.floor((r + 0.5) / rows * dm.h);
+                let bright = 0;
+                for (const x of colXs) { const d = x2.getImageData(x, y, 1, 1).data; if (d[0] > 190 && d[1] > 190 && d[2] > 190) bright++; }
+                const lit = bright >= 2;
+                if (lit && !inBand) { bands++; inBand = true; } else if (!lit) inBand = false;
+              }
+              // Allowed bands: headline + caption(subtext) + corner lockup = up to 3.
+              // 4+ disjoint bright bands ⇒ a stacked second copy.
+              if (bands >= 4) offenders.push({ postType: pt, dimId: dm.id, reason: `${bands} disjoint text bands (expected ≤3: headline+caption+lockup)` });
+            }
+          } catch (e) { offenders.push({ postType: pt, dimId: dm.id, reason: "render error: " + String(e) }); }
+        }
+      } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; void prevPT; }
+      const report = { pass: offenders.length === 0, cells: LEGACY_TYPES.length * DIMENSIONS.length, offenders };
+      // eslint-disable-next-line no-console
+      console.log("[woLegacyDupGuard]", JSON.stringify(report));
+      return report;
+    };
+    return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; } catch {} };
   }, [renderScene]);
 
   /* ── CLIENT-REPRO HARNESS (Commit 4 verification, dev-only) ──────────────────
@@ -6913,7 +7089,9 @@ export default function App() {
           does not draw is marked honestly, with a one-tap layout switch that
           preserves all content (materialization keeps copy fields). */}
       {deadRoles.length>0 && (()=>{
-        const DEAD_LABELS={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button"};
+        const DEAD_LABELS={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button",
+          // legacy-path role names (photo_logo/quote/event/text_post/texture_text)
+          subtext:"the caption",attribution:"the small credit line",headline:"the headline"};
         const target = mediaObj ? "editorial_split" : "label_headline";
         return (
           <div role="note" style={{margin:"6px 0 12px",padding:"9px 11px",borderRadius:9,border:`1px solid ${B.tangerine}55`,background:`${B.tangerine}10`,fontSize:11,fontFamily:F.body,color:B.burnham,lineHeight:1.5}}>
@@ -7221,7 +7399,9 @@ export default function App() {
   const captionFieldId = postType === "quote" ? "attribution" : "subtext";
   const captionValue = postType === "quote" ? attribution : subtext;
   // Add a text role through THE pipeline with a placeholder the user replaces
-  // immediately (the role's input is focused + selected after the add).
+  // immediately (the role's input is focused + selected after the add). The legacy
+  // headline-only layouts (photo_logo / texture_text) now paint a caption line too
+  // (see renderScene), so an added caption renders in place with no layout jump.
   const addTextRole = (patch, focusRole) => {
     applyPatch(patch, { source: "ui" });
     setTopMenu(null);
@@ -7719,63 +7899,11 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
-              {/* (WP-U #8) Refresh photo — re-runs ONLY the photo fetch (same
-                  scenePrompt via Higgsfield when available, else Library rotation)
-                  without touching copy or layout. */}
-              {mediaObj && (
-                <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
-                  aria-label="Refresh photo"
-                  title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
-                  style={{position:"absolute",top:10,left:10,zIndex:8,display:"inline-flex",alignItems:"center",gap:6,
-                    padding:"6px 12px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",
-                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
-                    cursor:refreshingPhoto?"wait":"pointer",boxShadow:"0 2px 10px rgba(43,80,64,0.14)",opacity:refreshingPhoto?0.7:1}}>
-                  <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
-                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
-                </button>
-              )}
-              {/* ── (WP-W0) FLOATING UNDO — a small, airy affordance beside the
-                    canvas (the top-bar Undo alone is too far from the eye). Appears
-                    once there is anything to undo/redo; thin type, on-brand. ── */}
-              {(aiUndoStack.length>0||redoStack.length>0)&&(
-                <div style={{position:"absolute",bottom:10,right:10,zIndex:8,display:"inline-flex",gap:6}}>
-                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
-                    aria-label="Undo" title="Undo the last change (⌘Z)"
-                    style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:999,
-                      border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
-                      fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
-                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4,
-                      boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
-                    <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
-                  </button>
-                  {redoStack.length>0&&(
-                    <button type="button" onClick={redoLastChange}
-                      aria-label="Redo" title="Redo (⇧⌘Z)"
-                      style={{display:"inline-flex",alignItems:"center",padding:"6px 10px",borderRadius:999,
-                        border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
-                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer",
-                        boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
-                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* ── (WP-W) SAVE-AS-TEMPLATE MOMENT (ux-architecture §2.7) ── One
-                    gentle inline nudge after a successful export — the moment of
-                    proven success. One tap saves via the existing template path;
-                    dismissal is remembered per session (don't nag). ── */}
-              {exportNudge && (
-                <div role="status" style={{position:"absolute",left:"50%",bottom:14,transform:"translateX(-50%)",zIndex:9,
-                  display:"inline-flex",alignItems:"center",gap:12,maxWidth:"92%",
-                  padding:"10px 14px",borderRadius:14,background:"rgba(255,255,255,0.97)",
-                  border:`1px solid ${B.ash}44`,boxShadow:"0 6px 24px rgba(43,80,64,0.18)"}}>
-                  <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Want to reuse this design? Save it as a template.</span>
-                  <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
-                    style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
-                  <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
-                    style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
-                </div>
-              )}
+              {/* (canvas-chrome §3) The Refresh-photo, Undo/Redo, and export nudge
+                  affordances were moved OUT of the canvas shell into the control
+                  strip + toast BELOW the canvas — nothing persistent may obscure the
+                  design at rest. Only the intrinsic on-canvas editing affordances
+                  (EditorChrome selection handles + ghost add-slots) live in here. */}
               {/* ── GHOST SLOTS — faint dashed add-affordances in empty role
                     regions (visible on hover/tap; always faintly visible on
                     touch devices via CSS). ── */}
@@ -7794,6 +7922,64 @@ export default function App() {
               ))}
             </div>
           </div>
+
+          {/* ── BELOW-CANVAS CONTROL STRIP (canvas-chrome §3) ── Affordances that
+              used to float OVER the artwork now live here, beneath the canvas, so
+              the preview at rest shows ONLY the design. Refresh photo (photo posts)
+              + Undo/Redo (once there's history) sit in one airy row. */}
+          {(mediaObj || aiUndoStack.length>0 || redoStack.length>0) && (
+            <div className="generator-canvas-controls" style={{width:"100%",maxWidth:820,marginTop:12,display:"flex",gap:8,justifyContent:"center",alignItems:"center",flexWrap:"wrap"}}>
+              {mediaObj && (
+                <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
+                  aria-label="Refresh photo"
+                  title={genBrief?.scene ? "Generate a fresh photo from the same scene — copy and layout stay put" : "Swap in another Library photo — copy and layout stay put"}
+                  style={{display:"inline-flex",alignItems:"center",gap:6,
+                    padding:"7px 13px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"#fff",
+                    color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
+                    cursor:refreshingPhoto?"wait":"pointer",opacity:refreshingPhoto?0.7:1}}>
+                  <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
+                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
+                </button>
+              )}
+              {(aiUndoStack.length>0||redoStack.length>0)&&(
+                <div style={{display:"inline-flex",gap:6}}>
+                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
+                    aria-label="Undo" title="Undo the last change (⌘Z)"
+                    style={{display:"inline-flex",alignItems:"center",gap:6,padding:"7px 13px",borderRadius:999,
+                      border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
+                      fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
+                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4}}>
+                    <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
+                  </button>
+                  {redoStack.length>0&&(
+                    <button type="button" onClick={redoLastChange}
+                      aria-label="Redo" title="Redo (⇧⌘Z)"
+                      style={{display:"inline-flex",alignItems:"center",padding:"7px 11px",borderRadius:999,
+                        border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
+                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer"}}>
+                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── SAVE-AS-TEMPLATE TOAST (canvas-chrome §3) ── The post-export nudge
+              now renders BELOW the canvas (never over the artwork). One gentle line;
+              dismissal remembered per session. */}
+          {exportNudge && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
+              padding:"10px 14px",borderRadius:14,background:"#fff",
+              border:`1px solid ${B.ash}44`,boxShadow:"0 2px 10px rgba(43,80,64,0.10)"}}>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Want to reuse this design? Save it as a template.</span>
+              <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
+              <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
+            </div>
+          )}
 
           {/* Live format strip — one thumbnail per dimension, click to switch */}
           <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:16,display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
