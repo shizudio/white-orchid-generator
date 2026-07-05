@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const STEPS = [
-  ['Start', 'On the landing page, just describe the post you want — the Art Director builds a ready-to-edit design. Or open a starter template (or one from “Your templates”).'],
-  ['Make it yours', 'Click anything on the preview to edit it — text, photo or logo. Use the elements rail (or the chips on mobile) for colours, fonts and backgrounds, and the format strip to switch between Instagram, Stories, X, Facebook and banner sizes.'],
-  ['Ask the Art Director', 'Tap the ✦ button any time to change colours or formats, swap the layout, or even generate a photo — “generate a photo of children painting outdoors”.'],
-  ['Check + export', 'Run ✓ AI audit for contrast, sizing and on-brand polish, use ✎ Caption to write a post caption and hashtags, then Download — as PNG/JPG, or “Download all formats” for every size at once.'],
-  ['Save for the team', 'Save template adds your design to the shared “Your templates” library so the whole team can reuse it.'],
+  ['Start', 'Describe the post you want in the chat on the left — the Art Director builds a ready-to-edit design. Or open a starter template from Templates.'],
+  ['Click anything to edit it', 'Every element on the preview is editable — click the text, photo, logo, even the small labels and hairlines. A small inspector opens with just that element’s controls.'],
+  ['Undo anything', 'Press Cmd+Z (Ctrl+Z) to undo any change — yours or the AI’s. Cmd+Shift+Z redoes. There’s also a floating ↶ Undo button by the canvas.'],
+  ['Add what’s missing', 'The ＋ Add button in the top bar shows everything you can add — small text, a date, a button, the logo, a photo, and the signature petal Shapes. Tap a tile, no design words needed.'],
+  ['Ask the Art Director', 'The chat changes anything you can describe — “make the background wisteria”, “try another layout”, “generate a photo of children painting outdoors”.'],
+  ['Check + export', 'Run the AI audit for contrast and on-brand polish, write a caption with the Caption writer, then Export — one format or all sizes at once.'],
+  ['Save for the team', 'Templates → “Save current design” adds it to the shared library so the whole team can reuse it.'],
 ];
 
 export default function QuickGuide({ variant = 'nav' }) {

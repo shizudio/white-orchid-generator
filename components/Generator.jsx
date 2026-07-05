@@ -2714,6 +2714,9 @@ export default function App() {
   // snapshot of the applyable fields taken *before* a patch was applied, so
   // undoLastAiChange() can pop and restore. Depth >= 5.
   const [aiUndoStack, setAiUndoStack] = useState([]);
+  // (WP-W0) REDO — undoing pushes the pre-undo state here; any NEW change clears
+  // it (the classic linear history rule). Cmd+Shift+Z / Ctrl+Y redoes.
+  const [redoStack, setRedoStack] = useState([]);
   // Floating Art Director chat: controlled open state + one-time seed from the
   // landing page handoff (sessionStorage "wo-landing-plan").
   const [chatSeed, setChatSeed] = useState(null);
@@ -2951,6 +2954,7 @@ export default function App() {
       // pushes its own) — one burst + its silent fixes = one undo.
       setAiUndoStack(prev => [m.snap, ...prev].slice(0, AI_UNDO_DEPTH));
       setPreAiState(m.snap);
+      setRedoStack([]);   // (WP-W0) a new manual burst invalidates the redo branch
     }
     if (tag) (Array.isArray(tag) ? tag : [tag]).forEach(t => t && m.touched.add(t));
     if (m.timer) clearTimeout(m.timer);
@@ -3086,6 +3090,7 @@ export default function App() {
       // Snapshot BEFORE mutating so undo restores this exact pre-patch state.
       setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
       setPreAiState(snapshotApplyableState()); // legacy single-slot mirror (kept in sync)
+      setRedoStack([]);   // (WP-W0) a new change invalidates the redo branch
     }
     // else: no new snapshot — the top entry already captures the pre-AI state, and
     // undo restoring it also reverts these folded harmonizer fixes.
@@ -3327,6 +3332,7 @@ export default function App() {
      continues (landing + editor are one continuous conversation; §2.1). ── */
   const startNewPost = () => {
     setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    setRedoStack([]);
     restoreSnapshot({
       postType: "photo_logo", archetypeId: null, dimensionId: "ig_square",
       headline: "", subtext: "", attribution: "", dateText: "",
@@ -3346,16 +3352,47 @@ export default function App() {
 
   // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
   // chat are only valid in this order — older chips are disabled once a newer
-  // change lands.
+  // change lands. (WP-W0) Undoing stashes the CURRENT state on the redo stack;
+  // restructured out of the setState updater (side effects in an updater
+  // double-fire under StrictMode) — closure state is fresh per render.
   const undoLastAiChange = () => {
-    setAiUndoStack(prev => {
-      if (!prev.length) return prev;
-      const [snap, ...rest] = prev;
-      restoreSnapshot(snap);
-      setPreAiState(rest[0] || null);
-      return rest;
-    });
+    if (!aiUndoStack.length) return;
+    const [snap, ...rest] = aiUndoStack;
+    setRedoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    restoreSnapshot(snap);
+    setAiUndoStack(rest);
+    setPreAiState(rest[0] || null);
   };
+  // (WP-W0) Redo — the inverse walk. Pushes the current state back onto the
+  // undo stack WITHOUT clearing redo (only new changes clear it).
+  const redoLastChange = () => {
+    if (!redoStack.length) return;
+    const [snap, ...rest] = redoStack;
+    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
+    restoreSnapshot(snap);
+    setRedoStack(rest);
+  };
+  // ── (WP-W0) UNDO / REDO KEYBOARD SHORTCUTS ── Cmd+Z / Ctrl+Z = undo,
+  // Cmd+Shift+Z / Ctrl+Y = redo. Never fires while typing (input / textarea /
+  // contentEditable — those keep the browser's own text undo). Handlers go
+  // through refs so the listener binds once but always calls fresh closures.
+  const undoFnRef = useRef(null), redoFnRef = useRef(null);
+  undoFnRef.current = undoLastAiChange;
+  redoFnRef.current = redoLastChange;
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const k = String(e.key || "").toLowerCase();
+      if (k !== "z" && k !== "y") return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      if (k === "y" || e.shiftKey) { if (redoFnRef.current) redoFnRef.current(); }
+      else if (undoFnRef.current) undoFnRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const restoreSnapshot = (s) => {
     if (!s) return;
     setPostType(s.postType);
@@ -3845,6 +3882,7 @@ export default function App() {
     // Snapshot BEFORE changing the photo so undo restores the prior background.
     setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
     setPreAiState(snapshotApplyableState());
+    setRedoStack([]);   // (WP-W0) a new change invalidates the redo branch
     if (videoObj) { videoObj.pause(); setVideoObj(null); setVideoPlaying(false); }
     await loadImage(dataUrl);   // canvas + local library (same as an upload)
     // Persist to the Supabase library so it lands in Library (same endpoint uploads use).
@@ -5815,13 +5853,14 @@ export default function App() {
       heroXY: { x: (typeLayouts[postType]?.x), y: (typeLayouts[postType]?.y), w: (typeLayouts[postType]?.width) },
       hasRoles: !!(typeLayouts[postType]?.roles),
       overlayCount: overlayLayers.length, motifCount: overlayLayers.filter(l=>l.motif).length,
-      logoPosition, userLogoTouched, undoDepth: aiUndoStack.length,   // (Commit 3 verification)
+      logoPosition, userLogoTouched, undoDepth: aiUndoStack.length, redoDepth: redoStack.length,   // (Commit 3 / WP-W0 verification)
       bgColor, headline, subtext,
     });
     window.__woUndo = () => { undoLastAiChange(); return "undone"; };   // (Commit 3 verification)
-    return () => { try { delete window.__woReproStep; delete window.__woReproState; delete window.__woUndo; } catch {} };
+    window.__woRedo = () => { redoLastChange(); return "redone"; };     // (WP-W0 verification)
+    return () => { try { delete window.__woReproStep; delete window.__woReproState; delete window.__woUndo; delete window.__woRedo; } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [postType, attribution, subtext, archetypeId, textColorId, heroRegister, photoTreatment, photoFrame, typeLayouts, overlayLayers, W, H, logoPosition, userLogoTouched, aiUndoStack, bgColor, headline]);
+  }, [postType, attribution, subtext, archetypeId, textColorId, heroRegister, photoTreatment, photoFrame, typeLayouts, overlayLayers, W, H, logoPosition, userLogoTouched, aiUndoStack, redoStack, bgColor, headline]);
 
   /* ── SILENT HARMONIZER (Commit 1) ────────────────────────────────────────────
      Fires after an AI patch's render commits. runLocalAudit identity changes on
@@ -7364,7 +7403,7 @@ export default function App() {
         ))}
         <span style={{flex:1}} />
         <button type="button" className="wo-topbtn" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
-          title={aiUndoStack.length?"Undo the last change":"Nothing to undo"}
+          title={aiUndoStack.length?"Undo the last change (⌘Z · redo ⇧⌘Z)":"Nothing to undo"}
           style={{opacity:aiUndoStack.length?1:0.35}}>
           ↶ Undo
         </button>
@@ -7432,6 +7471,32 @@ export default function App() {
                   <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
                   {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
                 </button>
+              )}
+              {/* ── (WP-W0) FLOATING UNDO — a small, airy affordance beside the
+                    canvas (the top-bar Undo alone is too far from the eye). Appears
+                    once there is anything to undo/redo; thin type, on-brand. ── */}
+              {(aiUndoStack.length>0||redoStack.length>0)&&(
+                <div style={{position:"absolute",top:10,right:10,zIndex:8,display:"inline-flex",gap:6}}>
+                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
+                    aria-label="Undo" title="Undo the last change (⌘Z)"
+                    style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:999,
+                      border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
+                      fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
+                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4,
+                      boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
+                    <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
+                  </button>
+                  {redoStack.length>0&&(
+                    <button type="button" onClick={redoLastChange}
+                      aria-label="Redo" title="Redo (⇧⌘Z)"
+                      style={{display:"inline-flex",alignItems:"center",padding:"6px 10px",borderRadius:999,
+                        border:`1px solid ${B.ash}55`,background:"rgba(255,255,255,0.92)",color:B.burnham,
+                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer",
+                        boxShadow:"0 2px 10px rgba(43,80,64,0.14)"}}>
+                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
+                    </button>
+                  )}
+                </div>
               )}
               {/* ── GHOST SLOTS — faint dashed add-affordances in empty role
                     regions (visible on hover/tap; always faintly visible on
