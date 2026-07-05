@@ -7073,9 +7073,13 @@ export default function App() {
         <button onClick={()=>{setShowLibPicker(true);setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:"transparent",border:`1px solid ${B.burnham}33`,borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:B.burnham,letterSpacing:0.5}}>📂 From the Library</button>
         <button onClick={()=>{imgRef.current?.click();setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:B.burnham,border:"none",borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:"#fff",letterSpacing:0.5}}>＋ Upload a photo</button>
       </div>
-      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-        {overlays.map(o=>{
+      {/* ── (WP-W0 item 3) SHAPES — the signature petal marks, first-class again.
+            WP-V buried them under generic "Decoration"; the client ruling restores
+            a standalone labelled group (beside Logo, ≤2 clicks from the top bar)
+            with the REAL petal assets as thumbnails. Tapping adds through THE
+            pipeline (applyPatch → inspector opens on the placed shape). ── */}
+      {(()=>{
+        const shapeTile=(o)=>{
           const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
           const placed=!!placedLayer;
           return (
@@ -7086,13 +7090,28 @@ export default function App() {
               {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
             </button>
           );
-        })}
-        <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG decoration"
-          style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`1px dashed ${B.ash}88`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:600,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
-          <span style={{fontSize:20,lineHeight:1}}>＋</span>
-          Add new
-        </button>
-      </div>
+        };
+        const petals=overlays.filter(o=>o.builtin&&o.category==="overlays");
+        const decorations=overlays.filter(o=>!(o.builtin&&o.category==="overlays"));
+        return (
+          <>
+            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Shapes</div>
+            <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,margin:"-4px 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
+              {petals.map(shapeTile)}
+            </div>
+            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+              {decorations.map(shapeTile)}
+              <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG decoration"
+                style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`1px dashed ${B.ash}88`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:600,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
+                <span style={{fontSize:20,lineHeight:1}}>＋</span>
+                Add new
+              </button>
+            </div>
+          </>
+        );
+      })()}
     </>
     );
   };
