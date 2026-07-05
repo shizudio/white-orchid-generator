@@ -6405,9 +6405,13 @@ export default function App() {
         } catch(_) { /* skip a format that can't render this tick */ }
       });
       setFormatThumbs(next);
+      // (WP-Y2) The all-formats strip surfaces per-format readiness inline, so the
+      // checklist can't wait for the Export popover to open. The sweep already ran
+      // above for the thumbs; recompute the verdicts off the same fresh render.
+      try { setReadyCheck(computeReadyAll()); } catch { /* keep last verdicts */ }
     }, 400);
     return () => clearTimeout(timer);
-  }, [renderScene, fontsLoaded]);
+  }, [renderScene, fontsLoaded, computeReadyAll]);
 
   /* ── Download + save to history ── */
   const download = async () => {
@@ -6995,6 +6999,44 @@ export default function App() {
     const l = overlayLayers.find(x => x.uid === selOverlay);
     return dimensionId !== MASTER_DIM && !!l?.byDim?.[dimensionId];
   })();
+
+  // (WP-Y2) "Every format, always": a format is ADJUSTED when the user has pinned
+  // any local override for it — text layout, logo placement, photo reframe, or an
+  // overlay transform. MASTER_DIM (Square) is never "adjusted"; it IS the master
+  // every other format cascades from. dimHasOverride powers the strip's "adjusted"
+  // dot + the near-canvas "reset to match" banner; both make divergence a visible,
+  // deliberate choice rather than silent drift.
+  const dimHasOverride = useCallback((dimId) => {
+    if (dimId === MASTER_DIM) return false;
+    const t = typeLayoutsByDim?.[dimId];
+    if (t && Object.keys(t).some(k => t[k] && Object.keys(t[k]).length)) return true;
+    if (logoByDim?.[dimId]) return true;
+    if (imgTByDim?.[dimId]) return true;
+    if (overlayLayers.some(l => l?.byDim?.[dimId])) return true;
+    return false;
+  }, [typeLayoutsByDim, logoByDim, imgTByDim, overlayLayers]);
+
+  const currentDimAdjusted = dimHasOverride(dimensionId);
+
+  // (WP-Y2) One-tap "reset to match the others" — clears EVERY local override for
+  // the current format so it falls back to the master cascade (resolveTextLayout /
+  // resolveLogoBase / auto reframe re-materialize per format). Consistency is the
+  // default; this is how a deliberate divergence is undone in one gesture. Undoable
+  // via the top-bar Undo (noteManualEdit snapshots the pre-reset override state,
+  // exactly like every other manual gesture).
+  const resetFormatToMaster = useCallback(() => {
+    if (dimensionId === MASTER_DIM) return;
+    noteManualEdit(["text", "logo", "photo", "overlay"]);
+    setTypeLayoutsByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
+    setLogoByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
+    setImgTByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
+    setOverlayLayers(prev => prev.map(l => {
+      if (!l?.byDim?.[dimensionId]) return l;
+      const nb = { ...l.byDim }; delete nb[dimensionId]; return { ...l, byDim: nb };
+    }));
+    setOverlayDirty(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimensionId]);
 
   /* ── Video: upload, play, save (IndexedDB) ── */
   const uploadVideo = async (file) => {
@@ -7805,16 +7847,19 @@ export default function App() {
           ))}</div>
           {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
         </div>
-        <button onClick={download} style={{
+        {/* (WP-Y2) Export = the SET by default. One idea, all formats — the whole
+            set is the natural finish, so "Download all formats" is the primary
+            action; the single-format download stays available as a secondary. */}
+        <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
           width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",
           border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",
           letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
-        }}>Download {exportFormat.toUpperCase()}</button>
-        <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
+        }}>Download all {DIMENSIONS.length} formats</button>
+        <button onClick={download} title={`Download only ${dim.label} as ${exportFormat.toUpperCase()}`} style={{
           width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,
           border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
           letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
-        }}>Download all formats</button>
+        }}>Just this one · {dim.label}</button>
         {/* (WP-Y5) Ready-to-post checklist — per-format GO/FIX gate. Advisory (never
             blocks export); a fix routes through the one patch pipeline + is undoable. */}
         <ReadyToPost
@@ -8071,24 +8116,76 @@ export default function App() {
             </div>
           )}
 
-          {/* Live format strip — one thumbnail per dimension, click to switch */}
-          <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:16,display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+          {/* (WP-Y2) "Adjusted for this format" banner — when the CURRENT format
+              carries local overrides it has diverged from the master. Make that
+              legible (never silent) with a one-tap return to the cascade. Renders
+              below the canvas so it never covers the artwork. */}
+          {currentDimAdjusted && dimensionId !== MASTER_DIM && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
+              padding:"9px 14px",borderRadius:14,background:`${B.wisteria}44`,
+              border:`1px solid ${B.wisteria}`}}>
+              <span aria-hidden="true" style={{width:16,height:16,borderRadius:4,display:"grid",placeItems:"center",fontSize:10,fontWeight:800,color:B.burnham,background:B.wisteria}}>✦</span>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Adjusted for {dim.label} — this format no longer matches the others.</span>
+              <button type="button" onClick={resetFormatToMaster}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Reset to match the others</button>
+            </div>
+          )}
+
+          {/* (WP-Y2) EVERY-FORMAT SET — the design isn't one canvas + a switcher;
+              it's one idea laid out in all 6 ratios at once. This strip IS the set:
+              each ratio labelled, each showing its own readiness (✓ / a fix dot)
+              and whether it's been adjusted away from the master. Clicking picks
+              the one to adjust — it never feels like changing a "mode". */}
+          {(() => {
+            const readyByDim = {};
+            (readyCheck?.formats || []).forEach(f => { readyByDim[f.dimensionId] = f; });
+            const need = readyCheck?.needCount;
+            return (
+          <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:18}}>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:9,flexWrap:"wrap"}}>
+              <span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:B.burnham}}>Your post in every format</span>
+              <span style={{fontSize:10.5,fontFamily:F.body,color:readyCheck==null?B.ash:(need?B.tangerine:B.burnham),fontWeight:600}}>
+                {readyCheck==null ? "Checking every format…" : need ? `${need} ${need===1?"format needs":"formats need"} a look` : "All 6 ready to post"}
+              </span>
+            </div>
+            <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
             {DIMENSIONS.map(d=>{
               const on=dimensionId===d.id;
               const tw=Math.max(1,Math.round(72*d.w/d.h));
+              const v=readyByDim[d.id];
+              const adjusted=dimHasOverride(d.id);
+              // readiness dot: ✓ ready (celadon) · ! needs a look (tangerine) · dim while the sweep hasn't reported yet
+              const dotReady=v?v.ready:null;
               return (
-                <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.label} · ${d.w} × ${d.h}px`}
+                <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})}
+                  title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?" · needs a look":dotReady?" · ready":""}${adjusted?" · adjusted for this format":""} — tap to adjust`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
-                  <span style={{display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
+                  <span style={{position:"relative",display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
                     {formatThumbs[d.id]
                       ? <img src={formatThumbs[d.id]} alt={`${d.label} preview`} style={{maxWidth:"100%",maxHeight:"100%",display:"block"}} />
                       : <span style={{fontSize:9,color:B.ash,fontFamily:FU.subtitle}}>{d.sub}</span>}
+                    {dotReady!=null && (
+                      <span aria-hidden="true" title={dotReady?"Ready to post":"Needs a look"}
+                        style={{position:"absolute",top:4,right:4,width:14,height:14,borderRadius:"50%",display:"grid",placeItems:"center",
+                          fontSize:9,fontWeight:800,lineHeight:1,color:"#fff",boxShadow:"0 0 0 1.5px #fff",
+                          background:dotReady?B.burnham:B.tangerine}}>{dotReady?"✓":"!"}</span>
+                    )}
+                    {adjusted && (
+                      <span aria-hidden="true" title="Adjusted for this format"
+                        style={{position:"absolute",top:4,left:4,width:14,height:14,borderRadius:4,display:"grid",placeItems:"center",
+                          fontSize:9,fontWeight:800,lineHeight:1,color:B.burnham,background:B.wisteria,boxShadow:"0 0 0 1.5px #fff"}}>✦</span>
+                    )}
                   </span>
                   <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:on?700:600,letterSpacing:0.5,color:on?B.burnham:B.ash}}>{d.label}</span>
+                  <span style={{fontSize:8,fontFamily:F.body,color:adjusted?B.celadonDeep:"transparent",lineHeight:1,minHeight:8}}>{adjusted?"adjusted":"·"}</span>
                 </button>
               );
             })}
+            </div>
           </div>
+            );
+          })()}
 
         </div>
       </div>
