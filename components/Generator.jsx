@@ -5452,11 +5452,30 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
         const preUsed=hf.lines.length*hf.lineHeight;
-        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
+        // (LEGACY CAPTION) A caption on photo_logo used to have no slot — added copy
+        // rendered nothing and the AI reported "no change". Now the caption (subtext)
+        // draws as a light line UNDER the headline, sized to a readable floor and
+        // dropped only when there's genuinely no room above the bottom safe margin.
+        const capText=stripHeroMarkers(subtext||"");
+        let capFit=null,capGap=0,capH=0;
+        if(capText){
+          capGap=Math.max(20*S,hf.size*0.42);
+          const capRoom=Math.max(0,(1-sm.b)*h-(by+preUsed+capGap));
+          const capFloor=mf("body",30*S*scale*fm("content"),24*S);
+          if(capRoom>=capFloor*1.1){
+            capFit=fitText(ctx,capText,s=>`400 ${s}px ${F.body}`,30*S*scale*fm("content"),bw,capRoom,1.34,capFloor);
+            if(capFit.lines.length>Math.max(1,fmt.maxLines?.details??2)){capFit=null;dropped.push("Caption");}
+            else capH=capFit.lines.length*capFit.lineHeight;
+          }else dropped.push("Caption");
+        }
+        // Backdrop/colour resolved over the WHOLE text block (headline + caption).
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3};
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
         if(mediaObj&&!photoBox){resolveZoneTc(tbox);drawBackdrop(tbox);}
-        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
-        putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3});
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        setTextBounds(used);endText();
+        putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3});
       }else{putLogo();if(live)textBoundsRef.current=null;}
     }else if(postType==="quote"){
       // (WP-U green-filter fix) the full-frame brand tint (a whole-canvas green wash
@@ -5565,11 +5584,75 @@ export default function App() {
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
         const preUsed=hf.lines.length*hf.lineHeight;
-        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+hf.size*0.3};
+        // (LEGACY CAPTION) caption under the overlay headline — same treatment as
+        // photo_logo so an added caption renders instead of silently dying.
+        const capText=stripHeroMarkers(subtext||"");
+        let capFit=null,capGap=0,capH=0;
+        if(capText){
+          capGap=Math.max(20*S,hf.size*0.4);
+          const capRoom=Math.max(0,(1-sm.b)*h-(by+preUsed+capGap));
+          const capFloor=mf("body",30*S*scale*fm("content"),24*S);
+          if(capRoom>=capFloor*1.1){
+            capFit=fitText(ctx,capText,s=>`400 ${s}px ${F.body}`,30*S*scale*fm("content"),bw,capRoom,1.34,capFloor);
+            if(capFit.lines.length>Math.max(1,fmt.maxLines?.details??2)){capFit=null;dropped.push("Caption");}
+            else capH=capFit.lines.length*capFit.lineHeight;
+          }else dropped.push("Caption");
+        }
+        const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3};
         if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}
-        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";setTextBounds(used);endText();
+        beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        setTextBounds(used);endText();
         putLogo(tbox);
       }else{setTextBounds(h*0.12);putLogo();}
+    }
+
+    // ── (LEGACY DEAD-ROLE HONESTY) ──────────────────────────────────────────
+    // The legacy postType layouts above are HEADLINE-CENTRIC: each draws only the
+    // roles its template supports (photo_logo/texture_text draw the headline alone;
+    // quote draws headline + one credit; event draws headline + date + details;
+    // text_post draws intro + headline + subtext). When a NON-editorial (archetypeId
+    // null) design gains a role its layout can't draw — the client adding a caption
+    // to a photo_logo post — the copy lands in state but paints NOTHING, so the
+    // render-truth check saw no change and the assistant fired "that didn't change
+    // anything visible" on every attempt (the legacy twin of the WP-W0 dead-field
+    // bug, which only covered the archetype path). Mark those filled-but-undrawable
+    // roles here so the SAME inspector dead-field banner + one-tap layout switch and
+    // the chat honesty check treat legacy designs honestly instead of no-op looping.
+    // (Editorial renders return earlier and set deadRolesRef themselves.)
+    if(live){
+      // Roles each legacy layout actually paints (everything else, if filled, is dead).
+      const LEGACY_DRAWS={
+        photo_logo:["headline","subtext"],     // caption now painted under the headline
+        texture_text:["headline","subtext"],   // caption now painted under the overlay headline
+        quote:["headline","credit"],           // credit = attribution||subtext
+        event:["headline","date","subtext"],
+        text_post:["subtext","headline","attribution"],
+      };
+      const drawn=LEGACY_DRAWS[postType]||["headline"];
+      // Whether each legacy FIELD is painted by THIS layout.
+      const paintsSubtext=()=>{
+        if(drawn.includes("subtext")) return true;
+        // quote uses attribution||subtext as its single credit line — subtext is
+        // only painted (as credit) when there is no attribution.
+        if(postType==="quote" && !String(attribution||"").trim()) return true;
+        return false;
+      };
+      const paintsAttribution=()=>{
+        if(drawn.includes("attribution")) return true;
+        if(postType==="quote") return true;    // attribution is the quote credit
+        return false;
+      };
+      // Publish dead roles in the SAME editorial role vocabulary the inspector
+      // banner + chat honesty check consume (hero/support/eyebrow/date), so a legacy
+      // caption add is caught by the existing dead-role path (offer to switch layout)
+      // instead of falling through to the "didn't change anything" no-op message.
+      const dead=[];
+      if(String(subtext||"").trim() && !paintsSubtext()) dead.push("support");
+      if(String(attribution||"").trim() && !paintsAttribution() && !dead.includes("support")) dead.push("support");
+      if(String(dateText||"").trim() && !drawn.includes("date")) dead.push("date");
+      if(String(microLabel||"").trim()) dead.push("eyebrow");   // no legacy layout paints an eyebrow
+      deadRolesRef.current=dead;
     }
 
     // Surface dropped-copy info for the live dimension only (spec §6 step 5 hint).
@@ -5983,25 +6066,29 @@ export default function App() {
               if (isSentinel) ghost++;
             }
             if (ghost) { offenders.push({ postType: pt, dimId: dm.id, reason: "stale strip survived outside render box (stacked ghost)" }); continue; }
-            // (b) DUPLICATE TEXT-BAND: on a SECOND fresh, exact-size canvas, count
-            // disjoint bright (light-text) y-bands in the left column region. The
-            // headline for these fixtures is a single line/block, so >1 disjoint band
-            // (separated by a dark gap) means the composition was stacked twice.
-            const c2 = document.createElement("canvas"); c2.width = dm.w; c2.height = dm.h;
-            const x2 = c2.getContext("2d", { willReadFrequently: true });
-            renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt });
-            const rows = 60, colXs = [0.18, 0.32, 0.5].map(f => Math.floor(dm.w * f));
-            let inBand = false, bands = 0;
-            for (let r = 0; r < rows; r++) {
-              const y = Math.floor((r + 0.5) / rows * dm.h);
-              let bright = 0;
-              for (const x of colXs) { const d = x2.getImageData(x, y, 1, 1).data; if (d[0] > 190 && d[1] > 190 && d[2] > 190) bright++; }
-              const lit = bright >= 2;
-              if (lit && !inBand) { bands++; inBand = true; } else if (!lit) inBand = false;
+            // (b) DUPLICATE TEXT-BAND — only for the HEADLINE-CENTRIC types whose
+            // painted text is predictable (headline + optional short caption + the
+            // corner lockup). Multi-line types (quote/event/text_post) legitimately
+            // stack several text bands, so the band count isn't a duplication signal
+            // there — check (a) is the universal duplicate-draw guard for them.
+            const BAND_CHECK_TYPES = ["photo_logo", "texture_text"];
+            if (BAND_CHECK_TYPES.includes(pt)) {
+              const c2 = document.createElement("canvas"); c2.width = dm.w; c2.height = dm.h;
+              const x2 = c2.getContext("2d", { willReadFrequently: true });
+              renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+              const rows = 60, colXs = [0.18, 0.32, 0.5].map(f => Math.floor(dm.w * f));
+              let inBand = false, bands = 0;
+              for (let r = 0; r < rows; r++) {
+                const y = Math.floor((r + 0.5) / rows * dm.h);
+                let bright = 0;
+                for (const x of colXs) { const d = x2.getImageData(x, y, 1, 1).data; if (d[0] > 190 && d[1] > 190 && d[2] > 190) bright++; }
+                const lit = bright >= 2;
+                if (lit && !inBand) { bands++; inBand = true; } else if (!lit) inBand = false;
+              }
+              // Allowed bands: headline + caption(subtext) + corner lockup = up to 3.
+              // 4+ disjoint bright bands ⇒ a stacked second copy.
+              if (bands >= 4) offenders.push({ postType: pt, dimId: dm.id, reason: `${bands} disjoint text bands (expected ≤3: headline+caption+lockup)` });
             }
-            // The logo lockup adds its own small text band near a corner; allow up to
-            // 2 bands (headline + lockup). 3+ disjoint bright bands ⇒ a stacked copy.
-            if (bands >= 3) offenders.push({ postType: pt, dimId: dm.id, reason: `${bands} disjoint text bands (expected ≤2: headline+lockup)` });
           } catch (e) { offenders.push({ postType: pt, dimId: dm.id, reason: "render error: " + String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; void prevPT; }
@@ -7002,7 +7089,9 @@ export default function App() {
           does not draw is marked honestly, with a one-tap layout switch that
           preserves all content (materialization keeps copy fields). */}
       {deadRoles.length>0 && (()=>{
-        const DEAD_LABELS={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button"};
+        const DEAD_LABELS={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button",
+          // legacy-path role names (photo_logo/quote/event/text_post/texture_text)
+          subtext:"the caption",attribution:"the small credit line",headline:"the headline"};
         const target = mediaObj ? "editorial_split" : "label_headline";
         return (
           <div role="note" style={{margin:"6px 0 12px",padding:"9px 11px",borderRadius:9,border:`1px solid ${B.tangerine}55`,background:`${B.tangerine}10`,fontSize:11,fontFamily:F.body,color:B.burnham,lineHeight:1.5}}>
@@ -7310,7 +7399,9 @@ export default function App() {
   const captionFieldId = postType === "quote" ? "attribution" : "subtext";
   const captionValue = postType === "quote" ? attribution : subtext;
   // Add a text role through THE pipeline with a placeholder the user replaces
-  // immediately (the role's input is focused + selected after the add).
+  // immediately (the role's input is focused + selected after the add). The legacy
+  // headline-only layouts (photo_logo / texture_text) now paint a caption line too
+  // (see renderScene), so an added caption renders in place with no layout jump.
   const addTextRole = (patch, focusRole) => {
     applyPatch(patch, { source: "ui" });
     setTopMenu(null);
