@@ -2707,6 +2707,15 @@ export default function App() {
   // Text backdrop treatment for text-over-photo (spec §5): auto | band | none.
   // (The old "gradient" treatment was removed 2026-07-02.)
   const [backdropMode, setBackdropMode] = useState("auto");
+  // (item 2 · re-solve around pins) GLOBAL PROPERTY PINS. A property the user set
+  // EXPLICITLY through the inspector (backdropMode, textColorId) is a PIN: the silent
+  // harmonizer must never revert it. When a pin creates a fail (e.g. backdropMode
+  // "none" removes the band that kept text legible on a photo), the harmonizer re-solves
+  // with its FREE variables instead of overturning the pin — an ink flip first, then
+  // placement — and if nothing frees it, the pin stays and the advisor dot is raised.
+  // Cleared on a fresh archetype / new post (a fresh design has no user pins yet).
+  const [pinnedProps, setPinnedProps] = useState({});   // { backdropMode:true, textColorId:true }
+  const pinnedPropsRef = useRef(pinnedProps); pinnedPropsRef.current = pinnedProps;
   // (B3 render-truth, 2026-07-06) INSPECTOR HONESTY NOTES. When an inspector control
   // applies a patch that produces NO visible change (the canvas pixels the control
   // claims to drive were identical before/after), we surface a small honest inline
@@ -3110,6 +3119,7 @@ export default function App() {
     image, imgT: JSON.parse(JSON.stringify(imgT)),
     imgTByDim: JSON.parse(JSON.stringify(imgTByDim)),
     photoTouchedByDim: JSON.parse(JSON.stringify(photoTouchedByDim)),
+    pinnedProps: JSON.parse(JSON.stringify(pinnedProps)),   // (item 2) user contrast pins
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
@@ -3225,6 +3235,7 @@ export default function App() {
     setTypeLayoutsByDim({});
     setPhotoTouchedByDim({});   // (B2) fresh archetype → auto photo crop again
     setImgTByDim({});
+    setPinnedProps({});         // (item 2) a fresh archetype has no user contrast pins yet
     if (mat.motifLayers) setOverlayLayers(mat.motifLayers);
     else setOverlayLayers(prev => prev.filter(l => !l.motif));
     // (WP-W0) a fresh archetype brings fresh furniture — stale per-piece overrides
@@ -3513,6 +3524,17 @@ export default function App() {
     if (!isDragPatch && !dragRef.current) pulseCanvasSettle();
     if ((opts.source || "ai") === "ui") {
       noteManualEdit(uiTagsForPatch(patch));
+      // (item 2) Record explicit inspector picks of contrast-governing globals as PINS
+      // the silent harmonizer may not overturn. Only genuine user choices pin (a UI
+      // patch): "auto" is the system default, so re-selecting Auto CLEARS the pin.
+      if ("backdropMode" in patch || "textColorId" in patch) {
+        setPinnedProps(prev => {
+          const next = { ...prev };
+          if ("backdropMode" in patch) { if (patch.backdropMode === "auto") delete next.backdropMode; else next.backdropMode = true; }
+          if ("textColorId" in patch) { if (patch.textColorId === "auto") delete next.textColorId; else next.textColorId = true; }
+          return next;
+        });
+      }
       return applyDesignPatch(patch, { amendUndo: true, uiSource: true });
     }
     return applyDesignPatch(patch, opts);
@@ -3720,6 +3742,9 @@ export default function App() {
     }
     if (s.imgTByDim) setImgTByDim(s.imgTByDim);
     setPhotoTouchedByDim("photoTouchedByDim" in s ? (s.photoTouchedByDim || {}) : {});
+    // (item 2) Restore the user's contrast pins with the snapshot so undo/redo and
+    // session-restore carry which globals the user explicitly owned.
+    setPinnedProps("pinnedProps" in s ? (s.pinnedProps || {}) : {});
     setPhotoSel(false);
   };
 
@@ -4947,6 +4972,16 @@ export default function App() {
       const m=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       return m?m.min<4.5:false; // no sample → assume ok
     };
+    // (double-band single-owner assertion, WP-U) A text role may receive AT MOST ONE
+    // contrast backdrop treatment. drawBackdrop already early-returns after painting
+    // one band, so a role should never be banded twice in a single render. We count
+    // band applications per role-box (rounded key) and flag a repeat — the stress
+    // sweep (__woArchStress) asserts _doubleBackdrop===0. A tint-DEEPEN loop over the
+    // same box is one treatment (the same tint deepened), so only the terminal solid
+    // band counts toward the per-role tally.
+    let _doubleBackdrop=0;
+    const _bandedRoles=new Map();
+    const _bandRole=(box)=>{ const k=`${Math.round(box.x)}.${Math.round(box.y)}.${Math.round(box.w)}`; const n=(_bandedRoles.get(k)||0)+1; _bandedRoles.set(k,n); if(n>1)_doubleBackdrop++; };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
       if(frameBgTextColor)return;   // text is on flat solid bg (snapped clear of the frame) → no scrim needed
       if(!mediaObj)return;
@@ -4956,7 +4991,7 @@ export default function App() {
       if(mode==="none")return;                 // shadow-only (beginText adds it)
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        drawSolidBand(ctx,w,h,box,bandColor,0.92);
+        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
         return;
       }
       // AUTO. The colour-flip already ran in resolveZoneTc (rung 1); placement/quiet
@@ -4973,7 +5008,7 @@ export default function App() {
           if(!zoneFails(box))return;           // deepened tint now legible
         }
         // Tint at max still fails → drop a solid brand band as the last resort.
-        drawSolidBand(ctx,w,h,box,bandColor,0.92);
+        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
         return;
       }
       // Untinted (texture_text/photo_logo): quiet-region check under the zone,
@@ -4983,7 +5018,7 @@ export default function App() {
       // ⇒ light text + dark band; bright zone ⇒ dark text + ivory band.
       const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      drawSolidBand(ctx,w,h,box,bandColor,0.92);
+      drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
     };
     const setTextBounds=used=>{if(live||opts.captureAudit)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -5828,6 +5863,7 @@ export default function App() {
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
             seamStraddles, degeneratePhoto, logoDominant, logoLowContrast,
+            doubleBackdrop:_doubleBackdrop,   // (single-owner) a role banded >1× per render
             logoPhotoContrast: auditLogo.overPhoto ? auditLogo.photoContrast : null,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
                     photo:photoObs||null, fullBleed:!!mat.fullBleed, sm:{...sm}, postType },
@@ -6769,7 +6805,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0, dblband = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -6780,12 +6816,13 @@ export default function App() {
             const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0, mc = dr.midCut || 0;
             const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
             const ll = dr.logoLowContrast ? 1 : 0;   // (brand ruling) = illegible logo NOT flagged (never fabricate a backing; flag instead)
-            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll;
-            if (o || cr || mc || sea || dg || ld || ll) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
+            const db = dr.doubleBackdrop || 0;        // (single-owner) a text role got >1 contrast band
+            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll; dblband += db;
+            if (o || cr || mc || sea || dg || ld || ll || db) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, doubleBackdrop: db, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0 && dblband === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, totalDoubleBackdrop: dblband, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
@@ -7231,6 +7268,21 @@ export default function App() {
       // the silent pass must never relocate it on a later unrelated patch
       // ("add title" used to bounce a centre-pinned logo to top-left).
       if (h.avoidLogoGeo || userLogoTouched) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
+      // (item 2 · re-solve around pins) A user PIN (backdropMode / textColorId set in
+      // the inspector) is never overturned by the silent pass. If this fix would revert
+      // a pinned property, drop that field and SUBSTITUTE the free-variable fix (an ink
+      // flip that leaves the pin intact). Ordering — ink flip first (the finding's
+      // flipFix), placement handled by the render's own Auto rungs. If the pin is on the
+      // ink itself, or no free variable frees it, the fix is dropped entirely: the pin
+      // survives and its advisor dot stays raised (the honest "can't auto-fix" outcome).
+      const pins = pinnedPropsRef.current || {};
+      if (Object.keys(pins).length) {
+        const revertsPin = Object.keys(fix).some(k => pins[k]);
+        if (revertsPin) {
+          const alt = (fix.backdropMode && pins.backdropMode && f.flipFix && !pins.textColorId) ? f.flipFix : null;
+          fix = alt || Object.fromEntries(Object.entries(fix).filter(([k]) => !pins[k]));
+        }
+      }
       if (!Object.keys(fix).length) continue;
       const key = f.id + ":" + JSON.stringify(fix);
       if (h.applied.includes(key)) continue;
@@ -7290,11 +7342,31 @@ export default function App() {
     // explicit placement always wins (WP-U Task 1 rule).
     const avoidLogoGeo = touched.has("logo") || userLogoTouched;
     const fixPatch = {};
+    const pins = pinnedPropsRef.current || {};
+    const pinResolutions = [];   // {issue, pinnedProp, resolvedVia} for the capture log
     for (const f of fails) {
       let fix = f.fix;
       if (flipConflict && fix.textColorId) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "textColorId"));
       if (avoidLogoGeo) fix = Object.fromEntries(Object.entries(fix).filter(([k]) => k !== "logoPosition" && k !== "logoSize"));
+      // (item 2 · re-solve around pins) Never overturn a user pin. Substitute the
+      // free-variable ink flip when the fix would revert a pinned backdropMode; drop
+      // any other pin-reverting field (the pin survives + its advisor dot stays up).
+      if (Object.keys(pins).length) {
+        const reverted = Object.keys(fix).filter(k => pins[k]);
+        if (reverted.length) {
+          const alt = (fix.backdropMode && pins.backdropMode && f.flipFix && !pins.textColorId) ? f.flipFix : null;
+          fix = alt || Object.fromEntries(Object.entries(fix).filter(([k]) => !pins[k]));
+          pinResolutions.push({ issue: f.id, pinnedProp: reverted.join(","), resolvedVia: alt ? ("textColorId=" + alt.textColorId) : "kept-pin+dot" });
+        }
+      }
+      if (!Object.keys(fix).length) continue;
       Object.assign(fixPatch, fix);
+    }
+    // (item 2) Capture each pin-created issue + how it was resolved (free variable used,
+    // or pin kept + dot raised) so the learning pass sees which pins force re-solves.
+    for (const pr of pinResolutions) {
+      try { logFeedbackClient({ turn_id: newTurnId(), session_id: sessionId || null, kind: "pin_resolve",
+        pin_resolve: { issue: pr.issue, pinnedProp: pr.pinnedProp, resolvedVia: pr.resolvedVia, format: dimensionId } }); } catch { /* never surface */ }
     }
     if (!Object.keys(fixPatch).length) return;
 
@@ -7444,6 +7516,7 @@ export default function App() {
       auditFindings: auditFindingsRef.current.map(f => ({ id: f.id, key: f.key, category: f.category, element: f.anchor?.element, dimensionId: f.anchor?.dimensionId, designFP: (f.designFP || "").slice(0, 24) })),
     });
     window.__woRunAiAudit = () => runAiAudit();
+    window.__woPins = () => ({ ...(pinnedPropsRef.current || {}) });   // (item 2) debug: current user pins
     window.__woInjectAudit = (raw, element) => {
       const el = element || "text";
       const box = elementBoxOf(el);
