@@ -52,6 +52,78 @@ function rankDefects(defects) {
   return [...groups.values()].sort((a, b) => b.score - a.score || b.count - a.count);
 }
 
+// (WP-Z) HUMAN FEEDBACK — real /feedback notes a person typed in the studio. These
+// are the highest-grade signal (a human, mid-task, telling us something is off) so
+// they get their own section ABOVE the synthetic findings. Each event's bundle
+// rides in the verdict jsonb column, tagged kind:'user_feedback'. Naive clustering
+// links a note to a tester defect class when they share a format AND overlapping
+// keywords — a soft "possibly related to defect N" hint, never a hard claim.
+const STOP = new Set(['the','a','an','is','it','to','and','of','on','in','for','with','my','this','that','does','do','did','not','was','were','are','be','been','i','you','when','then','but','so','if','or','at','as','by']);
+function keywords(s) {
+  return [...new Set(String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w)))];
+}
+function humanFeedbackSection(L, events, ranked) {
+  // null → the store/key was unavailable this run. Skip the section ENTIRELY
+  // (graceful no-op) so the report reads clean when feedback can't be read.
+  if (!Array.isArray(events)) return;
+  const isFb = (e) => (e && e.verdict && e.verdict.kind === 'user_feedback');
+  const isAddendum = (e) => (e && e.verdict && e.verdict.kind === 'user_feedback_addendum');
+  const notes = events.filter(isFb);
+  const addenda = events.filter(isAddendum);
+  const addendaByRef = new Map();
+  for (const a of addenda) { const r = a.verdict.ref; if (r) { if (!addendaByRef.has(r)) addendaByRef.set(r, []); addendaByRef.get(r).push(a); } }
+
+  L.push(`## Human feedback`);
+  L.push('');
+  if (notes.length === 0) {
+    L.push(`No one filed a \`/feedback\` note since the last run. (Staff can type \`/feedback\` followed by what isn't working, in the chat — it captures a snapshot of their current design and sends it here.)`);
+    L.push('');
+    return;
+  }
+  L.push(`These are real notes a person typed with the \`/feedback\` command while using the studio — a human telling us, mid-task, that something wasn't working. Each note captured a snapshot of the design at that moment. This is the highest-value signal in the report.`);
+  L.push('');
+  // Sort newest-first by the bundle ts (fallback to created_at).
+  notes.sort((a, b) => Date.parse(b.verdict?.ts || b.created_at || 0) - Date.parse(a.verdict?.ts || a.created_at || 0));
+  for (const e of notes) {
+    const v = e.verdict || {};
+    const text = String(v.text || e.user_message || '').replace(/\|/g, '/').trim() || '(no text)';
+    const ts = v.ts || e.created_at || '';
+    const fmt = v.format || v.dimensionId || v.designState?.dimensionId || null;
+    L.push(`### “${text.slice(0, 240)}”`);
+    L.push('');
+    if (ts) L.push(`- **When:** ${String(ts).replace('T', ' ').slice(0, 16)}`);
+    if (fmt) L.push(`- **Format:** ${fmt}`);
+    // Naive clustering: same format AND overlapping keywords with a defect class.
+    const kw = new Set(keywords(text));
+    const related = [];
+    (ranked || []).forEach((g, i) => {
+      const sameFormat = (g.examples || []).some(ex => {
+        const exFmt = ex.dimensionId || ex.format || null;
+        return fmt && exFmt && exFmt === fmt;
+      });
+      const gWords = keywords([g.oracle, ...(g.examples || []).map(ex => `${ex.utterance || ''} ${ex.observed || ''} ${ex.expected || ''}`)].join(' '));
+      const overlap = gWords.filter(w => kw.has(w)).length;
+      if (overlap >= 2 && (sameFormat || overlap >= 3)) related.push({ n: i + 1, oracle: g.oracle, overlap });
+    });
+    if (related.length) {
+      const top = related.sort((a, b) => b.overlap - a.overlap).slice(0, 2);
+      L.push(`- **Possibly related to:** ${top.map(r => `defect #${r.n} (${ORACLE_PLAIN[r.oracle] || r.oracle})`).join('; ')} — same format and overlapping wording. Worth a look together.`);
+    }
+    if (v.thumbnail) {
+      L.push(`- **Design snapshot:** captured inline with this note (a small image of what they were looking at).`);
+    }
+    if (v.advisorFindings && v.advisorFindings.length) {
+      L.push(`- **Advisor flags active at the time:** ${v.advisorFindings.length} format(s) showed "needs attention".`);
+    }
+    const adds = addendaByRef.get(e.turn_id) || [];
+    for (const a of adds) {
+      const at = String(a.verdict?.text || a.user_message || '').replace(/\|/g, '/').trim();
+      if (at) L.push(`- **They added:** “${at.slice(0, 240)}”`);
+    }
+    L.push('');
+  }
+}
+
 function generate(run, meta) {
   const nightly = !!(meta && meta.nightly);
   const defects = run.defects();
@@ -152,6 +224,11 @@ function generate(run, meta) {
       L.push('');
     });
   }
+
+  // ── Human feedback (WP-Z) ─────────────────────────────────────────────────
+  // Real /feedback notes from people using the studio. Graceful no-op when the
+  // store/key is unavailable (meta.humanFeedback null).
+  humanFeedbackSection(L, meta && meta.humanFeedback, ranked);
 
   // ── Everyday journeys table ───────────────────────────────────────────────
   L.push(`## Everyday journeys — step by step`);

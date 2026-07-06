@@ -96,6 +96,28 @@ function cloudSessionIds(baseUrl) {
   });
 }
 
+// (WP-Z) Pull real HUMAN /feedback notes for the report's "Human feedback" section.
+// Dev-gated: the API GET requires ?key=<FEEDBACK_DEV_KEY>. If the key is unset, or
+// the store is unconfigured/unreachable, this resolves to null and the report
+// section no-ops gracefully. Returns only user_feedback events (+ their addenda).
+function fetchHumanFeedback(baseUrl) {
+  return new Promise((resolve) => {
+    const key = process.env.FEEDBACK_DEV_KEY;
+    if (!key) return resolve(null); // not configured → the section is skipped
+    http.get(`${baseUrl}/api/feedback?key=${encodeURIComponent(key)}&limit=200`, (res) => {
+      let body = '';
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          if (!j || j.configured === false || !Array.isArray(j.events)) return resolve(null);
+          resolve(j.events);
+        } catch { resolve(null); }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
 async function main() {
   const startedAt = Date.now();
   const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -121,6 +143,7 @@ async function main() {
   let browser;
   let currentKill = null;
   let cleaned = false;
+  let humanFeedback = null; // (WP-Z) real /feedback notes for the report (null → section skipped)
   const cleanup = () => {
     if (cleaned) return; cleaned = true;
     try { if (browser) browser.close(); } catch {}
@@ -143,6 +166,12 @@ async function main() {
       const beforeSet = new Set([...before.active, ...before.archived]);
       notes.push(`Cloud sessions before run: ${before.configured ? `${before.active.length} active + ${before.archived.length} archived` : 'cloud unconfigured (nothing to pollute)'}.`);
       log('cloud baseline:', before.configured ? `${before.active.length}+${before.archived.length}` : 'unconfigured');
+
+      // (WP-Z) Pull real human /feedback notes while the server is live (for the
+      // report's "Human feedback" section). Graceful null when the key/store is
+      // absent — the section then no-ops.
+      humanFeedback = await fetchHumanFeedback(config.baseUrl);
+      log('human feedback:', humanFeedback == null ? 'unavailable (skipping section)' : `${humanFeedback.length} event(s)`);
 
       browser = await chromium.launch({ headless: true });
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, userAgent: 'WhiteOrchidResidentTester/1.0' });
@@ -225,7 +254,7 @@ async function main() {
   cleanup();
 
   // ── Write the client-facing report ────────────────────────────────────────
-  const md = report.generate(run, { notes, nightly: NIGHTLY });
+  const md = report.generate(run, { notes, nightly: NIGHTLY, humanFeedback });
   const dateStr = new Date(run.startedAt).toISOString().slice(0, 10);
   const kind = NIGHTLY ? 'nightly' : 'smoke';
   const reportPath = path.join(REPO, 'docs', 'resident-tester', `${kind}-report-${dateStr}.md`);
