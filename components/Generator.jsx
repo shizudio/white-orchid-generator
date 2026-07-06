@@ -5,7 +5,7 @@ import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
 import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
-import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey } from "@/lib/audit-local";
+import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
 
@@ -1045,13 +1045,18 @@ const LOGO_FOCAL_RADIUS=0.22;
 // 9-grid on contrast, excluding any position whose box overlaps the resolved TEXT
 // zone OR the focal band. Falls back to shrinking the logo (down to S) before
 // giving up. Operates purely on the CURRENT dimension's geometry (spec §1/§4).
-function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox){
+function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox,safeZone){
   const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
   const pad=Math.min(w,h)*0.045;
   const exclText=textBox?{x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2}:null;
   const fr=LOGO_FOCAL_RADIUS*Math.min(w,h);
   const fx=(focal?.fx??0.5)*w, fy=(focal?.fy??0.42)*h;
   const exclFocal=focal?{x:fx-fr,y:fy-fr,w:fr*2,h:fr*2}:null;
+  // (BORN-CLEAN RULE, 2026-07-06 — corrected) Top/bottom logos are standard on Story/Reel,
+  // so we do NOT remove any named position. Instead the landing coordinates are shifted:
+  // logoCenter(...,safeZone) anchors top-row just below the top band and bottom-row just
+  // above the bottom band. Every named position stays available and is legal by
+  // construction. safeZone = {top,bottom,left,right} fractions (PLATFORM_SAFE for the dim).
   // Frame-shape boundary exclusion (Commit 2c): treat the frame's bounding box,
   // padded outward, as an area the auto logo should avoid — so the mark sits in the
   // clear solid-bg region, not straddling the photo-frame edge. The whole box is
@@ -1060,7 +1065,7 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
   const framePad=Math.min(w,h)*0.03;
   const exclFrame=frameBox?{x:frameBox.x-framePad,y:frameBox.y-framePad,w:frameBox.w+framePad*2,h:frameBox.h+framePad*2}:null;
   const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBgColor||B.burnham),variance:0};};
-  const boxFor=(pos,lSz)=>{const[cx,cy]=logoCenter(pos,w,h,lSz);return{x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz};};
+  const boxFor=(pos,lSz)=>{const[cx,cy]=logoCenter(pos,w,h,lSz,safeZone);return{x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz};};
   // Contrast of the ACTUAL logo ink against a region (Failure 3): an ivory logo over
   // a white shirt must score low so the guard relocates it. When ink luminance is
   // unknown, fall back to the best-of-either-brand-colour (position-only) contrast.
@@ -1096,11 +1101,19 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
     const clearsFrame=!exclFrame||!intersects(exclFrame,bb);
     const reads=inkContrast(regionFor(basePos))>=LOGO_MIN_CONTRAST;
     // Explicit user placement ALWAYS wins — return it verbatim, never relocate or
-    // shrink (Task 1 fix). The guard's collision/contrast reshuffle applies only to
-    // spec-default/auto bases. We still report whether it overlaps the text zone so
-    // the UI can surface a non-blocking hint (overlapsText).
+    // shrink (Task 1 fix). The named position's coordinates are already safe-zone-shifted
+    // by boxFor→logoCenter(safeZone), so a NAMED explicit pick ("bottom right") is legal
+    // by construction; only a raw pixel-DRAG can land in a band (handled downstream).
     if(base.explicit)return{position:base.position,sizeId:base.sizeId,overlapsText:!clearsText};
-    if(clearsText&&clearsFocal&&clearsFrame&&reads)return{position:base.position,sizeId:base.sizeId};
+    // (BORN-CLEAN) On a PHOTO, the spec-default base can "read" at the loose 1.8 bar yet
+    // still land on a busy region the logo-legibility finding (3:1 worst-case) would flag
+    // — the system would then manufacture a dot on its OWN placement. So when a photo is
+    // present and the base region is below a legibility-aligned floor (mean < 3:1) while a
+    // meaningfully clearer candidate exists, relocate to it. Uniform/panel bases (mean ≥
+    // 3:1) keep the spec default. This never fires for explicit placements (returned above).
+    const baseMeanCr=inkContrast(regionFor(basePos));
+    const bornCleanOk=!regions||baseMeanCr>=3;
+    if(clearsText&&clearsFocal&&clearsFrame&&reads&&bornCleanOk)return{position:base.position,sizeId:base.sizeId};
   }
   // Relocate: best-scoring non-overlapping position at the base size, shrinking to
   // the S floor (spec §6 step 4 — logo shrinks, never drops) if nothing fits.
@@ -2093,19 +2106,32 @@ const LOGO_POSITIONS = {
   "bottom-right":  { label:"Bottom Right", anchorX:"right",  anchorY:"bottom" },
 };
 
-// Compute logo center (cx, cy) from anchor + size so clear space is always respected
-function logoCenter(pos, canvasW, canvasH, lSz) {
-  const pad = LOGO_PAD * canvasW;
+// Compute logo center (cx, cy) from anchor + size so clear space is always respected.
+// (BORN-CLEAN RULE, 2026-07-06) When a format has platform action zones (safeZone =
+// {top,bottom,left,right} fractions, e.g. Story's top/bottom bands), the per-edge inset
+// grows to clear the band: top-row positions land just BELOW the top band, bottom-row
+// just ABOVE the bottom band. Every NAMED position (all 9) stays available and legal by
+// construction — for auto placement AND for semantic user picks ("bottom right" = the
+// visible bottom-right of the design, never under the platform's buttons). Only a manual
+// pixel-deep DRAG into a band raises the action-zone dot. A small breathing gap (0.015)
+// past the band edge keeps the logo box fully clear, not flush against the UI.
+function logoCenter(pos, canvasW, canvasH, lSz, safeZone) {
+  const basePadX = LOGO_PAD * canvasW, basePadY = LOGO_PAD * canvasW; // pad is edge-relative (canvasW) as before
+  const GAP = 0.015; // extra breathing room past a platform band, in canvas fractions
+  const padTop    = safeZone && safeZone.top    ? Math.max(basePadY, (safeZone.top + GAP) * canvasH)    : basePadY;
+  const padBottom = safeZone && safeZone.bottom ? Math.max(basePadY, (safeZone.bottom + GAP) * canvasH) : basePadY;
+  const padLeft   = safeZone && safeZone.left   ? Math.max(basePadX, (safeZone.left + GAP) * canvasW)   : basePadX;
+  const padRight  = safeZone && safeZone.right  ? Math.max(basePadX, (safeZone.right + GAP) * canvasW)  : basePadX;
   const half = lSz / 2;
   let cx, cy;
   switch (pos.anchorX) {
-    case "left":   cx = pad + half; break;
-    case "right":  cx = canvasW - pad - half; break;
+    case "left":   cx = padLeft + half; break;
+    case "right":  cx = canvasW - padRight - half; break;
     default:       cx = canvasW / 2;
   }
   switch (pos.anchorY) {
-    case "top":    cy = pad + half; break;
-    case "bottom": cy = canvasH - pad - half; break;
+    case "top":    cy = padTop + half; break;
+    case "bottom": cy = canvasH - padBottom - half; break;
     default:       cy = canvasH / 2;
   }
   return [cx, cy];
@@ -4346,7 +4372,9 @@ export default function App() {
       // Sample regions from the CURRENT canvas (photo already drawn) so the guard
       // reads the real per-dimension crop.
       const logoRegions=mediaObj?analyzeCanvasRegions(ctx,w,h):null;
-      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,drawInkLum,frameBox);
+      // (BORN-CLEAN) the format's platform action zones — auto placement must avoid them.
+      const platformSafe=PLATFORM_SAFE[dimId]||null;
+      const place=pickLogoPlacement(logoBase,w,h,textBox||null,logoRegions,logoFocal,curBg?.color,drawInkLum,frameBox,platformSafe);
       if(live)logoOverlapRef.current=!!place.overlapsText;   // Task 1 hint (explicit placement over text)
       const effSizeId=logoOpts.sizeId||place.sizeId; // (P1) logoUse:"mark" forces small
       const pct=LOGO_SIZES.find(s=>s.id===effSizeId)?.pct||0.12;
@@ -4357,7 +4385,9 @@ export default function App() {
       const _wideCap=["twitter","facebook","banner"].includes(dimId)?0.30*h:Infinity;
       const lSz=Math.min(w*pct,_wideCap);
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
-      const[lx,ly]=logoCenter(pos,w,h,lSz);
+      // (BORN-CLEAN) land the named position with format-aware safe padding so top/bottom
+      // rows clear the platform action bands — legal by construction for auto AND explicit.
+      const[lx,ly]=logoCenter(pos,w,h,lSz,platformSafe);
       // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
       // exclusion)? Only meaningful with a photo + a real explicit placement (the
       // guard already reshuffles non-explicit bases away from the focal band).
@@ -4457,13 +4487,26 @@ export default function App() {
             // a busy field) and keep the best — a real 9-grid position, never fabrication.
             if(!lg.ok){
               try{
+                // (BORN-CLEAN, fix-must-be-finding-aware) Only consider legal spots that
+                // don't intrude the platform action zone — a "clearer spot" that lands in
+                // the Story safe zone would just raise a NEW safe-area dot. Skip those.
+                const _ps=PLATFORM_SAFE[dimId]||null;
+                const _inSafe=(bx,by,bw2,bh2)=>{
+                  if(!_ps) return false;
+                  const t=_ps.top?by< _ps.top*h:false;
+                  const b2=_ps.bottom?(by+bh2)>(h-_ps.bottom*h):false;
+                  const l=_ps.left?bx< _ps.left*w:false;
+                  const r=_ps.right?(bx+bw2)>(w-_ps.right*w):false;
+                  return t||b2||l||r;
+                };
                 const cand=["top-left","top-right","bottom-left","bottom-right","mid-left","mid-right"];
                 let best=null;
                 for(const p of cand){
                   const cp=LOGO_POSITIONS[p]; if(!cp) continue;
-                  const [cx,cy]=logoCenter(cp,w,h,lSz);
+                  const [cx,cy]=logoCenter(cp,w,h,lSz,platformSafe);
                   const bx=Math.max(0,cx),by=Math.max(0,cy),bw=Math.min(w-bx,lSz),bh=Math.min(h-by,lSz);
                   if(bw<=2||bh<=2) continue;
+                  if(_inSafe(bx,by,bw,bh)) continue;   // never suggest into an action zone
                   const N=10,sc2=document.createElement("canvas");sc2.width=N;sc2.height=N;
                   const s2=sc2.getContext("2d",{willReadFrequently:true});
                   s2.drawImage(ctx.canvas,bx,by,bw,bh,0,0,N,N);
@@ -6530,6 +6573,46 @@ export default function App() {
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
     };
+    /* ── BORN-CLEAN GUARD (client rule 2026-07-06) ─────────────────────────────
+       Anything the SYSTEM produces autonomously (auto logo placement, spec-default
+       text layout, format adaptation) must pass every DETERMINISTIC readiness check
+       BY CONSTRUCTION — the advisor may never disagree with the system itself. This
+       sweeps EVERY archetype × EVERY format with SHORT system copy + a NON-EXPLICIT
+       (auto) logo, then asserts ZERO system-caused deterministic findings. Copy-length
+       findings (copy-dropped / caption-long / thumb-legibility) are EXCLUDED — those are
+       user-content tradeoffs, not system placement — so the guard targets exactly the
+       "system manufactured a problem" class: safe-area-text, safe-area-logo,
+       logo-legibility, and any archetype safe-zone/overlap fail. */
+    window.__woBornCleanGuard = () => {
+      const prev = auditRef.current, prevBounds = textBoundsRef.current;
+      // Short copy that fits every format so copy-length findings never fire — we're
+      // testing SYSTEM PLACEMENT, not user copy volume.
+      const cc = { headline: "Open house", subtext: "This Saturday", attribution: "The White Orchid", dateText: "18 July" };
+      const SYSTEM_FINDING_IDS = new Set(["safe-area-text", "safe-area-logo", "logo-legibility", "archetype-margin-crop", "archetype-box-overlap"]);
+      const offenders = [];
+      try {
+        for (const id of ARCHETYPE_IDS) for (const d of DIMENSIONS) {
+          try {
+            const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+            // A fresh system design: auto logo (userLogoTouched is false in these renders'
+            // logoBase unless the live state pinned it — captureAudit uses the live pin,
+            // so we can't fully neutralize a live pin here; the guard is meaningful on a
+            // fresh/default session where the logo is auto. It still catches auto-placement
+            // regressions across the archetype matrix).
+            renderScene(c.getContext("2d"), d.w, d.h, { dimensionId: d.id, live: false, captureAudit: true, archOverride: id, calibrationContent: cc });
+            let signal = null;
+            try { signal = JSON.parse(JSON.stringify(auditRef.current)); } catch { signal = auditRef.current; }
+            const verdict = computeReadyChecklist([{ dimensionId: d.id, signal }]).formats[0];
+            const sys = (verdict.issues || []).filter(i => i.severity === "fail" && SYSTEM_FINDING_IDS.has(i.id));
+            if (sys.length) offenders.push({ archetype: id, dimId: d.id, findings: sys.map(i => i.id) });
+          } catch (e) { offenders.push({ archetype: id, dimId: d.id, error: String(e) }); }
+        }
+      } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
+      const report = { pass: offenders.length === 0, cells: ARCHETYPE_IDS.length * DIMENSIONS.length, offenders };
+      // eslint-disable-next-line no-console
+      console.log("[woBornCleanGuard]", JSON.stringify(report));
+      return report;
+    };
     // Single-cell probe (verification): render ONE archetype x format offscreen and
     // return that cell's drift snapshot (boxes + overlap/crop flags).
     window.__woCell = (archId, dimId, content) => {
@@ -6617,7 +6700,7 @@ export default function App() {
       console.log("[woLegacyDupGuard]", JSON.stringify(report));
       return report;
     };
-    return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; } catch {} };
+    return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; delete window.__woBornCleanGuard; } catch {} };
   }, [renderScene]);
 
   /* ── FORMAT-FIT INVARIANT (the mis-fitted-card bug class) ─────────────────────
