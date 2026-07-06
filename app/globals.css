@@ -1153,6 +1153,19 @@ canvas[role="application"]:focus-visible {
   .wo-generating-orchid, .wo-dots { animation: none !important; }
 }
 
+/* (B3) SOFT CANVAS SETTLE — a fast opacity cross-fade when a discrete change lands
+   (chat / inspector / fix), so the canvas feels performed rather than teleported.
+   ~210ms, applied to the canvas shell (the class is toggled per patch). Never runs
+   during drags (JS gates it) and is disabled entirely for reduced-motion users. */
+@keyframes wo-canvas-settle {
+  0%   { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+.wo-canvas-settle > canvas { animation: wo-canvas-settle 210ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .wo-canvas-settle > canvas { animation: none !important; }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    WP-V CHROME — top bar (globals) + contextual inspector.
    §7 rulings apply to the chrome itself: airy, thin weights (400–600, never

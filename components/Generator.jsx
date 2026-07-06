@@ -3374,11 +3374,29 @@ export default function App() {
          MANUAL-EDIT harmonize pass runs after the burst settles.               */
   const applyPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
+    // (B3) SOFT CANVAS SETTLE — a subtle, fast opacity cross-fade so a discrete
+    // change (chat / inspector / fix) feels performed, not teleported. NEVER during
+    // a live drag/pan (interaction stays 1:1): continuous drag patches carry
+    // textLayout/photoTransform, and dragRef.current is set while a gesture is
+    // active — skip the settle for both. CSS-only + prefers-reduced-motion aware
+    // (see .wo-canvas-settle). Format-switch redraws don't route through applyPatch,
+    // so they're unaffected.
+    const isDragPatch = "textLayout" in patch || "photoTransform" in patch;
+    if (!isDragPatch && !dragRef.current) pulseCanvasSettle();
     if ((opts.source || "ai") === "ui") {
       noteManualEdit(uiTagsForPatch(patch));
       return applyDesignPatch(patch, { amendUndo: true, uiSource: true });
     }
     return applyDesignPatch(patch, opts);
+  };
+  // (B3) Retrigger the settle animation by removing + re-adding the class (so a
+  // rapid second patch restarts the fade). Guarded for SSR / unmounted shell.
+  const pulseCanvasSettle = () => {
+    const el = canvasShellRef.current; if (!el) return;
+    el.classList.remove("wo-canvas-settle");
+    // Force reflow so the re-add restarts the animation.
+    void el.offsetWidth;
+    el.classList.add("wo-canvas-settle");
   };
   // Which element(s) a UI patch touches — feeds the manual harmonizer's
   // geometry restraint (it never relocates what the user just placed).
