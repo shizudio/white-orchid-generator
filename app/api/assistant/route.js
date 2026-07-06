@@ -1,6 +1,7 @@
 import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
 import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
+import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -329,7 +330,9 @@ let LAST_BG = null;
 // Deterministically choose a sanctioned variant index for `id`, given the recent
 // kind history. Rules (spec §3): dark share 25–30% (never 3 dark in a row); of the
 // LIGHT picks, ~1-in-3 should be pastel. Falls back to base index 0.
-function pickVariant(id) {
+// (item 11) Within a kind bucket, LIKED variants win the tie — the palette
+// quotas + the no-adjacent-repeat rule stay supreme (rhythm before preference).
+function pickVariant(id, prefs = emptyPreferences()) {
   const vs = LANDING_VARIANTS[id];
   if (!vs || vs.length <= 1) { recordVKind(vs?.[0]?.kind || 'ivory'); return 0; }
   const n = RECENT_VKINDS.length;
@@ -346,7 +349,10 @@ function pickVariant(id) {
   for (const kind of order) {
     // (P3) no-adjacent-repeat: skip a candidate whose bg equals the last tile's bg,
     // preferring another variant of the same kind when one exists.
-    const cands = vs.map((v, i) => ({ v, i })).filter(o => o.v.kind === kind);
+    const cands = vs.map((v, i) => ({ v, i }))
+      .filter(o => o.v.kind === kind)
+      // (item 11) like-weighted tie-break inside the kind bucket.
+      .sort((a, b) => likeCountFor(prefs, 'archVariant', `${id}#${b.i}`) - likeCountFor(prefs, 'archVariant', `${id}#${a.i}`));
     const nonRepeat = cands.find(o => o.v.bg !== LAST_BG);
     const chosen = nonRepeat || cands[0];
     if (chosen) { idx = chosen.i; break; }
@@ -379,7 +385,7 @@ function exceedsCap(id) {
 // `picked` is the model's choice; `intent` is a suits[] tag guessed from the user's
 // message. If the pick busts a cap, silently override to the next suited archetype
 // that doesn't (preferring one matching the same intent), then the first that fits.
-function resolveLandingArchetype(picked, intent) {
+function resolveLandingArchetype(picked, intent, prefs = emptyPreferences()) {
   const valid = picked && LANDING_ARCH_BY_ID[picked] ? picked : null;
   // petal_window is only allowed when explicitly named (handled by the caller's
   // DECOR gate); if it reached here it's already been vetted, so respect its cap too.
@@ -390,10 +396,14 @@ function resolveLandingArchetype(picked, intent) {
   const lastId = RECENT_PICKS[RECENT_PICKS.length - 1];
   const wantPhotoLed = lastId ? !isPhotoLed(lastId) : false; // alternate off the last led-class
   const rank = (a) => (isPhotoLed(a.id) === wantPhotoLed ? 0 : 1); // 0 = preferred alternation
+  // (item 11) Within the SAME rhythm rank, the owner's liked archetypes win —
+  // rhythm + caps stay supreme, preference only breaks the tie.
+  const cmp = (x, y) => (rank(x) - rank(y))
+    || (likeCountFor(prefs, 'archetypeId', y.id) - likeCountFor(prefs, 'archetypeId', x.id));
   // Override: prefer a same-intent, cap-clear archetype; else any cap-clear one — with
-  // alternation as the tie-breaker within each group.
-  const bySuit = CAP_SELECTABLE.filter(a => a.id !== picked && (!intent || a.suits.includes(intent)) && !exceedsCap(a.id)).sort((x, y) => rank(x) - rank(y));
-  const any = CAP_SELECTABLE.filter(a => a.id !== picked && !exceedsCap(a.id)).sort((x, y) => rank(x) - rank(y));
+  // alternation (then likes) as the tie-breaker within each group.
+  const bySuit = CAP_SELECTABLE.filter(a => a.id !== picked && (!intent || a.suits.includes(intent)) && !exceedsCap(a.id)).sort(cmp);
+  const any = CAP_SELECTABLE.filter(a => a.id !== picked && !exceedsCap(a.id)).sort(cmp);
   return (bySuit[0] || any[0] || CAP_SELECTABLE[0]).id;
 }
 // Guess a coarse intent tag from the user's landing message, to route the cap
@@ -406,16 +416,19 @@ function guessIntent(text) {
   if (/\b(photo|picture|image|moment|snapshot|candid)\b/.test(t)) return 'photo_logo';
   return 'text_post';
 }
-// Suggested archetype + palette-class hint for THIS request. Rotates over the
-// cap-clear, non-petal set (minute bucket + jitter) so successive requests diverge.
+// Suggested archetype + palette-class hint for THIS request. Samples the
+// cap-clear, non-petal set so successive requests diverge.
 // (Photo-first) For a non-text-only brief the nudge rotates over the PHOTO-LED pool
 // only, so the soft suggestion never steers a landing plan back to a solid tile.
-function pickLandingArchetypeHint(textOnly) {
+// (item 11) PREFERENCE-WEIGHTED: sampling weights = 1 + like-count per archetype
+// gene, with a DIVERSITY FLOOR (no archetype may take >40% of the probability
+// mass). Rhythm stays supreme — the pool is cap/rhythm-filtered BEFORE weighting.
+function pickLandingArchetypeHint(textOnly, prefs = emptyPreferences()) {
   const base = textOnly ? CAP_SELECTABLE : CAP_SELECTABLE.filter(a => PHOTO_LED.has(a.id));
   const pool = base.filter(a => !exceedsCap(a.id));
   const list = pool.length ? pool : (base.length ? base : CAP_SELECTABLE);
-  const idx = (Math.floor(Date.now() / 60_000) + Math.floor(Math.random() * list.length)) % list.length;
-  const a = list[idx];
+  const id = weightedPick(list.map(a => a.id), prefs, 'archetypeId', { maxShare: 0.4 }) || list[0].id;
+  const a = LANDING_ARCH_BY_ID[id] || list[0];
   return `${a.id} (${a.desc}) — palette: ${a.palette}`;
 }
 // Compact catalog block for the system prompt (id · desc · suits · class).
@@ -797,6 +810,11 @@ export async function POST(request) {
     return handleCaption({ apiKey, designState, brandContext, model, rewriteNudge: !!body.rewrite });
   }
 
+  // (items 11 + 12) The owner's LIKE aggregate — weighted rotation + house-style
+  // exemplars. Cached ~1h server-side; degrades to the empty aggregate on any
+  // failure so nothing here can slow or break a turn.
+  const likePrefs = await getLikePreferences();
+
   const catalog = Object.entries(PATCH_FIELD_GUIDE)
     .map(([field, note]) => `- ${field}: ${note}`)
     .join('\n');
@@ -816,7 +834,7 @@ export async function POST(request) {
 
   const landingUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   const landingTextOnly = wantsTextOnly(landingUserText);
-  const landingArchetypeHint = pickLandingArchetypeHint(landingTextOnly);
+  const landingArchetypeHint = pickLandingArchetypeHint(landingTextOnly, likePrefs);
   const contextRule = context === 'landing'
     ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set an ARCHETYPE (archetypeId), postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
 
@@ -877,7 +895,6 @@ COPY TONE (applies to EVERY copy field you write — headline, subtext, attribut
 - Sentence case, not Title Case ("Come and see for yourself", not "Join Us For Our Open House").
 - Short, quiet, editorial. An invitation reads like a note from a calm teacher, not a flyer.
 - Avoid brochure clichés: "Join us for…", "a day of discovery and learning", "fun-filled", "exciting". Prefer plain, concrete lines ("Come and see for yourself", "Doors open at nine").
-
 You reply with JSON matching the provided schema: { reply, patch }.
 - reply: under 2 sentences, warm and plain-English, describing what you changed (or, if you can't do something, saying so briefly and suggesting the nearest possible action).
 - patch: only the fields you intend to change. Every value MUST be one of the allowed options below — never invent an id.
@@ -1054,8 +1071,8 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     const textOnly = wantsTextOnly(lastUserText);
     let picked = LANDING_ARCH_BY_ID[patch.archetypeId] ? patch.archetypeId : null;
     if (picked === 'petal_window' && !wantsDecoration(lastUserText)) picked = null; // petal only when named
-    if (!picked) picked = resolveLandingArchetype(null, intent); // model omitted / invalid → pick suited
-    let finalArchetype = resolveLandingArchetype(picked, intent);
+    if (!picked) picked = resolveLandingArchetype(null, intent, likePrefs); // model omitted / invalid → pick suited
+    let finalArchetype = resolveLandingArchetype(picked, intent, likePrefs);
     // ── PHOTO-FIRST DEFAULT ── unless the brief is explicitly text-only, the FIRST
     // answer is a photo-led composition (solid-field tiles live in the "Try another"
     // rotation instead — great in a feed, plain standalone). Deterministic, cap-aware.
@@ -1076,7 +1093,8 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // Measured palette rotation (spec §3): pick a sanctioned variant index for this
     // archetype, enforcing pastel-share (~1-in-3 of light) + dark-share (25–30%)
     // deterministically. The client materializes this exact variant.
-    patch.archVariant = pickVariant(finalArchetype);
+    // (item 11) Liked variants win ties inside the palette quotas.
+    patch.archVariant = pickVariant(finalArchetype, likePrefs);
     // (Photo-first) Is the resolved archetype photo-led? Only those want a generated
     // background photo (scenePrompt); text-only archetypes stay solid-field.
     const archIsPhotoLed = PHOTO_ATTACH_ARCHETYPES.has(finalArchetype) || PHOTO_LED.has(finalArchetype);
