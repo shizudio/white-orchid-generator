@@ -1383,13 +1383,28 @@ canvas[role="application"]:focus-visible {
   border-radius: 999px;
   background: var(--tw-tangerine);
 }
+/* (D1 item 9) Warm, named helper — a friendly serif name over a plain-language
+   subtitle, not intimidating tracked-caps designer-speak. */
 .wo-chat-title {
-  font-family: var(--font-syne);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.wo-chat-name {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--tw-burnham);
+  line-height: 1.1;
+}
+.wo-chat-sub {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fg-muted);
 }
 .wo-chat-list {
   flex: 1;

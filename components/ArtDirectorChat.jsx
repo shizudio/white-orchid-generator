@@ -586,9 +586,14 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   chips.push({ label: 'New post', act: handleNewPost });
 
   return (
-    <section className="wo-chat" aria-label="Art Director">
+    <section className="wo-chat" aria-label="Orchid, your design helper">
       <header className="wo-chat-head">
-        <span className="wo-chat-title">Art Director</span>
+        {/* (D1 item 9) A warm, named helper — not tracked-caps "ART DIRECTOR",
+            which reads as intimidating designer-speak to a preschool teacher. */}
+        <span className="wo-chat-title">
+          <span className="wo-chat-name">Orchid</span>
+          <span className="wo-chat-sub">your design helper</span>
+        </span>
         {canHistory && (
           <div className="ad-hist">
             {sessionTitle ? <span className="ad-hist-cur" title={cleanTitle(sessionTitle)}>{cleanTitle(sessionTitle)}</span> : null}
@@ -729,7 +734,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           onKeyDown={onKeyDown}
           rows={1}
           placeholder="Say it to change it…"
-          aria-label="Message the Art Director"
+          aria-label="Message Orchid, your design helper"
           disabled={loading}
         />
         <button type="submit" aria-label="Send" disabled={loading || !input.trim()}>↑</button>
