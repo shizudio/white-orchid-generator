@@ -895,7 +895,10 @@ COPY TONE (applies to EVERY copy field you write — headline, subtext, attribut
 - Sentence case, not Title Case ("Come and see for yourself", not "Join Us For Our Open House").
 - Short, quiet, editorial. An invitation reads like a note from a calm teacher, not a flyer.
 - Avoid brochure clichés: "Join us for…", "a day of discovery and learning", "fun-filled", "exciting". Prefer plain, concrete lines ("Come and see for yourself", "Doors open at nine").
-You reply with JSON matching the provided schema: { reply, patch }.
+${likePrefs.exemplars.length ? `
+HOUSE STYLE — learned from designs the owner LIKED (lean toward these whenever the request leaves room; an explicit ask always wins):
+${likePrefs.exemplars.map(e => `- ${e}`).join('\n')}
+` : ''}You reply with JSON matching the provided schema: { reply, patch }.
 - reply: under 2 sentences, warm and plain-English, describing what you changed (or, if you can't do something, saying so briefly and suggesting the nearest possible action).
 - patch: only the fields you intend to change. Every value MUST be one of the allowed options below — never invent an id.
 
