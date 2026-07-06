@@ -1291,6 +1291,25 @@ canvas[role="application"]:focus-visible {
   top: 116px;
 }
 .generator-preview-panel { order: 2; }
+
+/* (R1) VIEWPORT-DRIVEN STAGE — the fixed-height canvas stage (A3) must be sized
+   by the VIEWPORT, not by the tallest format, so the design + controls + the
+   "every format" strip are ALL visible on one screen (client: "always visible on
+   one screen regardless of screen type"). We reserve the chrome ABOVE the stage
+   (nav 64 + top bar 52 + panel top padding 36 ≈ 152px) and the chrome BELOW it
+   (control row + banners + the strip header + one thumbnail row ≈ 300px), and the
+   stage takes whatever height remains. The frame height stays CONSTANT per
+   viewport across all 6 formats, so the strip's Y never moves (A3's point holds);
+   the canvas scales to fit WITHIN the stage (tall formats shrink, wide formats
+   centre vertically) with no dead space inside the card. clamp() keeps the stage
+   usable on short laptops without ever forcing the strip below the fold.
+   Desktop-only (>=768px) so it never overrides the mobile sticky-preview cap
+   (min(27vh,178px)) defined in the max-width:767px block. */
+@media (min-width: 768px) {
+  .generator-preview-panel {
+    --generator-preview-height: clamp(240px, calc(100vh - 152px - 300px), 720px);
+  }
+}
 .wo-chat {
   display: flex;
   flex-direction: column;
