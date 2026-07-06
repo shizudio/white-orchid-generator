@@ -2379,35 +2379,9 @@ const STARTER_TEMPLATES = [
   },
 ];
 
-// Classify an uploaded overlay by where its ink sits: frame / strip / corner / center.
-function classifyOverlay(img) {
-  const N = 64;
-  const ratio = img.width / img.height;
-  try {
-    const cv = document.createElement("canvas"); cv.width = N; cv.height = N;
-    const x = cv.getContext("2d");
-    const s = Math.min(N/img.width, N/img.height);
-    const dw = img.width*s, dh = img.height*s;
-    x.drawImage(img, (N-dw)/2, (N-dh)/2, dw, dh);
-    const d = x.getImageData(0,0,N,N).data;
-    let minX=N,minY=N,maxX=0,maxY=0,ink=0;
-    for (let yy=0; yy<N; yy++) for (let xx=0; xx<N; xx++) {
-      if (d[(yy*N+xx)*4+3] > 20) { ink++; if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(yy<minY)minY=yy; if(yy>maxY)maxY=yy; }
-    }
-    if (ink === 0) return { kind:"center", ratio };
-    const bw = maxX-minX, bh = maxY-minY, coverage = ink/(N*N);
-    const edges = (minX<=2?1:0)+(minY<=2?1:0)+(maxX>=N-3?1:0)+(maxY>=N-3?1:0);
-    let centerInk=0, centerN=0;
-    for (let yy=Math.floor(N*0.35); yy<N*0.65; yy++) for (let xx=Math.floor(N*0.35); xx<N*0.65; xx++) { centerN++; if(d[(yy*N+xx)*4+3]>20) centerInk++; }
-    const hollow = centerInk/centerN < 0.15;
-    if (edges>=4 && hollow) return { kind:"frame", ratio };
-    if (edges>=3) return { kind:"frame", ratio };
-    if (bw>=N*0.7 && bh<=N*0.45) return { kind:"strip", ratio };
-    if (bh>=N*0.7 && bw<=N*0.45) return { kind:"strip", ratio };
-    if (coverage < 0.2) return { kind:"corner", ratio };
-    return { kind:"center", ratio };
-  } catch(e) { return { kind:"center", ratio }; }
-}
+// (Declutter item 7) The upload-time overlay classifier moved to the Brand kit
+// admin page (app/admin/brand) with the uploader itself — official assets
+// arrive from /api/brand-assets already carrying their kind + ratio.
 
 // Suggested placement for a freshly-added overlay on a given canvas. Normalized:
 // x,y = center 0..1, scale = overlay width as a fraction of canvas width.
@@ -2653,7 +2627,6 @@ export default function App() {
   const [newerDraft, setNewerDraft] = useState(null); // {state, updated_at, device_label} — cross-device draft newer than local
   const [editorScale, setEditorScale] = useState(1);       // display px per export px
   const overlayImgs = useRef({});                          // assetId -> Image
-  const overlayInputRef = useRef(null);
 
   // Video (background motion source — compositing only; upload/save controls
   // removed until MP4 export exists, Declutter §5.3)
@@ -3949,9 +3922,23 @@ export default function App() {
       const hist = await sGet(SK_HIST);
       if (hist) setHistory(hist);
       const ovl = await sGet(SK_OVL) || [];
-      // Refresh built-ins from code so new categories/assets appear; preserve user uploads.
-      const merged = [...DEFAULT_OVERLAYS, ...ovl.filter(o => !o.builtin)];
+      // Refresh built-ins from code so new categories/assets appear; preserve user
+      // uploads. OFFICIAL brand assets (item 7) are fetched fresh from the cloud
+      // below — drop any stale stored copies so the admin's list is authoritative.
+      const merged = [...DEFAULT_OVERLAYS, ...ovl.filter(o => !o.builtin && !o.official)];
       setOverlays(merged);
+      // (Declutter item 7) OFFICIAL decorative assets — owner-uploaded on the
+      // Brand kit admin page, served to everyone. Graceful: unconfigured/failed
+      // fetch leaves the built-ins untouched. Public URLs load with CORS via
+      // imgFrom, so exports stay untainted.
+      fetch('/api/brand-assets').then(r => r.json()).then(d => {
+        if (!d || d.configured === false || !Array.isArray(d.assets)) return;
+        const officials = d.assets
+          .filter(a => a && a.id && a.src)
+          .map(a => ({ id: a.id, name: a.name || 'Decoration', src: a.src, kind: a.kind || 'center', ratio: a.ratio || 1, category: 'overlays', official: true }));
+        if (!officials.length) return;
+        setOverlays(prev => [...prev.filter(o => !o.official), ...officials]);
+      }).catch(() => { /* built-ins remain */ });
       const doc = await sGet(SK_DOC);
       if (doc) setOverlayLayers(doc);
       // Returning with prior work → open collapsed; a fresh visitor sees the gallery.
@@ -3994,7 +3981,8 @@ export default function App() {
   /* ── Save library/history to storage ── */
   useEffect(() => { if (ready && library.length >= 0) sSet(SK_LIB, library); }, [library, ready]);
   useEffect(() => { if (ready && history.length >= 0) sSet(SK_HIST, history); }, [history, ready]);
-  useEffect(() => { if (ready) sSet(SK_OVL, overlays); }, [overlays, ready]);
+  // Official brand assets are cloud-authoritative — never persisted locally.
+  useEffect(() => { if (ready) sSet(SK_OVL, overlays.filter(o => !o.official)); }, [overlays, ready]);
   useEffect(() => { if (ready) sSet(SK_TPL, designTemplates); }, [designTemplates, ready]);
 
   /* ── (WP-W) Session init — restore the current session or mint a new one ──
@@ -7876,16 +7864,8 @@ export default function App() {
     const a = overlays.find(o => o.id === layer.assetId);
     return deriveFromMaster(layer.master, a?.kind || "center", a?.ratio || 1, W, H);
   };
-  const uploadOverlay = async (file) => {
-    if (!file) return;
-    const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
-    const img = await imgFrom(dataUrl);
-    if (!img) { alert("Could not read that file."); return; }
-    const { kind, ratio } = classifyOverlay(img);
-    const id = "ov_" + Date.now().toString(36);
-    overlayImgs.current[id] = img;
-    setOverlays(prev => [{ id, name:file.name.replace(/\.[^.]+$/, ""), dataUrl, kind, ratio, category:"overlays" }, ...prev]);
-  };
+  // (Declutter item 7) uploadOverlay left the editor — decoration enters the
+  // brand ONLY through the Brand kit admin page (official assets).
   // Tap a shape: add it once (through THE pipeline), or if placed, toggle off.
   const toggleOverlay = (asset) => {
     const existing = overlayLayers.find(l => l.assetId === asset.id);
@@ -8856,14 +8836,12 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
               {petals.map(shapeTile)}
             </div>
+            {/* (Declutter item 7, ratified) The free-form "Add new" SVG/PNG uploader
+                left the editor — decoration enters the brand ONLY via the Brand kit
+                admin page (official assets, served to everyone from /api/brand-assets). */}
             <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
               {decorations.map(shapeTile)}
-              <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG decoration"
-                style={{width:"100%",aspectRatio:"1/1",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:5,border:`1px dashed ${B.ash}88`,borderRadius:10,background:"transparent",cursor:"pointer",fontFamily:FU.subtitle,fontSize:9,fontWeight:600,color:B.burnham,letterSpacing:0.5,textTransform:"uppercase",textAlign:"center",lineHeight:1.25,padding:8}}>
-                <span style={{fontSize:20,lineHeight:1}}>＋</span>
-                Add new
-              </button>
             </div>
           </>
         );
@@ -9188,8 +9166,6 @@ export default function App() {
           AND the photo inspector regardless of what is mounted. */}
       <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}}
         onChange={e=>{const f=e.target.files?.[0];if(f)loadFile(f);e.target.value="";}} />
-      <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" style={{display:"none"}}
-        onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} />
 
       {/* ── TOP BAR — GLOBALS ONLY (WP-V Stage 2, §2.4): format, post type,
             templates, add, export, undo. Per-element controls exist ONLY in

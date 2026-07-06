@@ -125,6 +125,11 @@ alter table design_sessions add column if not exists group_title  text;
 alter table design_sessions add column if not exists group_order  int;
 create index if not exists design_sessions_group_idx on design_sessions (brand_id, group_id, group_order);
 
+-- Official decorative assets (Declutter item 7, 2026-07-06): stored as OBJECTS
+-- in the existing PUBLIC `logos` bucket under the `brand-assets/` prefix (see
+-- app/api/brand-assets/route.js) — no table needed. Metadata rides in the
+-- object name: brand-assets/<ts>__<kind>__<ratio*1000>__<name>.<svg|png>
+
 -- AI feedback events (WP-W / self-improvement-loop §1 — the capture layer).
 -- One row per chat turn: the user's verbatim message, the patch emitted, a
 -- compact before/after design diff, the renderTruth honesty verdict (incl. any

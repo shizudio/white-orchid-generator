@@ -1,6 +1,39 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Nav from '@/components/Nav';
+
+// ── Decorative-asset classification (Declutter item 7) ───────────────────────
+// Mirrors the classifier the editor used for its (now removed) free-form
+// uploader: sample where the ink sits to decide frame / strip / corner /
+// center, so + Add places the asset sensibly on first tap.
+function classifyOverlayImage(img) {
+  const N = 64;
+  const ratio = (img.width / img.height) || 1;
+  try {
+    const cv = document.createElement('canvas'); cv.width = N; cv.height = N;
+    const x = cv.getContext('2d');
+    const s = Math.min(N / img.width, N / img.height);
+    const dw = img.width * s, dh = img.height * s;
+    x.drawImage(img, (N - dw) / 2, (N - dh) / 2, dw, dh);
+    const d = x.getImageData(0, 0, N, N).data;
+    let minX = N, minY = N, maxX = 0, maxY = 0, ink = 0;
+    for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) {
+      if (d[(yy * N + xx) * 4 + 3] > 20) { ink++; if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (yy < minY) minY = yy; if (yy > maxY) maxY = yy; }
+    }
+    if (ink === 0) return { kind: 'center', ratio };
+    const bw = maxX - minX, bh = maxY - minY, coverage = ink / (N * N);
+    const edges = (minX <= 2 ? 1 : 0) + (minY <= 2 ? 1 : 0) + (maxX >= N - 3 ? 1 : 0) + (maxY >= N - 3 ? 1 : 0);
+    let centerInk = 0, centerN = 0;
+    for (let yy = Math.floor(N * 0.35); yy < N * 0.65; yy++) for (let xx = Math.floor(N * 0.35); xx < N * 0.65; xx++) { centerN++; if (d[(yy * N + xx) * 4 + 3] > 20) centerInk++; }
+    const hollow = centerInk / centerN < 0.15;
+    if (edges >= 4 && hollow) return { kind: 'frame', ratio };
+    if (edges >= 3) return { kind: 'frame', ratio };
+    if (bw >= N * 0.7 && bh <= N * 0.45) return { kind: 'strip', ratio };
+    if (bh >= N * 0.7 && bw <= N * 0.45) return { kind: 'strip', ratio };
+    if (coverage < 0.2) return { kind: 'corner', ratio };
+    return { kind: 'center', ratio };
+  } catch { return { kind: 'center', ratio }; }
+}
 
 export default function BrandKitPage() {
   const [kit, setKit] = useState(null);
@@ -8,9 +41,49 @@ export default function BrandKitPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
 
+  // (Declutter item 7) Official decorative assets — uploaded HERE (owner-only
+  // surface), served to everyone in the editor's + Add → Shapes/Decoration.
+  const [assets, setAssets] = useState([]);
+  const [assetsConfigured, setAssetsConfigured] = useState(true);
+  const [assetNote, setAssetNote] = useState('');
+  const [assetBusy, setAssetBusy] = useState(false);
+  const assetInputRef = useRef(null);
+
   useEffect(() => {
     fetch('/api/brand').then(r => r.json()).then(d => { if (d.error) setError(d.error); else setKit(d); });
+    fetch('/api/brand-assets').then(r => r.json()).then(d => {
+      setAssetsConfigured(d?.configured !== false);
+      setAssets(Array.isArray(d?.assets) ? d.assets : []);
+    }).catch(() => setAssetsConfigured(false));
   }, []);
+
+  const uploadAsset = async (file) => {
+    if (!file || assetBusy) return;
+    if (!/image\/(svg\+xml|png)/.test(file.type)) { setAssetNote('Please choose an SVG or PNG file.'); return; }
+    if (file.size > 300 * 1024) { setAssetNote('Keep decorative assets under ~300KB.'); return; }
+    setAssetBusy(true); setAssetNote('');
+    try {
+      const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+      const img = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = dataUrl; });
+      const { kind, ratio } = img ? classifyOverlayImage(img) : { kind: 'center', ratio: 1 };
+      const name = file.name.replace(/\.[^.]+$/, '');
+      const res = await fetch('/api/brand-assets', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, dataUrl, kind, ratio }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (d?.asset?.src) { setAssets(prev => [d.asset, ...prev]); setAssetNote('Added — it’s now in the editor’s ＋ Add gallery for everyone.'); }
+      else if (d?.configured === false) { setAssetsConfigured(false); setAssetNote(d.error || 'Cloud storage isn’t configured — assets can’t be shared yet.'); }
+      else setAssetNote(d?.error || 'That upload didn’t go through — please try again.');
+    } finally {
+      setAssetBusy(false);
+    }
+  };
+
+  const deleteAsset = async (id) => {
+    setAssets(prev => prev.filter(a => a.id !== id));
+    try { await fetch(`/api/brand-assets?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch { /* list already updated */ }
+  };
 
   const save = async () => {
     setSaving(true); setSaved(false);
@@ -89,6 +162,47 @@ export default function BrandKitPage() {
               </div>
             ))}
           </div>
+        </section>
+
+        <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
+
+        {/* Decorative assets (Declutter item 7) — the owner uploads official
+            SVG/PNG marks here; they appear in the editor's + Add → Shapes/
+            Decoration for everyone. The editor itself no longer has an uploader. */}
+        <section style={{ marginBottom: 48 }}>
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Decorative assets</div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 16, maxWidth: 520 }}>
+            Official decoration marks (SVG or PNG). Anything uploaded here becomes available to every staff member in the studio’s ＋ Add gallery — this is the only place new decorative art enters the brand.
+          </p>
+          <input ref={assetInputRef} type="file" accept="image/svg+xml,image/png" style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadAsset(f); e.target.value = ''; }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 12 }}>
+            <button type="button" onClick={() => assetInputRef.current?.click()} disabled={assetBusy}
+              style={{ aspectRatio: '1/1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
+                border: '1px dashed var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--bg-raised)', cursor: assetBusy ? 'wait' : 'pointer',
+                fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)' }}>
+              <span style={{ fontSize: 22, lineHeight: 1 }}>＋</span>
+              {assetBusy ? 'Uploading…' : 'Upload SVG/PNG'}
+            </button>
+            {assets.map(a => (
+              <div key={a.id} style={{ position: 'relative' }}>
+                <div style={{ aspectRatio: '1/1', display: 'grid', placeItems: 'center', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--bg-raised)', padding: 10, overflow: 'hidden' }}>
+                  <img src={a.src} alt={a.name} style={{ maxWidth: '100%', maxHeight: '78%', objectFit: 'contain' }} />
+                </div>
+                <button type="button" title={`Remove ${a.name}`} aria-label={`Remove ${a.name}`} onClick={() => deleteAsset(a.id)}
+                  style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, border: 'none', background: 'var(--fg-strong)', color: '#fff', fontSize: 12, lineHeight: '20px', cursor: 'pointer', padding: 0 }}>×</button>
+                <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--fg-muted)', marginTop: 6, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+              </div>
+            ))}
+          </div>
+          {!assetsConfigured && (
+            <p role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--fg-muted)', marginTop: 12 }}>
+              Cloud storage isn’t configured, so shared decorative assets are unavailable — the studio keeps its built-in petal shapes.
+            </p>
+          )}
+          {assetNote && assetsConfigured && (
+            <p role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--tw-celadon-deep)', marginTop: 12 }}>{assetNote}</p>
+          )}
         </section>
 
         <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
