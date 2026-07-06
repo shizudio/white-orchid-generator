@@ -8373,6 +8373,7 @@ export default function App() {
           onFix={applyReadyFix}
           onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
           currentDim={dimensionId}
+          acks={acks}
         />
         <div style={{display:"flex",gap:8,marginTop:14}}>
           <button onClick={()=>{setAuditOpen(true);setTopMenu(null);}} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
@@ -8921,7 +8922,20 @@ function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
   );
 }
 
-function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim }) {
+// (Advisor dots) A checklist-level ack match: an issue on a format is "okayed"
+// when any stored ack shares its dimensionId AND its issue id (or category). The
+// list view can't fingerprint non-live formats, so it matches format+id/category
+// — honest for a summary; the canvas dots do the geometry-precise re-surfacing.
+function issueOkayed(acks, dimensionId, issue) {
+  if (!acks || typeof acks !== "object") return false;
+  for (const a of Object.values(acks)) {
+    if (!a || a.dimensionId !== dimensionId) continue;
+    if (a.issueId === issue.id || (a.category && a.category === issue.category)) return true;
+  }
+  return false;
+}
+
+function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim, acks }) {
   const formats = check?.formats || [];
   const loading = !check;
   const need = check?.needCount || 0;
@@ -8942,28 +8956,40 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
           {formats.map(f=>{
             const isOpen = expanded===f.dimensionId;
             const label = READY_LABELS[f.dimensionId] || f.dimensionId;
+            // Split this format's issues into still-open vs okayed ("Keep it this
+            // way"). Okayed notes stay listed (honest wording) under a collapsed
+            // line; only open issues count toward the "N fixes" affordance.
+            const okayed = (f.issues || []).filter(iss => issueOkayed(acks, f.dimensionId, iss));
+            const open = (f.issues || []).filter(iss => !issueOkayed(acks, f.dimensionId, iss));
+            const allOkayed = !f.ready && open.length === 0 && okayed.length > 0;
             return (
               <div key={f.dimensionId}>
                 <button type="button"
-                  onClick={()=>{ if(f.ready) return; setExpanded(isOpen?null:f.dimensionId); if(!isOpen) onSwitchFormat&&onSwitchFormat(f.dimensionId); }}
+                  onClick={()=>{ if(f.ready&&!okayed.length) return; setExpanded(isOpen?null:f.dimensionId); if(!isOpen) onSwitchFormat&&onSwitchFormat(f.dimensionId); }}
                   aria-expanded={isOpen}
                   style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"7px 2px",background:"none",border:"none",borderRadius:6,
-                    cursor:f.ready?"default":"pointer",textAlign:"left",fontFamily:F.body}}>
+                    cursor:(f.ready&&!okayed.length)?"default":"pointer",textAlign:"left",fontFamily:F.body}}>
                   {/* (WP-Y5b) calm marks: celadon check = ready · soft wisteria dot
-                      (no "!", no red) = worth a look. Matches the strip's tone. */}
-                  <span aria-hidden="true" style={{width:15,height:15,flexShrink:0,display:"grid",placeItems:"center",borderRadius:"50%",
+                      (no "!", no red) = worth a look. A format whose remaining
+                      issues are all okayed shows a "your call" celadon-outline
+                      check (distinct only via the row's wording + tooltip). */}
+                  <span aria-hidden="true" title={f.ready?"Ready to post":allOkayed?"Ready — includes choices you okayed":"Worth a look"}
+                    style={{width:15,height:15,flexShrink:0,display:"grid",placeItems:"center",borderRadius:"50%",
                     fontSize:10,fontWeight:700,lineHeight:1,
-                    background:f.ready?`${B.celadon}66`:B.wisteria,color:f.ready?B.burnham:"transparent"}}>
-                    {f.ready?"✓":""}
+                    background:f.ready?`${B.celadon}66`:allOkayed?"#fff":B.wisteria,
+                    border:allOkayed?`1.5px solid ${B.celadonDeep}`:"none",
+                    color:f.ready?B.burnham:allOkayed?B.celadonDeep:"transparent"}}>
+                    {f.ready||allOkayed?"✓":""}
                   </span>
                   <span style={{flex:1,fontSize:12,color:B.jet,fontWeight:currentDim===f.dimensionId?600:400}}>{label}</span>
-                  <span style={{fontSize:11,color:f.ready?B.ash:B.celadonDeep,fontFamily:F.body}}>
-                    {f.ready ? "Ready" : `${f.issues.length} ${f.issues.length===1?"fix":"fixes"}${isOpen?" ▾":" ▸"}`}
+                  <span style={{fontSize:11,color:(f.ready||allOkayed)?B.ash:B.celadonDeep,fontFamily:F.body}}>
+                    {open.length ? `${open.length} ${open.length===1?"fix":"fixes"}${isOpen?" ▾":" ▸"}`
+                      : allOkayed ? `your call${isOpen?" ▾":" ▸"}` : "Ready"}
                   </span>
                 </button>
-                {isOpen && !f.ready && (
+                {isOpen && (open.length>0 || okayed.length>0) && (
                   <div style={{padding:"2px 2px 8px 25px",display:"flex",flexDirection:"column",gap:8}}>
-                    {f.issues.map((iss,i)=>(
+                    {open.map((iss,i)=>(
                       <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:5}}>
                         <span style={{fontSize:11.5,color:B.jet,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
                         {iss.fix ? (
@@ -8977,6 +9003,16 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
                         )}
                       </div>
                     ))}
+                    {okayed.length>0 && (
+                      <div style={{marginTop:open.length?6:0,paddingTop:open.length?8:0,borderTop:open.length?`1px solid ${B.ash}22`:"none"}}>
+                        <span style={{fontSize:9.5,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.6,textTransform:"uppercase",color:B.celadonDeep}}>Notes you've okayed</span>
+                        <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6}}>
+                          {okayed.map((iss,i)=>(
+                            <span key={iss.id||i} style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
