@@ -2617,6 +2617,10 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [brandKit, setBrandKit] = useState(null);
+  // (P1 item c) bumped after a DB logo_variants fetch replaces module-scope
+  // LOGO_VARIANTS in place, so effects that read it re-run and pick up the
+  // new list (see the /api/logo-variants fetch further down).
+  const [logoVariantsVersion, setLogoVariantsVersion] = useState(0);
   const [postType, setPostType] = useState("photo_logo");
   // Live post type aliased so renderScene can honour an offscreen postTypeOverride
   // (used by the __woLegacyDupGuard regression sweep) without shadowing every
@@ -3922,6 +3926,23 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // (P1 item c) DB-hydrated logo variants — degrades to the hardcoded
+  // DEFAULT_LOGO_VARIANTS fallback (identical values today) on any failure.
+  // Replaces the module-scope LOGO_VARIANTS array in place, then bumps a
+  // version counter so effects/renders that read it refresh.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/logo-variants')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (cancelled || !d || d.configured === false || !Array.isArray(d.variants) || !d.variants.length) return;
+        LOGO_VARIANTS = d.variants;
+        setLogoVariantsVersion(v => v + 1);
+      })
+      .catch(() => {}); // Built-in LOGO_VARIANTS fallback keeps the editor usable offline.
+    return () => { cancelled = true; };
+  }, []);
+
   // Keep editor chrome screen-sized while the responsive preview changes size.
   useEffect(() => {
     const shell = canvasShellRef.current;
@@ -4126,7 +4147,7 @@ export default function App() {
       imgFrom(v.src).then(img => { if (img) logoVariantImgs.current[v.id] = img; })
     )).then(() => { if (!cancelled && archetypeId) drawRef.current?.("drawRef-async"); });
     return () => { cancelled = true; };
-  }, [selectedLogoId, selectedLogoVariant, archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedLogoId, selectedLogoVariant, archetypeId, logoVariantsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const _logoInkLum = (color) => color === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64);
   // Resolve the readable logo variant for a field of luminance `fieldLum`: green on
   // light fields, ivory on dark (spec §3 / the known ivory-on-ivory nit). Returns
