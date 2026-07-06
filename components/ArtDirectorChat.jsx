@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { patchHasChanges, PATCH_KEY_LABELS } from '@/lib/design-patch';
 import { logFeedback, enrichVerdict, newTurnId } from '@/lib/sessions';
+import { DEFAULT_ASSISTANT_NAME } from '@/lib/brand-defaults';
 
 // Build the "changed: …" line from the keys the editor ACTUALLY changed
 // (true diffs), not the raw patch — the model sometimes echoes unchanged fields.
@@ -1086,12 +1087,12 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   chips.push({ label: 'New post', act: handleNewPost });
 
   return (
-    <section className="wo-chat" aria-label="Orchid, your design helper">
+    <section className="wo-chat" aria-label={`${DEFAULT_ASSISTANT_NAME}, your design helper`}>
       <header className="wo-chat-head">
         {/* (D1 item 9) A warm, named helper — not tracked-caps "ART DIRECTOR",
             which reads as intimidating designer-speak to a preschool teacher. */}
         <span className="wo-chat-title">
-          <span className="wo-chat-name">Orchid</span>
+          <span className="wo-chat-name">{DEFAULT_ASSISTANT_NAME}</span>
           <span className="wo-chat-sub">your design helper</span>
         </span>
         {canHistory && (
@@ -1284,7 +1285,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           onKeyDown={onKeyDown}
           rows={1}
           placeholder="Say it to change it…"
-          aria-label="Message Orchid, your design helper"
+          aria-label={`Message ${DEFAULT_ASSISTANT_NAME}, your design helper`}
           disabled={loading}
         />
         <button type="submit" aria-label="Send" disabled={loading || !input.trim()}>↑</button>

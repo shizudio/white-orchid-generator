@@ -7,6 +7,7 @@ import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
+import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
    DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
@@ -24,27 +25,13 @@ import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, save
 const DEV_HOOKS = process.env.NODE_ENV !== "production";
 const TEST_HOOKS = DEV_HOOKS || process.env.NEXT_PUBLIC_WO_TEST_HOOKS === "1";
 
-/* ───────── BRAND ───────── */
-const B = {
-  burnham:"#254E48", whiteSmoke:"#F5F6E7", wisteria:"#DEC5D8",
-  tangerine:"#F6644E", yellowGreen:"#A5CF61", celadon:"#B4D6C0",
-  ash:"#D1C8C8", jet:"#282B28",
-  burnhamDk:"#1B3B36", celadonDeep:"#7FA88C",
-  // Curated pastel field family (spec §3 colour discipline, rev: childcare set).
-  // Low-chroma mid-high-value tints that read "premium nursery" beside burnham ink +
-  // ivory. Used as SOLID BACKGROUND FIELDS (the light-share of the feed), never as a
-  // second accent. terracotta is the one warm/saturated member (the §2.12 die-cut).
-  dustyPink:"#E7C9CC", butter:"#F2E2A8", sky:"#C4D8E2",
-  sage:"#C3D2BC", terracotta:"#D08C6E", lilac:"#D6C8E0",
-};
-
-const F = {
-  title:"'Romie','Cormorant Garamond',Georgia,serif",
-  quote:"'Romie','Cormorant Garamond',Georgia,serif",
-  subtitle:"'Syne','Helvetica Neue',sans-serif",
-  body:"'Fira Sans','Helvetica Neue',sans-serif",
-  logo:"'Aboreto',sans-serif",
-};
+/* ───────── BRAND ─────────
+   Defaults now live in lib/brand-defaults.js (multi-tenancy P1 — the single
+   source of truth for every White-Orchid-specific constant). B/F are fresh
+   MUTABLE copies (applyBrandKit below writes into them in place when a live
+   brand_kit row loads), so each stays module-local exactly as before. */
+const B = { ...DEFAULT_PALETTE };
+const F = { ...DEFAULT_FONTS };
 // Load fonts from local public/fonts
 const FONT_URL = null; // Fonts are loaded via globals.css @font-face
 const POST_TYPES = [
@@ -1201,24 +1188,10 @@ const fontMultOf=(fontSizes,role)=>FONT_SIZE_STEPS.find(s=>s.id===((fontSizes&&f
      "square"     — near-1:1 composed lockup: p4 (1.15), s1 (1.15).
      "mark"       — mark-only glyph/badge (AR≈1, no wordmark): p-circle, p-bg. Small corners.
    `color` ("green"|"ivory") drives dark/light field contrast (ivory on dark, green on light). */
-const LOGO_VARIANTS = [
-  // Primary
-  { id:"p1-green",  label:"Primary 1",  group:"primary",  color:"green", shape:"horizontal", src:"/assets/logos/primary/primary-1-green.svg" },
-  { id:"p1-ivory",  label:"Primary 1",  group:"primary",  color:"ivory", shape:"horizontal", src:"/assets/logos/primary/primary-1-ivory.svg" },
-  { id:"p2-green",  label:"Primary 2",  group:"primary",  color:"green", shape:"horizontal", wide:true, src:"/assets/logos/primary/primary-2-green.svg" },
-  { id:"p2-ivory",  label:"Primary 2",  group:"primary",  color:"ivory", shape:"horizontal", wide:true, src:"/assets/logos/primary/primary-2-ivory.svg" },
-  { id:"p3-green",  label:"Primary 3",  group:"primary",  color:"green", shape:"stacked", src:"/assets/logos/primary/primary-3-green.svg" },
-  { id:"p3-ivory",  label:"Primary 3",  group:"primary",  color:"ivory", shape:"stacked", src:"/assets/logos/primary/primary-3-flat-ivory.svg" },
-  { id:"p3f-green", label:"Primary 3 Flat", group:"primary", color:"green", shape:"stacked", src:"/assets/logos/primary/primary-3-flat-green.svg" },
-  { id:"p4",        label:"Primary 4",  group:"primary",  color:"green", shape:"square", src:"/assets/logos/primary/primary-4.svg" },
-  { id:"p-central", label:"Central",    group:"primary",  color:"green", shape:"horizontal", src:"/assets/logos/primary/primary-central-green.svg" },
-  { id:"p-circle",  label:"Circle",     group:"primary",  color:"green", shape:"mark", src:"/assets/logos/primary/primary-circle.svg" },
-  { id:"p-bg",      label:"With BG",    group:"primary",  color:"green", shape:"mark", src:"/assets/logos/primary/primary-bg-green.svg" },
-  // Secondary
-  { id:"s1-green",  label:"Secondary 1", group:"secondary", color:"green", shape:"square", src:"/assets/logos/secondary/secondary-1-green.svg" },
-  { id:"s1-ivory",  label:"Secondary 1", group:"secondary", color:"ivory", shape:"square", src:"/assets/logos/secondary/secondary-1-ivory.svg" },
-  { id:"s2-green",  label:"Secondary 2", group:"secondary", color:"green", shape:"horizontal", src:"/assets/logos/secondary/secondary-2-green.svg" },
-];
+// Fallback = lib/brand-defaults.js DEFAULT_LOGO_VARIANTS (identical values —
+// pixel-identity contract). `let` + fresh copy so a future DB-hydrated
+// logo_variants load (P1 item c) can replace the contents in place.
+let LOGO_VARIANTS = [...DEFAULT_LOGO_VARIANTS];
 
 // (Commit 2) CONTEXT-AWARE BRAND LOGO SELECTION + ROTATION. Given the render format, the
 // logo SLOT (corner-mark vs a lockup beside/above text), the FIELD luminance, and a
@@ -1780,7 +1753,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       ctx.textAlign=it.align||"left"; ctx.textBaseline="alphabetic";
       ctx.letterSpacing=`${0.07*s}px`;
       const tx=it.x*w;
-      ctx.fillText(String(it.text==null?"thewhiteorchid.co":it.text), tx, it.y*h);
+      ctx.fillText(String(it.text==null?DEFAULT_FURNITURE_TEXT.counterweight:it.text), tx, it.y*h);
       ctx.letterSpacing="0px";
       if(onDrawn) onDrawn(it._role||it._key||`furn_${it.type}`, bx);
     }else if(it.type==="badge"){
@@ -1794,7 +1767,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       if(!pillFill) continue;
       const bs=(it.size||0.024)*h;
       const padX=bs*0.9, padY=bs*0.55;
-      const txt=String(it.text==null?"NOW ENROLLING":it.text).toUpperCase();
+      const txt=String(it.text==null?DEFAULT_FURNITURE_TEXT.badge:it.text).toUpperCase();
       ctx.font=`600 ${bs}px ${F.subtitle}`; ctx.letterSpacing=`${0.10*bs}px`;
       const tw=ctx.measureText(txt).width+0.10*bs*Math.max(0,txt.length-1);
       const pillW=tw+padX*2, pillH=bs+padY*2;
@@ -1809,7 +1782,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
       ctx.arcTo(px0,py0,px0+pillW,py0,rad);
       ctx.closePath(); ctx.fill();
       // label ink = higher-contrast pole against the pill fill.
-      ctx.fillStyle = hexLuminance(pillFill)>0.5 ? "#254E48" : "#F5F6E7";
+      ctx.fillStyle = hexLuminance(pillFill)>0.5 ? B.burnham : B.whiteSmoke;
       ctx.textAlign="left"; ctx.textBaseline="alphabetic";
       ctx.fillText(txt, px0+padX, py0+padY+bs*0.82);
       ctx.letterSpacing="0px";
@@ -2285,19 +2258,11 @@ function focalToImgT(img,w,h,focal,targetFx,targetFy,userZoom=1){
 /* ───────── OVERLAY ASSETS ───────── */
 const MASTER_DIM = "ig_square"; // square is the master; other formats cascade from it
 
-// Built-in brand overlay shapes (always available in the library)
-const DEFAULT_OVERLAYS = [
-  { id:"orchid-petal", name:"Orchid", src:"/assets/shapes/orchid-petal.svg", kind:"center", ratio:1, category:"overlays", builtin:true },
-  { id:"shape-1", name:"Shape 1", src:"/assets/shapes/shape-1.svg", kind:"center", ratio:169/207, category:"overlays", builtin:true },
-  { id:"shape-2", name:"Shape 2", src:"/assets/shapes/shape-2.svg", kind:"center", ratio:217/196, category:"overlays", builtin:true },
-  { id:"shape-3", name:"Shape 3", src:"/assets/shapes/shape-3.svg", kind:"center", ratio:173/207, category:"overlays", builtin:true },
-  { id:"acc-arrow", name:"Arrow", src:"/assets/accessories/arrow.svg", kind:"accessory", ratio:3, category:"accessories", builtin:true },
-  { id:"acc-curve", name:"Curved Arrow", src:"/assets/accessories/curved-arrow.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
-  { id:"acc-spark", name:"Spark", src:"/assets/accessories/spark.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
-  { id:"acc-plus", name:"Plus", src:"/assets/accessories/plus.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
-  { id:"acc-ring", name:"Ring", src:"/assets/accessories/ring.svg", kind:"accessory", ratio:1, category:"accessories", builtin:true },
-  { id:"acc-wave", name:"Wave", src:"/assets/accessories/wave.svg", kind:"accessory", ratio:3, category:"accessories", builtin:true },
-];
+// Built-in brand overlay shapes (always available in the library). Fallback =
+// lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS (identical values — pixel-
+// identity contract). Official brand-assets uploads are merged in at load
+// (see the /api/brand-assets fetch further down) on top of this fallback.
+const DEFAULT_OVERLAYS = [...DEFAULT_OVERLAY_ASSETS];
 
 /* ───────── STARTER TEMPLATES ─────────
    Built-in, complete design presets a preschool admin can recognise by outcome.
@@ -9220,7 +9185,7 @@ export default function App() {
           </div>
           {tiles.length===0 ? (
             <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:420}}>
-              No saved posts yet — describe one to Orchid and it will appear here automatically.
+              No saved posts yet — describe one to {DEFAULT_ASSISTANT_NAME} and it will appear here automatically.
             </p>
           ) : (
             <div className="wo-feedgal-grid">
