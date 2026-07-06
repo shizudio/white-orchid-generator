@@ -4254,6 +4254,14 @@ export default function App() {
     // Offscreen renders (the legacy duplicate-draw guard) may force a specific
     // postType via opts.postTypeOverride; live renders always use the real state.
     const postType = (!live && opts.postTypeOverride) ? opts.postTypeOverride : postTypeLive;
+    // The legacy duplicate-draw guard must exercise the LEGACY stacked painters, not
+    // whatever editorial layout the live design happens to carry. Setting the postType
+    // override alone was insufficient: `editorial` is keyed on heroRegister + role
+    // geometry (both live state), so with an editorial design live (e.g. the default
+    // editorial_split seed) the guard rendered the EDITORIAL single-path and mis-counted
+    // its multi-line hero as "duplicate bands" (a spurious, content-dependent offender).
+    // legacyForce pins editorial=false so the pure archetypeId-null legacy path renders.
+    const legacyForce = (!live && !!opts.legacyForce);
     // (P4 FEED BOARD) A non-live render may inject a per-tile background photo via
     // opts.imageOverride (an already-decoded HTMLImageElement) — this SHADOWS the live
     // mediaObj for the whole render so the feed simulation can place real Higgsfield
@@ -4525,7 +4533,7 @@ export default function App() {
       // geometry + a hero register (materialized archetype OR a manual edit of one) —
       // NOT keyed on archetypeId. Legacy designs (no roles) render the stacked path.
       const rolesGeom=layout.roles||null;
-      const editorial=!!(rolesGeom&&heroRegister);
+      const editorial=!legacyForce&&!!(rolesGeom&&heroRegister);
       // provArch supplies the numeric spec targets (cap frac / ratio) + fullBleed/
       // thinBorder/photoRegion shape. When the user has fully detached (edited copy on
       // a legacy design) provArch is null → non-editorial.
@@ -6385,7 +6393,7 @@ export default function App() {
             const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
             const ctx = c.getContext("2d", { willReadFrequently: true });
             ctx.fillStyle = "#ff00ff"; ctx.fillRect(0, 0, c.width, c.height);   // sentinel = stale prior frame
-            renderScene(ctx, rw, rh, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+            renderScene(ctx, rw, rh, { dimensionId: dm.id, live: false, postTypeOverride: pt, legacyForce: true });
             let ghost = 0;
             // Sample strictly OUTSIDE the (rw,rh) render box — any surviving sentinel
             // magenta here is a stale ghost strip (the stacked second copy).
@@ -6405,7 +6413,7 @@ export default function App() {
             if (BAND_CHECK_TYPES.includes(pt)) {
               const c2 = document.createElement("canvas"); c2.width = dm.w; c2.height = dm.h;
               const x2 = c2.getContext("2d", { willReadFrequently: true });
-              renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt });
+              renderScene(x2, dm.w, dm.h, { dimensionId: dm.id, live: false, postTypeOverride: pt, legacyForce: true });
               const rows = 60, colXs = [0.18, 0.32, 0.5].map(f => Math.floor(dm.w * f));
               let inBand = false, bands = 0;
               for (let r = 0; r < rows; r++) {
