@@ -364,6 +364,27 @@ canvas[role="application"]:focus-visible {
   cursor: pointer;
 }
 .ad-undo-chip:disabled { opacity: 0.4; cursor: not-allowed; }
+/* (WP-W1) Pending-offer chip — the one-tap accept for an offer the assistant just
+   made ("Yes — switch layout"). A filled, primary affordance so the user need not
+   type "yes"; tapping it does the identical deterministic thing. */
+.ad-offer-actions { margin-top: 7px; }
+.ad-offer-chip {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 6px 15px;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--tw-burnham, #254e48);
+  color: #fff;
+  font-family: var(--font-syne, var(--font-body));
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 140ms, opacity 140ms;
+}
+.ad-offer-chip:hover { background: color-mix(in srgb, var(--tw-burnham) 82%, #000); }
+.ad-offer-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .ad-error { font-family: var(--font-body); font-size: 13px; color: #a43c2d; margin: 0; }
 /* (B4) Warm, retryable error block — a failed turn is never a dead end. */
 .ad-error-block { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 4px; }
