@@ -13,3 +13,6 @@ dist
 
 # generated preview exports (local only)
 generated/
+
+# Resident tester isolated production build
+.next-resident/

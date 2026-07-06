@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:resident": "next build && node scripts/resident-tester/run.js"
+    "test:resident": "WO_DIST_DIR=.next-resident next build && node scripts/resident-tester/run.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

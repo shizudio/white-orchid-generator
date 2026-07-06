@@ -25,6 +25,8 @@ const { runFuzz } = require('./fuzz');
 const report = require('./report');
 
 const REPO = path.resolve(__dirname, '../..');
+// Isolated build dir so the tester never fights a running `next dev` over .next.
+const DIST_DIR = process.env.WO_DIST_DIR || '.next-resident';
 const notes = [];
 
 function log(...a) { console.log('[resident]', ...a); }
@@ -86,12 +88,14 @@ async function main() {
   // Guard: refuse to start against a build that is missing its BUILD_ID (a
   // half-written .next from an interrupted build serves MODULE_NOT_FOUND 500s and
   // would make every journey look broken). Fail loud instead of testing a ghost.
-  if (!fs.existsSync(path.join(REPO, '.next', 'BUILD_ID'))) {
-    console.error('[resident] .next/BUILD_ID missing — run `next build` first (or `npm run test:resident`).');
+  if (!fs.existsSync(path.join(REPO, DIST_DIR, 'BUILD_ID'))) {
+    console.error(`[resident] ${DIST_DIR}/BUILD_ID missing — build first: WO_DIST_DIR=${DIST_DIR} next build (or \`npm run test:resident\`).`);
     process.exit(2);
   }
 
-  const env = { ...process.env, PORT: String(config.port), HIGGSFIELD_API_KEY: '', HIGGSFIELD_API_SECRET: '' };
+  // WO_DIST_DIR makes `next start` serve the isolated build dir, so a concurrent
+  // `next dev` on another port can't corrupt what we test.
+  const env = { ...process.env, WO_DIST_DIR: DIST_DIR, PORT: String(config.port), HIGGSFIELD_API_KEY: '', HIGGSFIELD_API_SECRET: '' };
   log(`starting: next start -p ${config.port} (Higgsfield keys unset → photo gen mocked)`);
   // detached:true → the child leads its own process group so we can signal the
   // whole tree (npx + next-server grandchild) on teardown and never orphan it.
