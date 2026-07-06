@@ -13,7 +13,7 @@
 // It does NOT run `next build` itself (build is slow + noisy) — build once, then
 // run. The runner starts `next start` on the spare port and tears it down cleanly.
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -78,15 +78,46 @@ async function main() {
   // Unset Higgsfield creds → higgsfieldConfigured() is false → /api/design-generate
   // returns { unconfigured } → the client falls back to Library/sample photos.
   // ZERO Higgsfield credits by construction; the Playwright route-block is the belt.
+  // Free the port first — a lingering next-server from a prior run (npx spawns
+  // next-server as a GRANDCHILD, which a plain kill can orphan) would serve a stale
+  // .next and cause MODULE_NOT_FOUND after a rebuild. Belt: kill the whole group.
+  try { execSync(`lsof -ti:${config.port} | xargs kill -9`, { stdio: 'ignore' }); } catch {}
+
+  // Guard: refuse to start against a build that is missing its BUILD_ID (a
+  // half-written .next from an interrupted build serves MODULE_NOT_FOUND 500s and
+  // would make every journey look broken). Fail loud instead of testing a ghost.
+  if (!fs.existsSync(path.join(REPO, '.next', 'BUILD_ID'))) {
+    console.error('[resident] .next/BUILD_ID missing — run `next build` first (or `npm run test:resident`).');
+    process.exit(2);
+  }
+
   const env = { ...process.env, PORT: String(config.port), HIGGSFIELD_API_KEY: '', HIGGSFIELD_API_SECRET: '' };
   log(`starting: next start -p ${config.port} (Higgsfield keys unset → photo gen mocked)`);
-  const server = spawn('npx', ['next', 'start', '-p', String(config.port)], { cwd: REPO, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // detached:true → the child leads its own process group so we can signal the
+  // whole tree (npx + next-server grandchild) on teardown and never orphan it.
+  const server = spawn('npx', ['next', 'start', '-p', String(config.port)], { cwd: REPO, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   const serverLog = fs.createWriteStream(path.join(runDir, 'server.log'));
   server.stdout.pipe(serverLog); server.stderr.pipe(serverLog);
 
   let browser;
-  const cleanup = () => { try { server.kill('SIGTERM'); } catch {} try { if (browser) browser.close(); } catch {} };
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return; cleaned = true;
+    try { if (browser) browser.close(); } catch {}
+    // Kill the server's process group (negative pid) so the next-server GRANDCHILD
+    // dies too — the fix for the orphaned-server / corrupted-.next class. Because
+    // the child was spawned `detached`, its pid IS its group leader and is distinct
+    // from OUR group, so signalling -server.pid never kills this runner.
+    try { process.kill(-server.pid, 'SIGKILL'); } catch {}
+    try { server.kill('SIGKILL'); } catch {}
+    // NOTE: we do NOT `lsof -ti:PORT | kill` here — this runner holds CLIENT
+    // sockets to the port (the cloud-verify fetches), so that would kill US
+    // (the SIGKILL/137 self-destruct bug). The process-group kill above is enough.
+  };
+  // On a signal we clean up then exit; the plain `exit` listener is a last-resort
+  // reaper (synchronous only). We deliberately do NOT process.kill our own group.
   process.on('SIGINT', () => { cleanup(); process.exit(130); });
+  process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
   try {
     await waitForServer(config.baseUrl + '/', 90000);

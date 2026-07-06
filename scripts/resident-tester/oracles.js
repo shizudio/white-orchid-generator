@@ -43,12 +43,18 @@ const CLAIM_PATTERNS = [
 // Kept as a string so it can be page.evaluate()'d without bundling.
 const PROBE = `(() => {
   const q = (s) => Array.from(document.querySelectorAll(s));
+  const assistantMsgs = q('.ad-msg--assistant');
+  const lastMsg = assistantMsgs[assistantMsgs.length - 1] || null;
   const bubbles = q('.ad-msg--assistant .ad-bubble').map(el => (el.textContent || '').trim());
-  const lastAssistant = bubbles[bubbles.length - 1] || '';
+  const lastAssistant = lastMsg ? (lastMsg.querySelector('.ad-bubble')?.textContent || '').trim() : (bubbles[bubbles.length - 1] || '');
   const userBubbles = q('.ad-msg--user .ad-bubble').map(el => (el.textContent || '').trim());
   const changedLines = q('.ad-changed').map(el => (el.textContent || '').replace(/^changed:\\s*/, '').trim());
-  const lastChanged = changedLines[changedLines.length - 1] || '';
-  const offerChips = q('.ad-offer-chip').length;
+  // The changed line for THIS turn = the one INSIDE the last assistant message,
+  // not the global last (which may belong to an earlier turn that changed things).
+  const lastChanged = lastMsg
+    ? ((lastMsg.querySelector('.ad-changed')?.textContent || '').replace(/^changed:\\s*/, '').trim())
+    : (changedLines[changedLines.length - 1] || '');
+  const offerChips = lastMsg ? lastMsg.querySelectorAll('.ad-offer-chip').length : q('.ad-offer-chip').length;
   const advisorDots = q('.wo-advisor-dot-hit').length;
 
   // Layout invariants.
