@@ -21,6 +21,15 @@ manifesto, stat, and photo tiles carry NO logo — at most a url line. Our engin
 lockup on every tile → clutter + monotony. Fix: per-archetype/variant `logoUse:
 none | mark | lockup | url-only`; default for most archetypes = none or url-only.
 
+**Logo legibility on photos — never fabricate a backing (client ruling, 2026-07-06).**
+The logo renders ONLY as an official LOGO_VARIANTS asset, verbatim: no scrim, backing
+plate, rounded card, wash, or shadow (the WP-U/A2 remediation is removed). Legibility
+tools are only (a) choosing the best-contrast OFFICIAL variant for the spot (ivory vs
+green ink; mark vs badge vs lockup — the variant-swap still runs) and (b) position. If the
+best official variant still fails the worst-case contrast bar, render it anyway and raise a
+ledger `logo-legibility` finding (advisor dot on the logo) with actions Move-to-a-clearer-
+spot / Edit-it-myself / Keep-it-this-way — we limit options, never invent wrong ones.
+
 ## 3. Tile grammar observed (archetype adjustments + additions)
 - BRAND CARD (new): dark field, horizontal mark+wordmark lockup, italic serif tagline below.
   Open/close of a campaign sequence. Left-aligned, mid-tile.

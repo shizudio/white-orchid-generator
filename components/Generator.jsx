@@ -4389,23 +4389,23 @@ export default function App() {
           auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
         }
       }
-      // ── (WP-U logo-on-photo) CONTRAST GUARANTEE ──────────────────────────────
-      // When the lockup lands on a photo region, sample the ALREADY-DRAWN canvas
-      // under the final box. If the ink can't hit 3:1 against the sampled backing:
-      //  1. swap to the opposite-ink brand variant when THAT reads (green on light,
-      //     ivory on dark) — the cheapest, cleanest remedy;
-      //  2. otherwise drop a subtle LOCALIZED rounded scrim behind the mark (dark
-      //     scrim under ivory ink / ivory scrim under dark ink) — never a wash.
-      // The post-remedy contrast is recorded for the stress assertion (>= 3:1).
-      let effObj=drawObj, effInkLum=drawInkLum, scrim=null;
+      // ── (LOGO-ON-PHOTO LEGIBILITY — brand ruling 2026-07-06) ─────────────────
+      // The logo renders ONLY as an official LOGO_VARIANTS asset, verbatim. NO
+      // fabricated backing: no scrim, no rounded plate, no wash, no shadow. The only
+      // legibility tools are (a) choosing the best-contrast OFFICIAL variant for this
+      // spot (the opposite-ink swap below — it selects among real assets), and (b)
+      // position. If the best official variant STILL fails the worst-case contrast bar,
+      // we render it anyway and RAISE A LEDGER FINDING (advisor dot on the logo) so the
+      // human decides — we limit options rather than invent wrong ones.
+      let effObj=drawObj, effInkLum=drawInkLum;
       if(mediaObj){
         let backing=null;
         try{
           // Sample the ACTUAL drawn lockup rect (not the padded square) at a grid so we
           // capture the backing the ink truly sits on. Track mean AND per-cell contrast
-          // vs the ink — the client's bug was a busy LIGHT photo (high mean → mean
-          // contrast passed) where dark spots (a face, glasses, hair) swallowed the thin
-          // wordmark strokes. Mean contrast is necessary but NOT sufficient on a photo.
+          // vs the ink — a busy LIGHT photo (high mean → mean contrast passes) can still
+          // have dark spots (a face, glasses, hair) that swallow the thin wordmark
+          // strokes. Mean contrast is necessary but NOT sufficient on a photo.
           const N=14,sc=document.createElement("canvas");sc.width=N;sc.height=N;
           const sctx=sc.getContext("2d",{willReadFrequently:true});
           const sx=Math.max(0,_drawnBox.x),sy=Math.max(0,_drawnBox.y);
@@ -4420,49 +4420,67 @@ export default function App() {
             const worst=Math.min(contrastRatio(lo,drawInkLum),contrastRatio(hi,drawInkLum));
             backing={mean,variance,worst};
           }
-        }catch(_){/* canvas tainted / headless — skip, remedy below is best-effort */}
+        }catch(_){/* canvas tainted / headless — skip; nothing fabricated regardless */}
         if(backing){
           // BUSY = enough luminance spread that some region will fight the ink even when
           // the average is fine (stddev threshold tuned to the client's ~0.2 case).
           const busy=Math.sqrt(backing.variance)>0.14;
-          let cr=contrastRatio(backing.mean,effInkLum);
-          // A photo backing is legible only if BOTH the mean AND the worst local cell
-          // clear the bar; on a busy field the worst cell drives the decision.
-          let needsRemedy=(cr<3)||(busy&&backing.worst<3);
-          if(needsRemedy && !logoVariantTouched){
+          const legibleAt=(inkLum)=>{
+            const crMean=contrastRatio(backing.mean,inkLum);
+            const crWorst=busy
+              ? Math.min(contrastRatio(backing.mean-Math.sqrt(backing.variance),inkLum),contrastRatio(backing.mean+Math.sqrt(backing.variance),inkLum))
+              : crMean;
+            return { ok: crMean>=3 && (!busy||crWorst>=3), cr: busy?Math.min(crMean,crWorst):crMean };
+          };
+          let lg=legibleAt(effInkLum);
+          // (a) OFFICIAL-VARIANT SWAP — the only legibility lever besides position. Swap
+          // to the opposite-ink brand variant when THAT reads and the user hasn't pinned a
+          // variant. This picks among REAL assets; it never fabricates anything.
+          if(!lg.ok && !logoVariantTouched){
             const swap=readableLogoForField(backing.mean);
-            // A swap only helps a UNIFORM field; a busy photo fights BOTH inks, so the
-            // swap is accepted only when it clears mean AND (if busy) the worst cell too.
             if(swap){
-              const swMean=contrastRatio(backing.mean,swap.inkLum);
-              const swWorst=Math.min(contrastRatio(backing.mean-Math.sqrt(backing.variance),swap.inkLum),contrastRatio(backing.mean+Math.sqrt(backing.variance),swap.inkLum));
-              if(swMean>=3 && (!busy||swWorst>=3)){ effObj=swap.img; effInkLum=swap.inkLum; cr=swMean; needsRemedy=false; }
+              const swLg=legibleAt(swap.inkLum);
+              if(swLg.ok){ effObj=swap.img; effInkLum=swap.inkLum; lg=swLg; }
             }
           }
-          if(needsRemedy){
-            // A localized scrim replaces the busy backing with a uniform field, so every
-            // stroke of the wordmark reads. ivory ink → dark scrim; green ink → ivory
-            // scrim. A touch more opaque on a truly busy field so texture can't bleed
-            // through the thin wordmark.
-            const light=effInkLum>0.5;
-            scrim={color:light?B.burnham:B.whiteSmoke,alpha:busy?0.72:0.6};
-            cr=contrastRatio(hexLuminance(scrim.color),effInkLum);
+          // If even the best official variant can't clear the bar, RENDER IT ANYWAY and
+          // flag it — the ledger raises a "logo hard to see" finding + dot (see the
+          // audit + computeReadyVerdict). NEVER a fabricated backing.
+          if(live||opts.captureAudit){
+            auditLogo.overPhoto=true;
+            auditLogo.photoContrast=+lg.cr.toFixed(2);
+            auditLogo.photoBusy=busy;
+            auditLogo.photoWorst=+backing.worst.toFixed(2);
+            auditLogo.illegible=!lg.ok;   // ← drives the ledger logo-legibility finding
+            // Suggest a CLEARER legal spot for the "Move to a clearer spot" action: score
+            // the standard corners' backing for the effective ink (worst-case contrast on
+            // a busy field) and keep the best — a real 9-grid position, never fabrication.
+            if(!lg.ok){
+              try{
+                const cand=["top-left","top-right","bottom-left","bottom-right","mid-left","mid-right"];
+                let best=null;
+                for(const p of cand){
+                  const cp=LOGO_POSITIONS[p]; if(!cp) continue;
+                  const [cx,cy]=logoCenter(cp,w,h,lSz);
+                  const bx=Math.max(0,cx),by=Math.max(0,cy),bw=Math.min(w-bx,lSz),bh=Math.min(h-by,lSz);
+                  if(bw<=2||bh<=2) continue;
+                  const N=10,sc2=document.createElement("canvas");sc2.width=N;sc2.height=N;
+                  const s2=sc2.getContext("2d",{willReadFrequently:true});
+                  s2.drawImage(ctx.canvas,bx,by,bw,bh,0,0,N,N);
+                  const dd=s2.getImageData(0,0,N,N).data;let sm=0,sq2=0,nn=0;
+                  for(let i=0;i<dd.length;i+=4){const L=getLuminance(dd[i],dd[i+1],dd[i+2]);sm+=L;sq2+=L*L;nn++;}
+                  const mn=nn?sm/nn:0.5,vr=nn?Math.max(0,sq2/nn-mn*mn):0,sd=Math.sqrt(vr);
+                  const crW=Math.min(contrastRatio(mn-sd,effInkLum),contrastRatio(mn+sd,effInkLum));
+                  if(!best||crW>best.cr) best={pos:p,cr:crW};
+                }
+                // Only suggest a move if a corner is MEANINGFULLY clearer than where it is.
+                auditLogo.suggestPosition=(best&&best.cr>lg.cr+0.4)?best.pos:null;
+              }catch(_){ auditLogo.suggestPosition=null; }
+            }
           }
-          if(live||opts.captureAudit){ auditLogo.overPhoto=true; auditLogo.photoContrast=cr; auditLogo.photoBusy=busy; auditLogo.photoWorst=+backing.worst.toFixed(2); }
         }
       }
-      if(scrim){
-        // (A2) Hug the ACTUAL drawn lockup rect (_drawnBox), not the padded square, so
-        // a wide lockup gets a snug pill behind the mark+wordmark — never an oversized
-        // square wash floating in letterbox space.
-        const pad=Math.min(_dw,_dh)*0.16, rx=_drawnBox.x-pad, ry=_drawnBox.y-pad, rw=_dw+pad*2, rh=_dh+pad*2, rad=Math.min(rw,rh)*0.22;
-        ctx.save(); ctx.globalAlpha=scrim.alpha; ctx.fillStyle=scrim.color;
-        ctx.beginPath();
-        ctx.moveTo(rx+rad,ry);
-        ctx.arcTo(rx+rw,ry,rx+rw,ry+rh,rad); ctx.arcTo(rx+rw,ry+rh,rx,ry+rh,rad);
-        ctx.arcTo(rx,ry+rh,rx,ry,rad); ctx.arcTo(rx,ry,rx+rw,ry,rad);
-        ctx.closePath(); ctx.fill(); ctx.restore();
-      }
+      // The official asset, verbatim — nothing painted behind or around it.
       containDraw(ctx,effObj,lx,ly,lSz,lSz,1);
     };
     // Per-dimension resolved text colour (spec §3). Assigned after the text box is
@@ -5522,9 +5540,14 @@ export default function App() {
         // User-pinned logos are explicit intent (and height-capped on wide formats);
         // the dominance assertion guards the AUTO composition only.
         const logoDominant=!!(!_bookend && !effUserLogoTouched && logoBx && (fontMeta.headline||0)>0 && logoBx.h>1.6*fontMeta.headline);
-        // (WP-U logo-on-photo) contrast assertion: a lockup drawn over a photo must
-        // read at >= 3:1 against its sampled backing (post variant-swap/scrim).
-        const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3);
+        // (logo-on-photo, brand ruling 2026-07-06) The old assertion demanded the lockup
+        // read >= 3:1 via a fabricated scrim. That remediation is REMOVED — the logo is
+        // now the official variant verbatim, and a genuinely illegible spot is RENDERED
+        // ANYWAY + flagged (auditLogo.illegible → the ledger logo-legibility finding). So
+        // the invariant flips: it is NOT a failure for a logo to read <3:1; the failure
+        // would be an illegible logo that WASN'T flagged. This is 1 only in that (should
+        // never happen) case, so __woArchStress still asserts flag-when-illegible.
+        const logoLowContrast=!!(auditLogo.overPhoto && typeof auditLogo.photoContrast==="number" && auditLogo.photoContrast<3 && !auditLogo.illegible);
         // (WP-Y5) Ready-to-post capture: normalized text/logo boxes + fitted font px
         // + canvas dims for the per-format publish gate (thumbnail legibility +
         // platform safe-area). Boxes are the SAME drawn role rects used above.
@@ -6123,7 +6146,7 @@ export default function App() {
      drawn boxes in logical canvas px; we normalize to 0..1 for both the dot anchor
      and the ack geometry fingerprint. Issues without precise geometry return null
      (their dot pins to the canvas top-right; their ack uses the "nogeo" print). */
-  const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "safe-area-logo"]);
+  const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "safe-area-logo", "logo-legibility"]);
   // (One Advice Ledger) The live drawn box (normalized 0..1) for a coarse ledger
   // element token — shared by local readiness issues AND AI-audit findings so both
   // anchor + ack against the SAME geometry. "canvas"/background/photo-with-no-box
@@ -6276,6 +6299,21 @@ export default function App() {
       }
       // [Leave it off] — the ack, honest loss-class wording.
       acts.push(ackAction("Leave it off"));
+      return acts;
+    }
+
+    // LOGO LEGIBILITY (brand ruling): never a fabricated backing — the remedies are a
+    // move to a clearer legal spot, editing it yourself, or keeping it as is.
+    if (issue.id === "logo-legibility") {
+      // [Move to a clearer spot] — deterministic patch to the best-contrast legal
+      // position the render scored. Offered even when the logo is pinned (the click IS
+      // the user's choice); omitted only when no spot is meaningfully clearer.
+      if (issue.logoMoveTo) {
+        acts.push({ label: "Move to a clearer spot", kind: "patch", run: () => applyReadyFix({ logoPosition: issue.logoMoveTo }) });
+      }
+      // [Edit it myself] — deep-link: select the logo + open its inspector.
+      acts.push({ label: "Edit it myself", kind: "deep-link", run: () => { setAdvisorDot(null); selectElement("logo"); } });
+      acts.push(ackAction("Keep it this way"));
       return acts;
     }
 
@@ -6481,7 +6519,7 @@ export default function App() {
             const dr = auditRef.current?.archetypeDrift || {};
             const o = dr.boxOverlaps || 0, cr = dr.outOfMargin ? 1 : 0, mc = dr.midCut || 0;
             const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
-            const ll = dr.logoLowContrast ? 1 : 0;
+            const ll = dr.logoLowContrast ? 1 : 0;   // (brand ruling) = illegible logo NOT flagged (never fabricate a backing; flag instead)
             overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll;
             if (o || cr || mc || sea || dg || ld || ll) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
