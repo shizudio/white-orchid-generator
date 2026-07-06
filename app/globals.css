@@ -1475,20 +1475,24 @@ canvas[role="application"]:focus-visible {
   overflow: hidden;
 }
 
-/* Desktop dock: right edge, inset ABOVE the Art Director FAB (56px + margin)
-   so the two never collide. Below the chat/FAB (z 359/360) in stacking. */
+/* Desktop dock (D1 item 1): an IN-FLOW flex column — a third workspace column
+   the canvas makes room for, NEVER a sheet floating over the artwork. It shares
+   the chat column's sticky, own-scroll behaviour so the preview panel (flex 1)
+   between them shrinks and recenters around it. */
 .wo-inspector-dock {
-  position: fixed;
-  /* (WP-V) The bubbles rail is gone — the inspector docks flush to the right
-     edge, below the top bar, above the Art Director FAB region. */
-  right: 20px;
-  top: 132px;
-  bottom: 96px;
-  width: 300px;
-  max-width: calc(100vw - 40px);
-  max-height: calc(100vh - 200px);
-  z-index: 200;
-  border-radius: var(--radius-lg, 16px);
+  order: 3;
+  flex: 0 0 320px;
+  min-width: 300px;
+  align-self: stretch;
+  height: calc(100vh - 116px);
+  position: sticky;
+  top: 116px;
+  border-left: 1px solid var(--line);
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .wo-inspector-backdrop { display: none; }
@@ -1498,11 +1502,17 @@ canvas[role="application"]:focus-visible {
   .wo-inspector-dock {
     position: fixed;
     left: 0; right: 0; bottom: 0; top: auto;
+    order: 0;
+    flex: none;
+    min-width: 0;
+    align-self: auto;
     width: 100%;
     max-width: 100%;
     max-height: 72vh;
     height: 72vh;
+    border: 1px solid var(--line);
     border-radius: 18px 18px 0 0;
+    box-shadow: 0 24px 70px rgba(37, 78, 72, 0.24);
     z-index: 362;              /* above the FAB (360) so it isn't obscured */
     animation: wo-sheet-up 220ms cubic-bezier(.22,1,.36,1);
   }

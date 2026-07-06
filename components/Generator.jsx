@@ -2875,6 +2875,10 @@ export default function App() {
      the existing EditorChrome flags, and opens the inspector for it. It never
      mutates the design itself. closeInspector() clears selection + closes. */
   const selectElement = (kind, uid=null) => {
+    // (D1 item 1 — panel discipline) One overlay at a time: opening the
+    // contextual inspector CLOSES every top-bar popover + advisory panel so the
+    // inspector is never stacked under another surface.
+    setTopMenu(null); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
     // Reset every selection flag first, then set the one for `kind`.
     setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
     setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
@@ -2890,19 +2894,39 @@ export default function App() {
     setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
     setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
   };
-  // Escape closes the inspector — but not while typing in one of its fields
-  // (there Escape should just blur / be a no-op for the browser).
+  // (D1 item 1 — panel discipline) One overlay at a time. Opening any TOP-BAR
+  // popover closes the inspector + the advisory panels; opening an advisory
+  // panel closes the popover + inspector. selectElement() handles the inverse
+  // (inspector-opens → close the rest). These effects only ever CLOSE OTHER
+  // surfaces, never reopen, so they can't loop.
   useEffect(() => {
-    if (inspectorEl == null) return;
+    if (!topMenu) return;
+    closeInspector(); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
+  }, [topMenu]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!auditOpen && !captionOpen) return;
+    closeInspector(); setTopMenu(null);
+    if (auditOpen) setCaptionOpen(false);
+    if (captionOpen) setAuditOpen(false);
+  }, [auditOpen, captionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Escape closes the ACTIVE overlay (top-bar popover, advisory panel, or the
+  // contextual inspector) — but not while typing in one of its fields (there
+  // Escape should just blur). One handler, always mounted (D1 item 1b).
+  useEffect(() => {
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) { t.blur(); return; }
-      closeInspector();
+      if (topMenu) { setTopMenu(null); return; }
+      if (auditOpen) { setAuditOpen(false); return; }
+      if (captionOpen) { setCaptionOpen(false); return; }
+      if (showLibPicker) { setShowLibPicker(false); return; }
+      if (inspectorEl != null) { closeInspector(); return; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectorEl]);
+  }, [inspectorEl, topMenu, auditOpen, captionOpen, showLibPicker]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── UNIFIED AI APPLY PATH ──
      applyDesignPatch(patch) is the ONE place any AI-driven change touches the
@@ -8279,7 +8303,18 @@ export default function App() {
           })()}
 
         </div>
+        {/* ── CONTEXTUAL INSPECTOR (D1 item 1) — a flex SIBLING of the canvas, not
+            a sheet floating over it. On desktop it is a column (order 3): the
+            preview panel (flex 1) shrinks and recenters so nothing the inspector
+            edits is ever occluded. On mobile CSS turns it into a bottom sheet
+            (with the backdrop mounted below). ── */}
+        {inspectorInfo && renderInspectorPanel()}
       </div>
+      {/* Mobile-only dismiss backdrop for the inspector bottom-sheet (desktop:
+          display:none — the inspector is an in-flow column, nothing to dim). */}
+      {inspectorInfo && (
+        <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
+      )}
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
       {/* AI Audit — advisory design review. Top-level mount (never inside a
           transformed ancestor) so its fixed panel anchors to the viewport. */}
@@ -8302,16 +8337,6 @@ export default function App() {
         designState={chatDesignState}
         dimensionId={dimensionId}
       />
-      {/* ── CONTEXTUAL INSPECTOR — top-level mount so position:fixed anchors to
-          the viewport (no transformed-ancestor trap). Desktop docks to the right
-          inset above the Art Director FAB; mobile renders as a bottom sheet with
-          a dismiss backdrop. A single instance renders; CSS picks the layout. */}
-      {inspectorInfo && (
-        <>
-          <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
-          {renderInspectorPanel()}
-        </>
-      )}
     </div>
   );
 }
