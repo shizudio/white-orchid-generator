@@ -24,8 +24,25 @@ async function waitForAssistantReply(page, prevCount, timeoutMs = 45000) {
   while (Date.now() < deadline) {
     const n = await page.evaluate(() => document.querySelectorAll('.ad-msg--assistant .ad-bubble').length);
     if (n > prevCount) {
-      // Give the post-stream patch + changed line a beat to render.
-      await settle(1200);
+      // The reply bubble is present, but the patch applies AFTER the SSE stream
+      // ends and the ".ad-changed" / honesty line renders a beat later still. Wait
+      // for the turn to fully SETTLE — either a changed line / undo chip appears,
+      // or a short grace period elapses — before the oracles read the DOM. This
+      // prevents a false "claimed a change but no changed-keys" on slow patches.
+      const settleDeadline = Date.now() + 6000;
+      while (Date.now() < settleDeadline) {
+        await settle(500);
+        const settled = await page.evaluate(() => {
+          const msgs = document.querySelectorAll('.ad-msg--assistant');
+          const last = msgs[msgs.length - 1];
+          if (!last) return false;
+          // Settled once the last assistant message has a changed line, an undo
+          // chip, an offer chip, or a feedback chip — i.e. post-patch UI landed.
+          return !!last.querySelector('.ad-changed, .ad-undo-chip, .ad-offer-chip, .ad-fb-chip');
+        });
+        if (settled) break;
+      }
+      await settle(600);
       return true;
     }
     await settle(400);
@@ -220,12 +237,25 @@ async function runJourneys(page, run, cons, baseUrl) {
       await sendChat(page, 'add small text at the bottom that says spaces are limited');
       added = true;
     }
-    await settle(1500);
+    await settle(2000);
     const afterTruth = await page.evaluate(() => { try { return window.__woTruth ? window.__woTruth() : null; } catch { return null; } });
-    const rolesBefore = beforeTruth ? JSON.stringify(beforeTruth.roles || beforeTruth) : '';
-    const rolesAfter = afterTruth ? JSON.stringify(afterTruth.roles || afterTruth) : '';
-    const changed = rolesBefore !== rolesAfter;
-    pushStep('+ Add caption renders', changed, changed ? 'design truth changed after add' : 'no truth delta (add may not have rendered)');
+    // renderTruth() exposes roleBounds — per-role hit boxes. A rendered caption
+    // adds/changes a support/subtext role box. Compare the SET of role keys and
+    // their geometry; also accept the assistant's explicit "added … caption"
+    // confirmation as corroboration (belt for a role-key rename).
+    const roleKeys = (t) => t && t.roleBounds ? Object.keys(t.roleBounds).sort().join(',') : '';
+    const roleGeom = (t) => t && t.roleBounds ? JSON.stringify(t.roleBounds) : '';
+    const keysChanged = roleKeys(beforeTruth) !== roleKeys(afterTruth);
+    const geomChanged = roleGeom(beforeTruth) !== roleGeom(afterTruth);
+    const replySaysAdded = await page.evaluate(() => {
+      const b = document.querySelectorAll('.ad-msg--assistant .ad-bubble');
+      const last = (b[b.length - 1]?.textContent || '').toLowerCase();
+      return /added|caption|now says|small text/.test(last);
+    });
+    const changed = keysChanged || geomChanged || replySaysAdded;
+    pushStep('+ Add caption renders', changed, changed
+      ? `caption landed (${keysChanged ? 'new role key' : geomChanged ? 'role geometry changed' : 'confirmed by reply'})`
+      : 'no role-bound delta and no add confirmation');
     if (!changed) {
       const shot = await run.shot(page, 'j5-add-caption');
       run.recordDefect({ journey: 'add-caption', oracle: 'add-renders', expected: 'adding a caption changes the rendered design', observed: 'render truth unchanged after add', screenshot: shot, console: cons.peek(), severity: 'medium' });

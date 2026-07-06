@@ -26,16 +26,27 @@ const ORACLE_PLAIN = {
 function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
 
 function rankDefects(defects) {
-  // Group by (oracle) so frequency counts; score = Σ severity weight.
+  // Group by (oracle) so frequency counts; score = Σ severity weight. We ALSO
+  // detect a PERSISTENT finding — the same observed symptom seen across many
+  // states (e.g. one advisor dot that never clears, re-flagged on every probe).
+  // That is ONE thing to fix, not N; the report says so rather than inflating it.
   const groups = new Map();
   for (const d of defects) {
     const key = d.oracle;
-    if (!groups.has(key)) groups.set(key, { oracle: key, count: 0, score: 0, severity: d.severity, examples: [] });
+    if (!groups.has(key)) groups.set(key, { oracle: key, count: 0, score: 0, severity: d.severity, examples: [], observedSet: new Set() });
     const g = groups.get(key);
     g.count++;
     g.score += SEV_WEIGHT[d.severity] || 1;
     if (SEV_WEIGHT[d.severity] > SEV_WEIGHT[g.severity]) g.severity = d.severity;
+    // Normalise the observed string (strip the utterance-specific bits) so a
+    // recurring identical symptom collapses to one distinct value.
+    g.observedSet.add(String(d.observed || '').replace(/\d+/g, '#'));
     if (g.examples.length < 3) g.examples.push(d);
+  }
+  for (const g of groups.values()) {
+    g.distinctSymptoms = g.observedSet.size;
+    // Persistent when many hits share ≤2 distinct symptoms → likely one anchor.
+    g.persistent = g.count >= 3 && g.distinctSymptoms <= 2;
   }
   return [...groups.values()].sort((a, b) => b.score - a.score || b.count - a.count);
 }
@@ -82,7 +93,10 @@ function generate(run, meta) {
       const sev = g.severity === 'high' ? 'Important' : g.severity === 'medium' ? 'Worth fixing' : 'Minor';
       L.push(`### ${i + 1}. ${plain}`);
       L.push('');
-      L.push(`- **Priority:** ${sev}  ·  **Seen:** ${g.count} time${g.count === 1 ? '' : 's'} this run.`);
+      const seenLine = g.persistent
+        ? `**Seen:** ${g.count} times — but these look like the *same* underlying issue re-appearing (one thing to fix, not ${g.count}).`
+        : `**Seen:** ${g.count} time${g.count === 1 ? '' : 's'} this run.`;
+      L.push(`- **Priority:** ${sev}  ·  ${seenLine}`);
       // Show up to 3 concrete examples in the client's words.
       for (const ex of g.examples) {
         const trigger = ex.utterance ? `Someone typed: "${ex.utterance}"` : `During: ${ex.journey}`;
