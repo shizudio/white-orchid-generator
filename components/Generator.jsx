@@ -9046,28 +9046,8 @@ export default function App() {
         </>
       );
     }
-    if (topMenu === "format") return (
-      <>
-        <MenuHead label="Format" sub="The canvas size. Every format keeps its own smart layout." />
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6}}>
-          {DIMENSIONS.map(d=>{
-            const on=dimensionId===d.id;
-            return (
-              <button key={d.id} aria-pressed={on} onClick={()=>applyPatch({dimensionId:d.id},{source:"ui"})} title={`${d.purpose} · ${d.w} × ${d.h}px`}
-                style={{padding:"9px 4px",borderRadius:10,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                <span style={{fontSize:11,fontWeight:600,fontFamily:F.subtitle,letterSpacing:0.3}}>{d.label}</span>
-                <span style={{fontSize:9,opacity:0.7,fontFamily:F.body}}>{d.sub}</span>
-              </button>
-            );
-          })}
-        </div>
-        {dropHint&&(
-          <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}14`,border:`1px solid ${B.tangerine}44`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
-            <strong style={{fontFamily:FU.subtitle,letterSpacing:0.3}}>{dim.label} shows a condensed layout.</strong> Hidden to fit: {dropHint}. Shorten the copy or pick a taller format.
-          </div>
-        )}
-      </>
-    );
+    // (Declutter, ratified §3.5) The Format popover is GONE: the every-format
+    // strip under the canvas is the sole format surface.
     if (topMenu === "type") return (
       <>
         <MenuHead label="Post type" sub="The kind of post — it shapes which text fields the design carries." />
@@ -9290,10 +9270,13 @@ export default function App() {
     };
   })();
 
+  // (Declutter 2026-07-06, ratified) Format + Type left the top bar: the
+  // every-format strip under the canvas is the ONE format surface, and post type
+  // is set by generation/chat ("make this a quote post"). A quiet read-only
+  // current-format label keeps orientation without re-adding a menu.
   const topBarButtons = [
     { id:"posts", label:"Posts" },
     { id:"templates", label:"Templates", badge:!!newerDraft },
-    { id:"format", label:`Format · ${dim.label}` },
     { id:"type", label:`Type · ${curType?.label||"Post"}` },
     { id:"add", label:"＋ Add" },
   ];
@@ -9323,6 +9306,12 @@ export default function App() {
             {b.badge && <span aria-hidden="true" style={{display:"inline-block",width:6,height:6,borderRadius:3,background:B.tangerine,marginLeft:6,verticalAlign:"middle"}} />}
           </button>
         ))}
+        {/* Quiet READ-ONLY current-format label — not a menu. The strip under the
+            canvas is the sole format switcher (deprecation audit §3.5, ratified). */}
+        <span aria-label={`Current format: ${dim.label}`} title="Switch formats in the strip under the canvas"
+          style={{fontFamily:FU.subtitle,fontSize:10,fontWeight:500,letterSpacing:0.8,textTransform:"uppercase",color:B.ash,padding:"0 10px",whiteSpace:"nowrap"}}>
+          {dim.label}
+        </span>
         <span style={{flex:1}} />
         {/* (D1 item 3) Export + Undo LEAD — the finish and the muscle-memory
             action. Posts/Templates/Format/Type/+Add recede (--recede) so these
