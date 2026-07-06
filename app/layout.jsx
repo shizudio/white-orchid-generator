@@ -1,4 +1,5 @@
 import './globals.css';
+import BrandProvider from '@/components/BrandProvider';
 
 export const metadata = {
   title: 'The White Orchid — Content Studio',
@@ -8,7 +9,9 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <BrandProvider>{children}</BrandProvider>
+      </body>
     </html>
   );
 }

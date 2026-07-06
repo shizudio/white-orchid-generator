@@ -3,6 +3,7 @@ import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
+import { useBrandKit } from "./BrandProvider";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
@@ -2617,6 +2618,10 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [brandKit, setBrandKit] = useState(null);
+  // (multi-tenancy P1) The single client brand fetch lives in BrandProvider
+  // (app/layout.jsx). Generator consumes the SAME loaded kit here instead of
+  // issuing its own /api/brand request — one fetch at load, two consumers.
+  const { kit: brandKitFromContext } = useBrandKit();
   // (P1 item c) bumped after a DB logo_variants fetch replaces module-scope
   // LOGO_VARIANTS in place, so effects that read it re-run and pick up the
   // new list (see the /api/logo-variants fetch further down).
@@ -3913,18 +3918,15 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brand Kit is the source of truth for canvas colours, typography and checks.
+  // The kit arrives from BrandProvider (one shared /api/brand fetch); when it
+  // lands we hydrate the module-level palette/type maps (B/F/FU) and mirror it
+  // into local state. A null kit (offline / unconfigured) leaves the built-in
+  // brand-defaults untouched — the pixel-identity fallback.
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/brand')
-      .then(response => response.ok ? response.json() : null)
-      .then(kit => {
-        if (!kit || cancelled) return;
-        applyBrandKit(kit);
-        setBrandKit(kit);
-      })
-      .catch(() => {}); // Built-in brand defaults keep the editor usable offline.
-    return () => { cancelled = true; };
-  }, []);
+    if (!brandKitFromContext) return;
+    applyBrandKit(brandKitFromContext);
+    setBrandKit(brandKitFromContext);
+  }, [brandKitFromContext]);
 
   // (P1 item c) DB-hydrated logo variants — degrades to the hardcoded
   // DEFAULT_LOGO_VARIANTS fallback (identical values today) on any failure.
