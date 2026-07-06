@@ -3,10 +3,9 @@ import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
-import AuditPanel from "./AuditPanel";
 import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
-import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint } from "@/lib/audit-local";
+import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
 
@@ -2733,8 +2732,16 @@ export default function App() {
   // Floating Art Director chat: controlled open state + one-time seed from the
   // landing page handoff (sessionStorage "wo-landing-plan").
   const [chatSeed, setChatSeed] = useState(null);
-  const [auditOpen, setAuditOpen] = useState(false);   // AI audit panel (advisory)
+  const [auditOpen, setAuditOpen] = useState(false);   // AI audit runner/status surface
   const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
+  // (One Advice Ledger) The AI auditor emits findings into the SAME store as the local
+  // checker — normalized to the canonical ledger shape and merged into readyCheck so
+  // they render as the same dots + Export checklist rows (never a parallel list). Each
+  // carries a designFP stamp so a later material edit drops it as stale (spec rule 4).
+  const [auditFindings, setAuditFindings] = useState([]);
+  // AI-audit run status for the runner surface: idle | loading | done | error |
+  // unavailable, plus the model's warm summary + a graceful-degradation note.
+  const [auditRun, setAuditRun] = useState({ state: "idle", summary: "", passes: null, note: "", newCount: 0, ackedCount: 0 });
   const [topMenu, setTopMenu] = useState(null); // WP-V top bar popover: templates|format|type|add|export|posts
   // (WP-Y5) Ready-to-post checklist state: the per-format verdicts + which format
   // rows are expanded. Recomputed when the Export popover opens and after any fix.
@@ -6042,6 +6049,46 @@ export default function App() {
     try { setReadyCheck(computeReadyAll()); } catch { setReadyCheck(null); }
   }, [computeReadyAll]);
 
+  // (One Advice Ledger, rule 4) A coarse fingerprint of the MATERIAL design — layout,
+  // geometry, colour, content, media. When this changes, the design the AI audit
+  // looked at no longer exists, so its findings are reconciled away as stale. Content
+  // + geometry + colour cover "materially changed since the audit ran"; we deliberately
+  // exclude nothing that would let a real edit slip past (over-invalidation is safe —
+  // it just means the user re-runs the audit, which is the manual, client-decided act).
+  const designFingerprint = useCallback(() => {
+    try {
+      return JSON.stringify([
+        postType, archetypeId, archVariant, bgColor, textColorId, backdropMode,
+        headline, subtext, attribution, dateText, microLabel, pillText,
+        selectedLogoId, logoPosition, logoSize,
+        JSON.stringify(fontSizes), JSON.stringify(logoByDim), JSON.stringify(typeLayouts), JSON.stringify(typeLayoutsByDim),
+        overlayLayers.map(l => l.assetId + (l.mode || "frame")).join(","),
+        !!(imageObj || videoObj), image,
+      ]);
+    } catch { return String(Date.now()); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postType, archetypeId, archVariant, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, microLabel, pillText, selectedLogoId, logoPosition, logoSize, fontSizes, logoByDim, typeLayouts, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
+
+  // (One Advice Ledger, rules 1+2+4) The MERGED ledger the UI actually renders: the
+  // local readiness check with the AI auditor's still-fresh findings folded into each
+  // format's issue list (deduped on category+anchor). This single object drives BOTH
+  // the canvas advisor dots AND the Export checklist — one voice, no parallel list.
+  const currentDesignFP = designFingerprint();
+  const liveAuditFindings = reconcileAuditFindings(auditFindings, currentDesignFP);
+  const ledgerCheck = mergeAuditIntoChecklist(readyCheck, liveAuditFindings);
+
+  // Reconcile the audit-findings STATE when the design materially changes: stale
+  // findings (about a design that no longer exists) are dropped so they never linger
+  // as dots/rows. The derived liveAuditFindings above already hides them this render;
+  // this prunes the persisted list so it doesn't grow unbounded across edits.
+  useEffect(() => {
+    setAuditFindings(prev => {
+      const next = reconcileAuditFindings(prev, currentDesignFP);
+      return next.length === prev.length ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDesignFP]);
+
   // Apply one Ready-to-post fix through THE patch pipeline (undoable). A fix may
   // target a non-current format (patch.dimensionId) — applyDesignPatch already
   // switches the live dimension for a dimensionId patch, so per-format fixes (Story
@@ -6076,8 +6123,22 @@ export default function App() {
      and the ack geometry fingerprint. Issues without precise geometry return null
      (their dot pins to the canvas top-right; their ack uses the "nogeo" print). */
   const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "safe-area-logo"]);
+  // (One Advice Ledger) The live drawn box (normalized 0..1) for a coarse ledger
+  // element token — shared by local readiness issues AND AI-audit findings so both
+  // anchor + ack against the SAME geometry. "canvas"/background/photo-with-no-box
+  // return null (their dot pins to the canvas corner; their ack uses the nogeo print).
+  const elementBoxOf = useCallback((element) => {
+    const norm = (b) => (b && W && H) ? { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H } : null;
+    if (element === "logo") return norm(logoBoxRef.current);
+    if (element === "headline" || element === "caption" || element === "text") return norm(textBoundsRef.current);
+    // photo/background/canvas: no precise single box → corner dot + nogeo ack.
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [W, H]);
   const issueBoxOf = useCallback((issue) => {
     if (!issue) return null;
+    // An AI-audit finding carries its own anchor element (spec rule 1).
+    if (issue.anchor && issue.anchor.element) return elementBoxOf(issue.anchor.element);
     const norm = (b) => (b && W && H) ? { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H } : null;
     if (LOGO_ISSUE_IDS.has(issue.id) || issue.category === "overlap") {
       return norm(logoBoxRef.current);
@@ -6086,7 +6147,7 @@ export default function App() {
     // the text block — anchor to the live text bounds when we have them.
     return norm(textBoundsRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [W, H]);
+  }, [W, H, elementBoxOf]);
 
   // Record "Keep it this way" for one issue on one format. The ack is keyed by
   // (dim · issue · geometry fingerprint), stored in session state, and fires a
@@ -6127,10 +6188,17 @@ export default function App() {
     if (!finding || !map || typeof map !== "object") return false;
     const box = issueBoxOf(finding);
     const print = ackFingerprint(box);
+    // (One Advice Ledger, rule 6) An AI-audit finding is pinned when ANY ack sits on
+    // the SAME element (same non-nogeo geometry fingerprint) — an acked/pinned element
+    // is untouchable by the auditor's fixes and the harmonizer alike, even when the
+    // audit's category differs from the ack's. For local findings we keep the tighter
+    // id/category gate (a fresh unrelated issue on the text block should still surface).
+    const isAudit = !!finding._audit || (finding.anchor && finding.anchor.element);
     for (const a of Object.values(map)) {
       if (!a) continue;
       const idOrCat = a.issueId === finding.id || (a.category && a.category === finding.category);
-      if (idOrCat && (a.fingerprint === print || a.fingerprint === "nogeo")) return true;
+      const sameElement = isAudit && print !== "nogeo" && a.fingerprint === print;
+      if ((idOrCat || sameElement) && (a.fingerprint === print || a.fingerprint === "nogeo")) return true;
     }
     return false;
   }, [issueBoxOf]);
@@ -6823,6 +6891,110 @@ export default function App() {
       return o.toDataURL("image/jpeg", 0.8);
     } catch { return null; }
   }, [renderScene, W, H, dimensionId]);
+
+  /* ── AI AUDIT RUNNER (One Advice Ledger) ─────────────────────────────────────
+     The MANUAL, client-decided audit (spec rule 5): the user opens it from Export;
+     it never auto-runs. It captures the current-format render, hands the model the
+     open local findings + the user's acked ("decided") notes so it reports only NEW
+     observations, then folds every finding into the ONE ledger (auditFindings) as
+     canonical, anchored, design-stamped rows. Those rows render as the SAME advisor
+     dots + Export checklist — no separate results list. An audit finding whose key
+     is already acked lands PRE-ACKED (partitioned into "Notes you've okayed", never a
+     fresh dot). Fixes route through applyReadyFix + are ack/pin-guarded like any dot. */
+  const auditRunIdRef = useRef(0);
+  const runAiAudit = useCallback(async () => {
+    const myRun = ++auditRunIdRef.current;
+    setAuditRun({ state: "loading", summary: "", passes: null, note: "", newCount: 0, ackedCount: 0 });
+
+    // Live local findings (what's already KNOWN) — send compact summaries.
+    let localFindings = [];
+    try { localFindings = runLocalAudit() || []; } catch { localFindings = []; }
+    // Acked ("decided") notes — dedup by message so the prompt stays tight.
+    const ackedNotes = Array.from(new Set(Object.values(acksRef.current || {})
+      .map(a => a && a.message).filter(Boolean))).slice(0, 12);
+
+    const imageDataUrl = captureAuditImage();
+    if (!imageDataUrl) {
+      if (auditRunIdRef.current === myRun) setAuditRun({ state: "error", summary: "", passes: null, note: "Couldn't capture the preview for the AI pass. Your local checks still ran.", newCount: 0, ackedCount: 0 });
+      return;
+    }
+
+    // Stamp the design the audit is looking at NOW — its findings become stale if the
+    // design materially changes before/after they land (rule 4).
+    const auditFP = designFingerprint();
+    const auditDim = dimensionId;
+
+    let data = null, status = 0;
+    try {
+      const res = await fetch("/api/design-audit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl,
+          designState: chatDesignState(),
+          dimensionId: auditDim,
+          localFindings: localFindings.map(f => `[${f.severity}] ${f.category}: ${f.message}`),
+          ackedNotes,
+        }),
+      });
+      status = res.status;
+      data = await res.json().catch(() => ({}));
+    } catch {
+      if (auditRunIdRef.current === myRun) setAuditRun({ state: "error", summary: "", passes: null, note: "Couldn't reach the AI just now. Your local checks still ran.", newCount: 0, ackedCount: 0 });
+      return;
+    }
+    if (auditRunIdRef.current !== myRun) return; // superseded
+
+    if (status === 503) { setAuditRun({ state: "unavailable", summary: "", passes: null, note: (data && data.error) || "The AI polish pass is unavailable. Your local checks still ran.", newCount: 0, ackedCount: 0 }); return; }
+    if (status < 200 || status >= 300) { setAuditRun({ state: "error", summary: "", passes: null, note: (data && data.error) || "The AI polish pass ran into a problem. Your local checks still ran.", newCount: 0, ackedCount: 0 }); return; }
+
+    // Map the model's element hint to a coarse ledger anchor token + capture that
+    // element's live geometry fingerprint NOW (for dedup + ack, rules 2/3).
+    const ELEMENT_TO_TOKEN = { headline: "text", caption: "text", logo: "logo", photo: "photo", background: "background", canvas: "canvas" };
+    const raw = Array.isArray(data && data.findings) ? data.findings : [];
+    const normalized = raw.map((f, i) => {
+      const token = ELEMENT_TO_TOKEN[f.element] || "canvas";
+      const box = elementBoxOf(token);
+      return normalizeAuditFinding(f, {
+        dimensionId: auditDim, element: token, fingerprint: ackFingerprint(box),
+        designFP: auditFP, index: i,
+      });
+    }).filter(Boolean);
+
+    // How many of the new findings are already ACKED (they'll land pre-okayed, not as
+    // fresh dots) vs genuinely new — for the runner's honest summary line.
+    let ackedCount = 0;
+    for (const n of normalized) { if (findingAckPinned(n)) ackedCount++; }
+    const newCount = normalized.length - ackedCount;
+
+    // Merge into the ledger: replace THIS format's prior audit findings (a re-run is a
+    // fresh look at the same format) while keeping other formats' findings intact.
+    setAuditFindings(prev => [
+      ...prev.filter(f => !(f.anchor && f.anchor.dimensionId === auditDim)),
+      ...normalized,
+    ]);
+
+    // Capture the ledger events for the learning pass (rule: learning loop).
+    try {
+      for (const n of normalized) {
+        logFeedbackClient({
+          turn_id: newTurnId(), session_id: sessionId || null,
+          kind: findingAckPinned(n) ? "ledger_acked" : "ledger_raised",
+          ledger: { id: n.id, category: n.category, element: n.anchor.element, format: auditDim, source: "ai-audit", severity: n.severity, merged: false },
+        });
+      }
+    } catch { /* never surface */ }
+
+    setAuditRun({
+      state: "done",
+      summary: typeof (data && data.summary) === "string" ? data.summary : "",
+      passes: typeof (data && data.passes) === "boolean" ? data.passes : null,
+      note: "", newCount, ackedCount,
+    });
+    // Recompute the checklist so any newly-merged/deduped rows settle immediately.
+    try { setReadyCheck(computeReadyAll()); } catch { /* keep last */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runLocalAudit, captureAuditImage, chatDesignState, dimensionId, designFingerprint, elementBoxOf, findingAckPinned, computeReadyAll, sessionId]);
 
   // NOTE: the former global-state collision guard useEffect was removed. Logo
   // placement (spec §1 default + §4 focal/text collision guard) is now resolved
@@ -8375,16 +8547,20 @@ export default function App() {
         {/* (WP-Y5) Ready-to-post checklist — per-format GO/FIX gate. Advisory (never
             blocks export); a fix routes through the one patch pipeline + is undoable. */}
         <ReadyToPost
-          check={readyCheck}
+          check={ledgerCheck}
           expanded={readyExpanded}
           setExpanded={setReadyExpanded}
           onFix={applyReadyFix}
           onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
           currentDim={dimensionId}
           acks={acks}
+          ackedOf={findingAckPinned}
         />
         <div style={{display:"flex",gap:8,marginTop:14}}>
-          <button onClick={()=>{setAuditOpen(true);setTopMenu(null);}} title="Review this design for contrast, sizing, layout, and on-brand polish (advisory)" style={{
+          {/* (One Advice Ledger) The manual AI audit — its findings merge into the SAME
+              dots + checklist above (one voice). Opens a slim runner surface for status
+              + summary; there is no separate findings list. */}
+          <button onClick={()=>{setAuditOpen(true);setTopMenu(null);runAiAudit();}} title="Review this design for on-brand polish (advisory). Findings appear as the same dots + checklist." style={{
             flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
             border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
             letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
@@ -8456,9 +8632,15 @@ export default function App() {
      to ONE dot at the canvas top-right (never measle the canvas). Issues without
      precise geometry also pin to the top-right. Acked issues get NO dot. */
   const advisorDots = (() => {
-    const fmt = (readyCheck?.formats || []).find(f => f.dimensionId === dimensionId);
+    const fmt = (ledgerCheck?.formats || []).find(f => f.dimensionId === dimensionId);
     if (!fmt || !Array.isArray(fmt.issues) || !fmt.issues.length) return { anchored: [], corner: null };
-    const { open } = partitionIssues(fmt.issues, acks, dimensionId, issueBoxOf);
+    // (One Advice Ledger, rule 3) Partition source-agnostically: a LOCAL issue uses the
+    // exact-key ack test; an AI-audit finding uses findingAckPinned so an ack made on
+    // the same element/decision pre-okays it (it becomes a "Notes you've okayed" row,
+    // never a fresh dot).
+    const { open: localOpen } = partitionIssues(fmt.issues.filter(i => !i._audit), acks, dimensionId, issueBoxOf);
+    const auditOpen = fmt.issues.filter(i => i._audit && !findingAckPinned(i)).map(i => ({ ...i, _ackBox: issueBoxOf(i) || null }));
+    const open = [...localOpen, ...auditOpen];
     if (!open.length) return { anchored: [], corner: null };
     // Collapse rule: 4+ open issues → a single corner dot listing them all.
     if (open.length >= 4) {
@@ -8731,8 +8913,8 @@ export default function App() {
               the one to adjust — it never feels like changing a "mode". */}
           {(() => {
             const readyByDim = {};
-            (readyCheck?.formats || []).forEach(f => { readyByDim[f.dimensionId] = f; });
-            const need = readyCheck?.needCount;
+            (ledgerCheck?.formats || []).forEach(f => { readyByDim[f.dimensionId] = f; });
+            const need = ledgerCheck?.needCount;
             return (
           <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:18}}>
             <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:9,flexWrap:"wrap"}}>
@@ -8756,7 +8938,11 @@ export default function App() {
               // when the format is NOT ready but every remaining issue has been acked
               // — a calm mark distinct from a plain ready ✓ only via its tooltip.
               const openIssues = v && !v.ready
-                ? partitionIssues(v.issues, acks, d.id, (iss)=> d.id===dimensionId ? issueBoxOf(iss) : null).open
+                ? [
+                    ...partitionIssues((v.issues||[]).filter(i=>!i._audit), acks, d.id, (iss)=> d.id===dimensionId ? issueBoxOf(iss) : null).open,
+                    // (One Advice Ledger, rule 3) audit findings okayed source-agnostically
+                    ...(v.issues||[]).filter(i=>i._audit && !findingAckPinned(i)),
+                  ]
                 : [];
               const yourCall = v && !v.ready && openIssues.length === 0;
               return (
@@ -8825,17 +9011,15 @@ export default function App() {
         <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
       )}
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
-      {/* AI Audit — advisory design review. Top-level mount (never inside a
-          transformed ancestor) so its fixed panel anchors to the viewport. */}
-      <AuditPanel
+      {/* AI Audit — the MANUAL vision pass (One Advice Ledger). Its findings merge
+          into the same dots + Export checklist as the local checker; this surface is
+          only the runner status + summary (no parallel findings list). Top-level mount
+          (never inside a transformed ancestor) so its fixed panel anchors to the viewport. */}
+      <AuditRunner
         open={auditOpen}
         setOpen={setAuditOpen}
-        runLocalAudit={runLocalAudit}
-        captureImage={captureAuditImage}
-        designState={chatDesignState}
-        dimensionId={dimensionId}
-        applyPatch={applyDesignPatch}
-        undoOnce={undoLastAiChange}
+        run={auditRun}
+        onRerun={runAiAudit}
       />
       {/* Caption writer — brand-voice caption + hashtags from the current design.
           Top-level mount (never inside a transformed ancestor) so its fixed panel
@@ -8907,9 +9091,17 @@ function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
           </div>
         )}
         <div style={{display:"flex",flexDirection:"column",gap:collapsed?12:9}}>
-          {issues.map((iss,i)=>(
+          {issues.map((iss,i)=>{
+            // (One Advice Ledger, rule 5 / scenario e) a small provenance note for
+            // findings the design audit contributed to (audit-only or local+audit merge).
+            const srcs = iss.sources || [];
+            const fromAudit = iss._audit || srcs.includes("ai-audit");
+            const both = fromAudit && (srcs.includes("local") || iss.merged);
+            const prov = both ? "Flagged by the checks and the design audit" : fromAudit ? "Spotted by the design audit" : "";
+            return (
             <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:8}}>
               <span style={{fontSize:12.5,color:B.jet,fontFamily:F.body,lineHeight:1.42}}>{iss.message}</span>
+              {prov && <span style={{fontSize:9.5,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>{prov}</span>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 {iss.fix ? (
                   <button type="button" onClick={()=>onFix(iss.fix)}
@@ -8923,7 +9115,7 @@ function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
                     fontSize:10,fontWeight:600,letterSpacing:0.6,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Keep it this way</button>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       </div>
     </>
@@ -8943,10 +9135,17 @@ function issueOkayed(acks, dimensionId, issue) {
   return false;
 }
 
-function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim, acks }) {
+function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim, acks, ackedOf }) {
   const formats = check?.formats || [];
   const loading = !check;
   const need = check?.needCount || 0;
+  // (One Advice Ledger, rule 3) An issue is "okayed" source-agnostically: a LOCAL
+  // issue via the format+id/category ack match; an AI-audit finding via the caller's
+  // element-aware ackedOf (findingAckPinned) so an ack on the same decision pre-okays
+  // it here too (it lists under "Notes you've okayed", never as an open fix).
+  const isOkayed = (dimensionId, iss) =>
+    iss && iss._audit ? (typeof ackedOf === "function" ? !!ackedOf(iss) : false)
+                      : issueOkayed(acks, dimensionId, iss);
   return (
     <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -8967,8 +9166,8 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
             // Split this format's issues into still-open vs okayed ("Keep it this
             // way"). Okayed notes stay listed (honest wording) under a collapsed
             // line; only open issues count toward the "N fixes" affordance.
-            const okayed = (f.issues || []).filter(iss => issueOkayed(acks, f.dimensionId, iss));
-            const open = (f.issues || []).filter(iss => !issueOkayed(acks, f.dimensionId, iss));
+            const okayed = (f.issues || []).filter(iss => isOkayed(f.dimensionId, iss));
+            const open = (f.issues || []).filter(iss => !isOkayed(f.dimensionId, iss));
             const allOkayed = !f.ready && open.length === 0 && okayed.length > 0;
             return (
               <div key={f.dimensionId}>
@@ -9029,6 +9228,50 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
         </div>
       )}
     </div>
+  );
+}
+
+/* ── AI AUDIT RUNNER (One Advice Ledger) ─────────────────────────────────────
+   The manual vision pass's STATUS surface. It has no findings list of its own —
+   the audit's findings merge into the same advisor dots + Export "Ready to post"
+   checklist as the local checker (one voice). This panel shows: running / a warm
+   summary + how many NEW vs already-okayed observations landed / a graceful note
+   when the AI pass is unavailable. Reuses the shared .audit-* brand styling. */
+function AuditRunner({ open, setOpen, run, onRerun }) {
+  if (!open) return null;
+  const st = (run && run.state) || "idle";
+  const loading = st === "loading";
+  const showNote = (st === "unavailable" || st === "error") && run.note;
+  return (
+    <section className="audit-panel" role="dialog" aria-label="AI design audit" aria-modal="false">
+      <header className="audit-head">
+        <span className="audit-title">✓ AI Audit</span>
+        <button type="button" className="audit-close" onClick={() => setOpen(false)} aria-label="Close">×</button>
+      </header>
+      <div className="audit-body">
+        {loading && <div className="audit-loading"><span className="audit-spin" /> Reviewing the design…</div>}
+        {showNote && <p className="audit-note">{run.note}</p>}
+        {st === "done" && (
+          <>
+            <div className={`audit-summary ${run.passes ? "audit-summary--pass" : "audit-summary--attn"}`}>
+              <strong>{run.passes ? "Looks good" : "A few suggestions"}</strong>
+              {run.summary && <span>{run.summary}</span>}
+            </div>
+            <p className="audit-empty">
+              {run.newCount > 0
+                ? `Added ${run.newCount} ${run.newCount === 1 ? "suggestion" : "suggestions"} to your dots and the Ready-to-post checklist.`
+                : "Nothing new to flag — your dots and checklist are already up to date."}
+              {run.ackedCount > 0 ? ` ${run.ackedCount} ${run.ackedCount === 1 ? "note you'd okayed was" : "notes you'd okayed were"} left as decided.` : ""}
+            </p>
+            <p className="audit-note" style={{marginTop:8}}>Suggestions show as the same dots on the canvas and rows in Export → Ready to post. Fix or Keep it this way, right there.</p>
+          </>
+        )}
+      </div>
+      <footer className="audit-foot">
+        <button type="button" className="audit-btn audit-btn--ghost" onClick={onRerun} disabled={loading}>Re-run audit</button>
+        <button type="button" className="audit-btn audit-btn--solid" onClick={() => setOpen(false)}>Done</button>
+      </footer>
+    </section>
   );
 }
 
