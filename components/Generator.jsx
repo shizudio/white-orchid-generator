@@ -8,7 +8,7 @@ import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
-import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient } from "@/lib/sessions";
+import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -3799,6 +3799,18 @@ export default function App() {
     sessionInitRef.current = true;
     installFeedbackDump();
     (async () => {
+      // (A1) PURGE guard-test pollution BEFORE restoring any session, so a current-
+      // session pointer aimed at a "FORMAT FIT GUARD" design is dropped rather than
+      // reopened in the live editor. Local sweep is sync-fast; cloud sweep is a
+      // one-time best-effort. Fully guarded — never throws, never blocks the studio.
+      try {
+        const purged = await purgeGuardSessions();
+        if (purged.removedLocal || purged.removedCloud) {
+          /* eslint-disable-next-line no-console */
+          console.log("[woGuardPurge]", JSON.stringify(purged));
+        }
+      } catch { /* ignore — studio proceeds */ }
+
       // A fresh landing handoff → this is a brand-new post; start a clean session.
       // Read the REF the consume effect stamped (that effect already removed the
       // sessionStorage flag by now), NOT sessionStorage — see landingPendingRef.
@@ -6375,11 +6387,19 @@ export default function App() {
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(fin));
     });
     const settle = async () => { await raf2(); await new Promise(r => setTimeout(r, 120)); };
-    window.__woFormatFitGuard = async () => {
+    window.__woFormatFitGuard = () => withHarnessMode(async () => {
       const failures = [];
       const c = canvasRef.current;
       if (!c) return { pass: false, failures: ["no live canvas"] };
+      // (A1) Snapshot the user's REAL design so the guard restores it byte-for-byte
+      // after seeding + walking its test design. Combined with HARNESS_MODE (which
+      // suspends every session save for this whole run), the guard is now fully
+      // non-polluting: no test design is ever persisted, and the user's live editor
+      // returns to exactly what it showed before.
       const prevDim = dimensionId;
+      const restore = {
+        archetypeId, postType, headline, subtext, dimensionId,
+      };
       const assertFit = (label) => {
         const stateW = DIMENSIONS.find(d => d.id === dimensionIdRef.current)?.w;
         const stateH = DIMENSIONS.find(d => d.id === dimensionIdRef.current)?.h;
@@ -6406,11 +6426,19 @@ export default function App() {
         setDimensionId("ig_square"); await settle(); assertFit("sessionA:ig_square");
         setDimensionId("story"); await settle(); assertFit("sessionB:story");
         setDimensionId("ig_square"); await settle(); assertFit("sessionA-return:ig_square");
-      } finally { setDimensionId(prevDim); await settle(); }
+      } finally {
+        // (A1) Restore the user's pre-guard design exactly (not just the dimension).
+        setArchetypeId(restore.archetypeId);
+        setPostType(restore.postType);
+        setHeadline(restore.headline);
+        setSubtext(restore.subtext);
+        setDimensionId(restore.dimensionId ?? prevDim);
+        await settle();
+      }
       const report = { pass: failures.length === 0, checks: DIMENSIONS.length + 3, failures };
       /* eslint-disable-next-line no-console */ console.log("[woFormatFitGuard]", JSON.stringify(report));
       return report;
-    };
+    });
     return () => { try { delete window.__woFormatFitGuard; } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkFormatFit]);

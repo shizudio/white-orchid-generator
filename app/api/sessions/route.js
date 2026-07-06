@@ -94,6 +94,29 @@ export async function GET(request) {
   }
 }
 
+// DELETE /api/sessions?id=… — permanently remove one session (A1 guard-pollution
+// purge). Scoped to the brand; a missing row is a no-op (deleted:false). Same
+// graceful-degradation contract: any env/table problem returns { configured:false }.
+export async function DELETE(request) {
+  let supabase;
+  try { supabase = getAdminClient(); } catch { return unconfigured(); }
+  const id = new URL(request.url).searchParams.get('id');
+  if (!id) return Response.json({ error: 'id is required' }, { status: 400 });
+  try {
+    const { data, error } = await supabase
+      .from('design_sessions')
+      .delete()
+      .eq('id', id.slice(0, 80))
+      .eq('brand_id', BRAND_ID)
+      .select('id');
+    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    return Response.json({ configured: true, deleted: Array.isArray(data) && data.length > 0 });
+  } catch (err) {
+    if (isMissingConfig(err)) return unconfigured();
+    return Response.json({ error: String(err?.message || err) }, { status: 500 });
+  }
+}
+
 // POST /api/sessions — upsert one session (auto-save). Also auto-archives rows
 // beyond the latest LIST_CAP so the Posts list stays tidy (never deletes).
 export async function POST(request) {
