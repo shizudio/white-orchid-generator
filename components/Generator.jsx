@@ -4300,7 +4300,18 @@ export default function App() {
       // (Commit 1) Retain the FINAL drawn logo box for the collision assertion so a
       // logo↔caption overlap (the banner/twitter bug) is caught permanently, not just
       // in the live focal check. Captured on every captureAudit render, not only live.
-      const _logoBox={x:lx-lSz/2,y:ly-lSz/2,w:lSz,h:lSz};
+      // (A2) The lockup is drawn CONTAINED in an lSz×lSz square (containDraw fits by
+      // the smaller ratio), so a WIDE lockup (mark+wordmark, AR~2.24) actually paints a
+      // thin horizontal strip centred in that square — NOT the full square. Using the
+      // full square as the logo box over-samples empty letterbox area (diluting the
+      // contrast read) and inflates the caption-collision box (a false overlap). Derive
+      // the ACTUAL drawn rect from the image's aspect and use THAT everywhere the box
+      // stands in for the visible mark: sampling, scrim, collision, click target.
+      const _lockAR=(drawObj?.width&&drawObj?.height)?(drawObj.width/drawObj.height):1;
+      const _dw=_lockAR>=1?lSz:lSz*_lockAR;   // contain: fit the longer side to lSz
+      const _dh=_lockAR>=1?lSz/_lockAR:lSz;
+      const _drawnBox={x:lx-_dw/2,y:ly-_dh/2,w:_dw,h:_dh};
+      const _logoBox=_drawnBox;
       if(live||opts.captureAudit) auditLogo.box=_logoBox;
       // (WP-W0) render truth: the FINAL drawn lockup box + resolved position, so
       // the chat honesty check verifies "logo moved" against what's on the canvas.
@@ -4326,33 +4337,61 @@ export default function App() {
       if(mediaObj){
         let backing=null;
         try{
-          const N=12,sc=document.createElement("canvas");sc.width=N;sc.height=N;
+          // Sample the ACTUAL drawn lockup rect (not the padded square) at a grid so we
+          // capture the backing the ink truly sits on. Track mean AND per-cell contrast
+          // vs the ink — the client's bug was a busy LIGHT photo (high mean → mean
+          // contrast passed) where dark spots (a face, glasses, hair) swallowed the thin
+          // wordmark strokes. Mean contrast is necessary but NOT sufficient on a photo.
+          const N=14,sc=document.createElement("canvas");sc.width=N;sc.height=N;
           const sctx=sc.getContext("2d",{willReadFrequently:true});
-          const sx=Math.max(0,_logoBox.x),sy=Math.max(0,_logoBox.y);
-          const sw=Math.min(w-sx,_logoBox.w),sh=Math.min(h-sy,_logoBox.h);
+          const sx=Math.max(0,_drawnBox.x),sy=Math.max(0,_drawnBox.y);
+          const sw=Math.min(w-sx,_drawnBox.w),sh=Math.min(h-sy,_drawnBox.h);
           if(sw>2&&sh>2){
             sctx.drawImage(ctx.canvas,sx,sy,sw,sh,0,0,N,N);
-            const d=sctx.getImageData(0,0,N,N).data;let sum=0,sq=0,n=0;
-            for(let i=0;i<d.length;i+=4){const L=getLuminance(d[i],d[i+1],d[i+2]);sum+=L;sq+=L*L;n++;}
-            const mean=n?sum/n:0.3;backing={mean,variance:n?Math.max(0,sq/n-mean*mean):0};
+            const d=sctx.getImageData(0,0,N,N).data;let sum=0,sq=0,n=0,lo=1,hi=0;
+            for(let i=0;i<d.length;i+=4){const L=getLuminance(d[i],d[i+1],d[i+2]);sum+=L;sq+=L*L;n++;if(L<lo)lo=L;if(L>hi)hi=L;}
+            const mean=n?sum/n:0.3, variance=n?Math.max(0,sq/n-mean*mean):0;
+            // Worst-case cell contrast: the darkest (or lightest) sampled cell vs ink —
+            // whichever is closer to the ink is where a stroke would vanish.
+            const worst=Math.min(contrastRatio(lo,drawInkLum),contrastRatio(hi,drawInkLum));
+            backing={mean,variance,worst};
           }
         }catch(_){/* canvas tainted / headless — skip, remedy below is best-effort */}
         if(backing){
+          // BUSY = enough luminance spread that some region will fight the ink even when
+          // the average is fine (stddev threshold tuned to the client's ~0.2 case).
+          const busy=Math.sqrt(backing.variance)>0.14;
           let cr=contrastRatio(backing.mean,effInkLum);
-          if(cr<3 && !logoVariantTouched){
+          // A photo backing is legible only if BOTH the mean AND the worst local cell
+          // clear the bar; on a busy field the worst cell drives the decision.
+          let needsRemedy=(cr<3)||(busy&&backing.worst<3);
+          if(needsRemedy && !logoVariantTouched){
             const swap=readableLogoForField(backing.mean);
-            if(swap && contrastRatio(backing.mean,swap.inkLum)>=3){ effObj=swap.img; effInkLum=swap.inkLum; cr=contrastRatio(backing.mean,swap.inkLum); }
+            // A swap only helps a UNIFORM field; a busy photo fights BOTH inks, so the
+            // swap is accepted only when it clears mean AND (if busy) the worst cell too.
+            if(swap){
+              const swMean=contrastRatio(backing.mean,swap.inkLum);
+              const swWorst=Math.min(contrastRatio(backing.mean-Math.sqrt(backing.variance),swap.inkLum),contrastRatio(backing.mean+Math.sqrt(backing.variance),swap.inkLum));
+              if(swMean>=3 && (!busy||swWorst>=3)){ effObj=swap.img; effInkLum=swap.inkLum; cr=swMean; needsRemedy=false; }
+            }
           }
-          if(cr<3){
-            const light=effInkLum>0.5; // ivory ink → dark scrim; green ink → ivory scrim
-            scrim={color:light?B.burnham:B.whiteSmoke,alpha:0.58};
+          if(needsRemedy){
+            // A localized scrim replaces the busy backing with a uniform field, so every
+            // stroke of the wordmark reads. ivory ink → dark scrim; green ink → ivory
+            // scrim. A touch more opaque on a truly busy field so texture can't bleed
+            // through the thin wordmark.
+            const light=effInkLum>0.5;
+            scrim={color:light?B.burnham:B.whiteSmoke,alpha:busy?0.72:0.6};
             cr=contrastRatio(hexLuminance(scrim.color),effInkLum);
           }
-          if(live||opts.captureAudit){ auditLogo.overPhoto=true; auditLogo.photoContrast=cr; }
+          if(live||opts.captureAudit){ auditLogo.overPhoto=true; auditLogo.photoContrast=cr; auditLogo.photoBusy=busy; auditLogo.photoWorst=+backing.worst.toFixed(2); }
         }
       }
       if(scrim){
-        const pad=lSz*0.14, rx=_logoBox.x-pad, ry=_logoBox.y-pad, rw=lSz+pad*2, rh=lSz+pad*2, rad=Math.min(rw,rh)*0.16;
+        // (A2) Hug the ACTUAL drawn lockup rect (_drawnBox), not the padded square, so
+        // a wide lockup gets a snug pill behind the mark+wordmark — never an oversized
+        // square wash floating in letterbox space.
+        const pad=Math.min(_dw,_dh)*0.16, rx=_drawnBox.x-pad, ry=_drawnBox.y-pad, rw=_dw+pad*2, rh=_dh+pad*2, rad=Math.min(rw,rh)*0.22;
         ctx.save(); ctx.globalAlpha=scrim.alpha; ctx.fillStyle=scrim.color;
         ctx.beginPath();
         ctx.moveTo(rx+rad,ry);
