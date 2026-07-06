@@ -14,15 +14,22 @@ account.
 ## How to run
 
 ```bash
-# One command — builds a production copy of the studio, then tests it:
+# SMOKE — full persona pool, photos mocked (~2 min). Runs on every staging deploy:
 npm run test:resident
+
+# NIGHTLY — full pool ×2, all journeys, + a capped REAL-photo probe (see below):
+npm run test:resident:nightly
 ```
 
-Or, if you already have a fresh production build (`next build` has been run):
+Or, if you already have a fresh isolated production build:
 
 ```bash
-node scripts/resident-tester/run.js
+node scripts/resident-tester/run.js            # smoke
+node scripts/resident-tester/run.js --nightly  # nightly (or WO_NIGHTLY=1)
 ```
+
+Both cadences and how they're scheduled are documented in
+[`docs/resident-tester/cadence.md`](../../docs/resident-tester/cadence.md).
 
 Prerequisites (installed once):
 
@@ -33,18 +40,23 @@ npx playwright install chromium
 
 ### What a run produces
 
-- **`docs/resident-tester/smoke-report-<date>.md`** — the client-facing report
-  (this is the durable, committed output).
+- **`docs/resident-tester/smoke-report-<date>.md`** (smoke) or
+  **`docs/resident-tester/nightly-report-<date>.md`** (nightly) — the client-facing
+  report (this is the durable, committed output).
 - **`scripts/resident-tester/runs/<timestamp>/`** — a self-contained artifact folder
   (git-ignored): `events.jsonl` (every quality flag, machine-readable),
-  `screenshots/` (one per flagged step), `server.log`, and a copy of the report.
+  `screenshots/` (flagged steps **plus** any real generated designs from the nightly
+  probe), `server.log` / `server-probe.log`, and a copy of the report.
 
 ## How it stays safe (zero credits, zero pollution)
 
-1. **Photo generation is fully mocked.** The production server is launched with the
-   Higgsfield API keys *unset*, so `higgsfieldConfigured()` is false and
-   `/api/design-generate` returns `{ unconfigured }` — the studio falls back to its
-   built-in Library/sample photos. **Zero Higgsfield credits by construction.**
+1. **Photo generation is fully mocked** — except the nightly real-photo probe. In
+   the mocked phases the production server is launched with the Higgsfield API keys
+   *unset*, so `higgsfieldConfigured()` is false and `/api/design-generate` returns
+   `{ unconfigured }` — the studio falls back to its built-in Library/sample photos.
+   **Zero Higgsfield credits by construction.** The nightly probe is the ONE
+   exception: it restarts the server *with* the keys and spends at most
+   `WO_REAL_PHOTOS` (default 2, hard cap 3) real generations — see the cadence doc.
 2. **A network belt-and-suspenders.** The browser also hard-blocks any request to
    `platform.higgsfield.ai`; if one ever fired, it's counted and the run flags it.
 3. **No cloud writes.** Every `POST /api/sessions` and `POST /api/feedback` is
@@ -56,9 +68,13 @@ npx playwright install chromium
 
 ## Budget & time caps
 
-The run stops automatically at **30 minutes wall-clock** or **~$3 of estimated AI
-usage** (counted as helper requests × a conservative per-call rate), whichever comes
-first. Fuzzing trims its sample to fit the remaining budget.
+- **Smoke:** stops at **30 minutes** wall-clock or **~$3** of estimated AI usage.
+- **Nightly:** stops at **60 minutes** or **~$2** of estimated AI usage, plus a hard
+  cap of **≤3 real photo generations** in the probe (default 2).
+
+AI usage is counted as helper requests × a conservative per-call rate; fuzzing trims
+its sample to fit the remaining clock. The real-photo cap is enforced independently
+of the AI cap.
 
 ## What it checks (the oracles)
 
@@ -87,13 +103,19 @@ and DOM contracts — they are not guesses.
 | `harness.js` | Defect recorder, budget clock, hardened browser context. |
 | `journeys.js` | The deterministic golden journeys. |
 | `fuzz.js` | Persona fuzzing loop (budget-capped). |
+| `real-photo-probe.js` | The nightly REAL-photo probe (capped genuine generations). |
 | `report.js` | Client-facing markdown report generator. |
-| `run.js` | The main runner (launches the server, orchestrates, verifies, reports). |
+| `run.js` | The main runner (two-phase: mocked sweep, then optional real-photo probe). |
+| `deploy-smoke.sh` | Builds if stale, runs the smoke, prints the report path + verdict. |
+| `install-hooks.sh` | Installs the staging-only `pre-push` deploy-smoke hook. |
 
-## Not built yet (future stages — gated on this first report)
+## Cadence (what runs when)
 
-- **Deploy hook** — run automatically after each staging deploy.
-- **Nightly cron** — a scheduled unattended run with trend tracking across runs.
+- **Smoke** runs on **every staging deploy** via a `pre-push` git hook (installed by
+  `install-hooks.sh`). Full persona pool, photos mocked, non-blocking on findings.
+- **Nightly** runs **unattended at 02:30** via a scheduled agent on this machine that
+  launches `npm run test:resident:nightly`. Full pool ×2, all journeys, plus the
+  capped real-photo probe.
 
-These are deliberately out of scope for stage 1: the client reviews this first
-report before we wire automation.
+Full details — costs, how to skip, the probe, scheduling — live in
+[`docs/resident-tester/cadence.md`](../../docs/resident-tester/cadence.md).
