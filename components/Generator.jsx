@@ -6,9 +6,9 @@ import ArtDirectorChat from "./ArtDirectorChat";
 import AuditPanel from "./AuditPanel";
 import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
-import { runLocalAudit as computeLocalAudit, computeReadyChecklist } from "@/lib/audit-local";
+import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
-import { newSessionId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
+import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
 
 /* ───────── BRAND ───────── */
 const B = {
@@ -2740,7 +2740,15 @@ export default function App() {
   // rows are expanded. Recomputed when the Export popover opens and after any fix.
   const [readyCheck, setReadyCheck] = useState(null);   // { ready, needCount, formats[] } | null
   const [readyExpanded, setReadyExpanded] = useState(null); // dimensionId currently expanded
-  const [stripFixDim, setStripFixDim] = useState(null); // (WP-Y5b) dimensionId whose issues+Fix show inline under the canvas
+  // (Advisor dots) Acknowledgements — "Keep it this way" as first-class state.
+  // Map { [ackKey]: { issueId, category, dimensionId, message, fingerprint, at } }.
+  // Serialized into the session (currentTemplateState → state.acks) so it persists
+  // + cloud-syncs; keyed by dim + issue + a geometry fingerprint (see audit-local).
+  const [acks, setAcks] = useState({});
+  // (Advisor dots) The open anchored popover, or null. One overlay at a time
+  // (D1 discipline): shape { dimensionId, issues:[...], anchor:{leftPct,topPct},
+  // collapsed:boolean }. Participates in the same close-the-others effects below.
+  const [advisorDot, setAdvisorDot] = useState(null);
 
   /* ── (WP-W) SESSIONS — one session = one post (ux-architecture §2.7) ──
      The current session binds this design + its chat conversation under one id;
@@ -6039,6 +6047,72 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshReadyCheck, dimensionId]);
 
+  /* ── ADVISOR DOTS — issue → geometry + "Keep it this way" acks ──────────────
+     Each readiness issue on the CURRENTLY-VIEWED format is anchored to the box of
+     the element it concerns. logoBoxRef / textBoundsRef hold the LIVE format's
+     drawn boxes in logical canvas px; we normalize to 0..1 for both the dot anchor
+     and the ack geometry fingerprint. Issues without precise geometry return null
+     (their dot pins to the canvas top-right; their ack uses the "nogeo" print). */
+  const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "safe-area-logo"]);
+  const issueBoxOf = useCallback((issue) => {
+    if (!issue) return null;
+    const norm = (b) => (b && W && H) ? { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H } : null;
+    if (LOGO_ISSUE_IDS.has(issue.id) || issue.category === "overlap") {
+      return norm(logoBoxRef.current);
+    }
+    // Every other readiness issue (contrast, type-size, safe-zone, copy) concerns
+    // the text block — anchor to the live text bounds when we have them.
+    return norm(textBoundsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [W, H]);
+
+  // Record "Keep it this way" for one issue on one format. The ack is keyed by
+  // (dim · issue · geometry fingerprint), stored in session state, and fires a
+  // fire-and-forget capture event so the learning pass sees repeatedly-overridden
+  // rules. The affected element is thereby treated as user-placed (harmonizer pin).
+  const acknowledgeIssue = useCallback((issue, dimId) => {
+    if (!issue) return;
+    const box = issueBoxOf(issue);
+    const key = ackKey(dimId || dimensionId, issue, box);
+    setAcks(prev => ({
+      ...prev,
+      [key]: {
+        issueId: issue.id, category: issue.category, dimensionId: dimId || dimensionId,
+        message: issue.message, fingerprint: ackFingerprint(box), at: Date.now(),
+      },
+    }));
+    // (self-improvement-loop §1) Fire-and-forget capture — never blocks the UX.
+    try {
+      logFeedbackClient({
+        turn_id: newTurnId(), session_id: sessionId || null, kind: "ack",
+        ack: { issueId: issue.id, category: issue.category, format: dimId || dimensionId, message: issue.message },
+      });
+    } catch { /* never surface */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issueBoxOf, dimensionId, sessionId]);
+
+  // (Advisor dots · harmonizer pin) An acknowledged issue is treated EXACTLY like a
+  // user-placed element: the silent harmonizer must never auto-apply its fix. A raw
+  // audit finding is pinned when an ack exists (on any format) whose issue id OR
+  // category matches — the fix's geometry fingerprint on the CURRENT format still
+  // has to line up, so a materially-moved element (new fingerprint) is no longer
+  // pinned and the harmonizer resumes. Kept as a ref so the harmonizer effects read
+  // fresh acks without re-subscribing.
+  const acksRef = useRef(acks);
+  acksRef.current = acks;
+  const findingAckPinned = useCallback((finding) => {
+    const map = acksRef.current;
+    if (!finding || !map || typeof map !== "object") return false;
+    const box = issueBoxOf(finding);
+    const print = ackFingerprint(box);
+    for (const a of Object.values(map)) {
+      if (!a) continue;
+      const idOrCat = a.issueId === finding.id || (a.category && a.category === finding.category);
+      if (idOrCat && (a.fingerprint === print || a.fingerprint === "nogeo")) return true;
+    }
+    return false;
+  }, [issueBoxOf]);
+
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
   useEffect(() => {
@@ -6572,6 +6646,8 @@ export default function App() {
     const seen = new Set();
     const fails = collected.filter(f => {
       if (!(f.severity === "fail" && f.fix && typeof f.fix === "object")) return false;
+      // (Advisor dots) An acked issue is user-placed — never auto-repair it.
+      if (findingAckPinned(f)) return false;
       const k = f.id + ":" + JSON.stringify(f.fix);
       if (seen.has(k)) return false;
       seen.add(k);
@@ -6651,6 +6727,8 @@ export default function App() {
     const seen = new Set();
     const fails = collected.filter(f => {
       if (!(f.severity === "fail" && f.fix && typeof f.fix === "object")) return false;
+      // (Advisor dots) An acked issue is user-placed — never auto-repair it.
+      if (findingAckPinned(f)) return false;
       const k = f.id + ":" + JSON.stringify(f.fix);
       if (seen.has(k)) return false;
       seen.add(k);
@@ -7106,6 +7184,10 @@ export default function App() {
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
     overlayLayers:clonePlain(overlayLayers),
     imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
+    // (Advisor dots) "Keep it this way" acknowledgements ride with the post so a
+    // choice the user okayed survives reload + cloud-sync (never resurrected by a
+    // content-only edit; re-evaluated when the affected element materially moves).
+    acks:clonePlain(acks),
   });
   const templateThumb = () => {
     const c = canvasRef.current; if (!c) return null;
@@ -7221,6 +7303,9 @@ export default function App() {
       setMediaKind("image");
     }
     setMarkTab((s.selectedLogoId || "p3-ivory").startsWith("s") ? "secondary" : "primary");
+    // (Advisor dots) Restore acknowledgements from a session restore; a saved
+    // design TEMPLATE carries no acks (a fresh design starts with none).
+    setAcks(s.acks && typeof s.acks === "object" ? { ...s.acks } : {});
     setOverlayDirty(false);
   };
   const deleteDesignTemplate = (id) => {
@@ -7288,7 +7373,7 @@ export default function App() {
   }, [ready, sessionId, sessionConversation, postType, archetypeId, archVariant, dimensionId,
       bgColor, bgAlpha, textColorId, backdropMode, headline, subtext, attribution, dateText,
       selectedLogoId, logoPosition, logoSize, overlayLayers, image, photoTreatment, heroRegister,
-      microLabel, pillText, typeLayouts, fontSizes, doSaveSession]); // eslint-disable-line react-hooks/exhaustive-deps
+      microLabel, pillText, typeLayouts, fontSizes, acks, doSaveSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Open a session from the Posts list: restore its design + conversation exactly.
   const openSession = async (id) => {
@@ -8530,43 +8615,10 @@ export default function App() {
             </div>
           )}
 
-          {/* (WP-Y5b) INLINE STRIP FIX — tapping a flagged thumbnail focuses that
-              format AND surfaces its specific issue(s) + one-tap Fix right here under
-              the canvas, so the user never has to open Export to understand/fix a
-              flag. Reuses the SAME readiness engine + applyReadyFix routing as the
-              Export checklist. A "Ready" format shows no panel. Calm/airy per §7. */}
-          {(() => {
-            const f = (readyCheck?.formats || []).find(x => x.dimensionId === stripFixDim);
-            if (!f || f.ready || dimensionId !== stripFixDim) return null;
-            const label = (typeof READY_LABELS !== "undefined" && READY_LABELS[f.dimensionId]) || dim.label;
-            return (
-              <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,padding:"12px 15px",
-                borderRadius:14,background:`${B.wisteria}22`,border:`1px solid ${B.wisteria}`}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:9}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
-                    <span aria-hidden="true" style={{width:11,height:11,borderRadius:"50%",background:B.wisteria,boxShadow:"0 0 0 1.5px #fff",flexShrink:0}} />
-                    <span style={{fontSize:11.5,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.5,color:B.burnham}}>{label} — worth a look</span>
-                  </span>
-                  <button type="button" aria-label="Dismiss" title="Dismiss" onClick={()=>setStripFixDim(null)}
-                    style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
-                </div>
-                <div style={{display:"flex",flexDirection:"column",gap:9}}>
-                  {f.issues.map((iss,i)=>(
-                    <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:5}}>
-                      <span style={{fontSize:12,color:B.jet,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
-                      {iss.fix ? (
-                        <button type="button" onClick={()=>applyReadyFix(iss.fix)}
-                          style={{alignSelf:"flex-start",padding:"5px 14px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
-                            fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Fix</button>
-                      ) : (
-                        <span style={{alignSelf:"flex-start",fontSize:10,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>Edit the copy to resolve</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+          {/* (Advisor dots) The below-canvas "worth a look" strip-fix card was
+              REMOVED — readiness issues now surface as advisor dots anchored INSIDE
+              the canvas (rendered in the canvas shell above). The Export "Ready to
+              post" checklist stays as the list view; the canvas gets the points. */}
 
           {/* (WP-Y2) EVERY-FORMAT SET — the design isn't one canvas + a switcher;
               it's one idea laid out in all 6 ratios at once. This strip IS the set:
@@ -8598,7 +8650,7 @@ export default function App() {
               const dotReady=v?v.ready:null;
               return (
                 <button key={d.id} aria-pressed={on}
-                  onClick={()=>{ applyPatch({dimensionId:d.id},{source:"ui"}); setStripFixDim(dotReady===false?d.id:null); }}
+                  onClick={()=>{ applyPatch({dimensionId:d.id},{source:"ui"}); }}
                   title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?" · needs a look":dotReady?" · ready":""}${adjusted?" · adjusted for this format":""} — tap to adjust`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
                   <span style={{position:"relative",display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
