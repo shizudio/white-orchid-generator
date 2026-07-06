@@ -1292,6 +1292,26 @@ canvas[role="application"]:focus-visible {
 }
 .generator-preview-panel { order: 2; }
 
+/* (R2) INSPECTOR NEVER WRAPS / NEVER SCROLLS — with flex-wrap on the workspace, a
+   wide banner canvas held the centre column at its ~820px content width, so when
+   the inspector opened the three columns (chat 340 + panel 820 + inspector 320)
+   overflowed the row and the inspector WRAPPED to the next line, off-screen and
+   flush left (client: "why is the right panel shifted to the left and cause me to
+   scroll out of sight?"). Keep the three columns on ONE row and let the centre
+   column shrink below its canvas width so the inspector always fits + the canvas
+   recentres. Plus a hard overflow-x guard: the editor never scrolls horizontally
+   in any state. */
+.generator-workspace {
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.generator-preview-panel {
+  /* Flex items default to their content's min-width; a banner canvas would refuse
+     to shrink and wrap the inspector. min-width:0 lets the column collapse. */
+  min-width: 0;
+}
+
 /* (R1) VIEWPORT-DRIVEN STAGE — the fixed-height canvas stage (A3) must be sized
    by the VIEWPORT, not by the tallest format, so the design + controls + the
    "every format" strip are ALL visible on one screen (client: "always visible on
