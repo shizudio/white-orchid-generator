@@ -2268,7 +2268,9 @@ const MASTER_DIM = "ig_square"; // square is the master; other formats cascade f
 // lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS (identical values — pixel-
 // identity contract). Official brand-assets uploads are merged in at load
 // (see the /api/brand-assets fetch further down) on top of this fallback.
-const DEFAULT_OVERLAYS = [...DEFAULT_OVERLAY_ASSETS];
+// `let` (not const) so the DB overlay loader (P1 item d — the /api/overlay-assets
+// fetch further down) can replace the built-ins in place, mirroring LOGO_VARIANTS.
+let DEFAULT_OVERLAYS = [...DEFAULT_OVERLAY_ASSETS];
 
 /* ───────── STARTER TEMPLATES ─────────
    Built-in, complete design presets a preschool admin can recognise by outcome.
@@ -3947,6 +3949,25 @@ export default function App() {
         setLogoVariantsVersion(v => v + 1);
       })
       .catch(() => {}); // Built-in LOGO_VARIANTS fallback keeps the editor usable offline.
+    return () => { cancelled = true; };
+  }, []);
+
+  // (P1 item d) DB-hydrated BUILT-IN overlays (petal/shape + accessory tray).
+  // Degrades to the hardcoded DEFAULT_OVERLAYS fallback (identical values today)
+  // on any failure. Replaces the module-scope DEFAULT_OVERLAYS in place, then
+  // re-merges into the live overlays state — preserving the user's own uploads
+  // and the OFFICIAL decorations (/api/brand-assets) that layer on top.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/overlay-assets')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (cancelled || !d || d.configured === false || !Array.isArray(d.overlays) || !d.overlays.length) return;
+        DEFAULT_OVERLAYS = d.overlays.map(o => ({ ...o, builtin: true }));
+        // Rebuild built-ins from the DB list; keep the user's uploads + officials.
+        setOverlays(prev => [...DEFAULT_OVERLAYS, ...prev.filter(o => !o.builtin && !o.official), ...prev.filter(o => o.official)]);
+      })
+      .catch(() => {}); // Built-in DEFAULT_OVERLAYS fallback keeps the tray usable offline.
     return () => { cancelled = true; };
   }, []);
 

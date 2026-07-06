@@ -103,6 +103,53 @@ insert into logo_variants (slug, label, group_name, color_tone, shape, wide, sto
   ('s2-green',  'Secondary 2',     'secondary', 'green', 'horizontal', false, '/assets/logos/secondary/secondary-2-green.svg',    13, '00000000-0000-0000-0000-000000000001')
 on conflict (brand_id, slug) where slug is not null do nothing;
 
+-- Brand overlays (multi-tenancy P1 item d) — the built-in petal/shape +
+-- accessory set that ships in the "+ Add → Shapes" tray. Mirrors
+-- lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS 1:1 so a brand can re-point any
+-- built-in at its own uploaded asset. Same pattern + degradation contract as
+-- logo_variants: GET /api/overlay-assets reshapes these rows into the client's
+-- overlay shape; any env/table/row problem returns { configured:false } and the
+-- editor keeps the hardcoded DEFAULT_OVERLAYS fallback (byte-identical to the
+-- seed below), so a fresh brand or a DB outage shows the White Orchid shapes
+-- exactly as today. This is DISTINCT from the OFFICIAL owner-uploaded decorations
+-- (app/api/brand-assets, stored as bucket objects) which layer ON TOP of these.
+--
+-- ratio is stored as an integer numerator/denominator pair (ratio_num/ratio_den)
+-- so the client reproduces the EXACT float DEFAULT_OVERLAY_ASSETS uses (e.g.
+-- 169/207) — a rounded decimal column could shift petal sizing sub-pixel.
+create table if not exists brand_overlays (
+  id           uuid primary key default gen_random_uuid(),
+  brand_id     uuid default '00000000-0000-0000-0000-000000000001',
+  slug         text not null,           -- stable client id, e.g. "orchid-petal"
+  name         text not null,           -- tray label, e.g. "Orchid"
+  storage_path text not null,           -- public asset path today (/assets/shapes/…) or a Storage object
+  kind         text not null,           -- "center" | "accessory"
+  category     text not null,           -- "overlays" | "accessories"
+  ratio_num    int not null default 1,  -- aspect ratio numerator
+  ratio_den    int not null default 1,  -- aspect ratio denominator
+  sort_order   int not null default 0,
+  created_at   timestamptz default now()
+);
+create unique index if not exists brand_overlays_slug_idx on brand_overlays (brand_id, slug);
+
+-- Seed the White Orchid's 10 built-in overlays (identical to the DEFAULT_OVERLAYS
+-- fallback in lib/brand-defaults.js). storage_path is the SAME public asset path
+-- the app serves today, so seeding this table changes nothing until a brand's
+-- admin re-points a row. on conflict keyed by (brand_id, slug) so it is safe to
+-- run more than once.
+insert into brand_overlays (slug, name, storage_path, kind, category, ratio_num, ratio_den, sort_order, brand_id) values
+  ('orchid-petal', 'Orchid',       '/assets/shapes/orchid-petal.svg',        'center',    'overlays',    1,   1,   0, '00000000-0000-0000-0000-000000000001'),
+  ('shape-1',      'Shape 1',      '/assets/shapes/shape-1.svg',             'center',    'overlays',    169, 207, 1, '00000000-0000-0000-0000-000000000001'),
+  ('shape-2',      'Shape 2',      '/assets/shapes/shape-2.svg',             'center',    'overlays',    217, 196, 2, '00000000-0000-0000-0000-000000000001'),
+  ('shape-3',      'Shape 3',      '/assets/shapes/shape-3.svg',             'center',    'overlays',    173, 207, 3, '00000000-0000-0000-0000-000000000001'),
+  ('acc-arrow',    'Arrow',        '/assets/accessories/arrow.svg',          'accessory', 'accessories', 3,   1,   4, '00000000-0000-0000-0000-000000000001'),
+  ('acc-curve',    'Curved Arrow', '/assets/accessories/curved-arrow.svg',   'accessory', 'accessories', 1,   1,   5, '00000000-0000-0000-0000-000000000001'),
+  ('acc-spark',    'Spark',        '/assets/accessories/spark.svg',          'accessory', 'accessories', 1,   1,   6, '00000000-0000-0000-0000-000000000001'),
+  ('acc-plus',     'Plus',         '/assets/accessories/plus.svg',           'accessory', 'accessories', 1,   1,   7, '00000000-0000-0000-0000-000000000001'),
+  ('acc-ring',     'Ring',         '/assets/accessories/ring.svg',           'accessory', 'accessories', 1,   1,   8, '00000000-0000-0000-0000-000000000001'),
+  ('acc-wave',     'Wave',         '/assets/accessories/wave.svg',           'accessory', 'accessories', 3,   1,   9, '00000000-0000-0000-0000-000000000001')
+on conflict (brand_id, slug) do nothing;
+
 -- Images (uploaded source assets)
 create table if not exists images (
   id              uuid primary key default gen_random_uuid(),
