@@ -116,6 +116,50 @@ const TINTED_INTENT = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i
 const ROLE_OF_FIELD = { headline: 'hero', subtext: 'support', microLabel: 'eyebrow', dateText: 'date', pillText: 'pill' };
 const ROLE_LABELS = { hero: 'the title', support: 'the small text', eyebrow: 'the little label', date: 'the date', pill: 'the button' };
 const settle = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* ── (WP-W1) "NEVER OFFER WHAT YOU CAN'T EXECUTE" ────────────────────────────────
+   Client specimen: the assistant ended a turn with "Want me to switch to a layout
+   that shows it?"; the user typed "yes"; that affirmative went to the MODEL as a
+   fresh message and it fumbled (wrong patch, false claim, honesty self-correction).
+   The offer was words with no wired execution.
+
+   THE LAW: any assistant turn that ENDS WITH AN OFFER must attach a concrete,
+   SERIALIZABLE pending-action payload (pendingOffer) — the same grammar as the
+   actionable-findings actions[]: patch | ai-fix | deep-link. It is stored on the
+   assistant message (so it survives in the session record exactly like messages
+   do). An affirmative next user turn ("yes", "ok", "do it") executes the payload
+   DIRECTLY through the patch pipeline — no model round-trip. A non-affirmative
+   reply clears it and flows to the model normally. The payload is ALSO rendered as
+   a one-tap chip so the user need not even type yes. */
+
+// Deterministic affirmative matcher (NOT the model). Whole-message affirmations
+// only — "yes", "ok", "sure", "do it", "go ahead", "yes please", "please do".
+// A message that ALSO carries a fresh instruction ("yes but make it blue") is NOT
+// treated as a bare accept — it flows to the model so the new instruction lands.
+const AFFIRMATIVE = /^(?:yes|yep|yeah|yup|ok|okay|sure|please|do it|go ahead|go for it|switch it|switch|let'?s do it|sounds good|that works|yes please|please do|yes do it|do that|change it)\b[\s.!,]*$/i;
+function isAffirmative(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 24) return false; // a long reply is an instruction, not a bare "yes"
+  return AFFIRMATIVE.test(t);
+}
+
+// (Law #4) BANNED OFFER PHRASING. An offer the MODEL writes on its own ("Want me
+// to switch the layout?") has NO wired execution — the affirmative would go back to
+// the model and fumble (the exact specimen). So a model reply that ENDS with such
+// an offer is rewritten client-side to state the honest, tappable alternative
+// (deterministic offers we attach ourselves in the honesty pass are unaffected —
+// they carry a real pendingOffer + chip). The banned trailing clause:
+const MODEL_OFFER_TAIL = /\s*(?:—\s*)?(?:so\s+)?(?:do you\s+)?(?:want me to|would you like me to|shall i|should i|want me to switch|do you want me to)\b[^.?!]*\??\s*$/i;
+function hasBannedOffer(reply) { return MODEL_OFFER_TAIL.test(String(reply || '')); }
+function stripBannedOffer(reply) {
+  return String(reply || '').replace(MODEL_OFFER_TAIL, '').replace(/[\s,;:—-]+$/, '').trim();
+}
+
+// A pendingOffer descriptor is SERIALIZABLE (no closures) so it round-trips through
+// the session record. kind:'patch' carries a design patch applied through the same
+// pipeline the inspector's one-tap "switch to a layout that shows it" uses. The
+// chip label + a truthful confirm line travel with it. Executed identically whether
+// the user types "yes" or taps the chip.
 const logoCenter = (b) => b ? { x: b.x + b.w / 2, y: b.y + b.h / 2 } : null;
 
 /* ── (WP-W) CAPTURE HELPERS ──────────────────────────────────────────────────
@@ -244,9 +288,100 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, loading]);
 
+  // (WP-W1) Execute a pendingOffer's payload DIRECTLY through the patch pipeline —
+  // no model round-trip. Records the user's acceptance as a message, applies the
+  // patch, verifies render truth (dead-role must now be gone / archetype changed),
+  // and confirms TRUTHFULLY. Logs offer-accepted + offer-executed (+ outcome).
+  // Used by BOTH the typed-"yes" path and the one-tap chip.
+  const executeOffer = useCallback(async (offer, acceptText) => {
+    if (!offer || loading) return;
+    setError(''); setRetryText('');
+    const turnId = newTurnId();
+    // Record the acceptance as a user line (unless the chip supplied its own label
+    // — the chip path shows the button, not a typed message).
+    const accepted = String(acceptText || '').trim();
+    setMessages(prev => {
+      const base = accepted ? [...prev, { role: 'user', content: accepted, turnId }] : prev.slice();
+      return base;
+    });
+    logFeedback({
+      turn_id: turnId, session_id: sessionIdRef.current || null,
+      user_message: accepted || '[chip] accept offer',
+      verdict: { event: 'offer-accepted', offerKind: offer.kind, offerEvent: offer.event || null,
+        via: accepted ? 'typed' : 'chip' },
+    });
+    setLoading(true);
+    const apply = applyRef.current || onApplyPatch;
+    const truthFn = typeof truthRef.current === 'function' ? truthRef.current : null;
+    const truthBefore = truthFn ? truthFn() : null;
+    try {
+      let changeKeys = [];
+      if (offer.kind === 'patch' && offer.patch && patchHasChanges(offer.patch)) {
+        changeKeys = apply(offer.patch) || [];
+      } else if (offer.kind === 'ai-fix' && offer.prompt) {
+        // ai-fix routes a targeted prompt through the normal assistant pipeline
+        // (undoable, honesty-checked) — exactly as the finding's ai-fix action does.
+        setLoading(false);
+        return send(offer.prompt, { chip: 'offer-ai-fix', offerEvent: offer.event });
+      }
+      // Verify render truth: did the offer actually land? (Same honesty discipline
+      // as a normal turn — we NEVER confirm a switch the canvas contradicts.)
+      let landed = changeKeys.length > 0;
+      let truthAfter = truthBefore;
+      if (truthFn && truthBefore) {
+        const expectArch = offer.patch && typeof offer.patch.archetypeId === 'string';
+        const roles = Array.isArray(offer.revealRoles) ? offer.revealRoles : [];
+        // Poll render truth over a short window — a layout switch triggers a
+        // re-materialize + reflow + redraw, which can settle after the first frame.
+        for (let i = 0; i < 4; i++) {
+          await settle(400);
+          truthAfter = truthFn();
+          const archChanged = !expectArch || truthAfter.archetypeId !== truthBefore.archetypeId;
+          const stillDead = roles.some(r => (truthAfter.deadRoles || []).includes(r));
+          if (archChanged && !stillDead) { landed = true; break; }
+          landed = expectArch ? (archChanged && !stillDead) : landed;
+        }
+      }
+      logFeedback({
+        turn_id: turnId, session_id: sessionIdRef.current || null,
+        verdict: { event: 'offer-executed', offerKind: offer.kind, offerEvent: offer.event || null,
+          renderTruth: landed ? 'landed' : 'not-landed',
+          archetypeBefore: truthBefore?.archetypeId ?? null, archetypeAfter: truthAfter?.archetypeId ?? null },
+      });
+      // Mark this offer spent on the message that carried it so its chip disappears
+      // (match by reference OR by the offer's stable id, which survives a restore).
+      setMessages(prev => prev.map(m =>
+        (m.pendingOffer === offer || (m.pendingOffer && offer.id && m.pendingOffer.id === offer.id))
+          ? { ...m, pendingOffer: null, offerSpent: true } : m));
+      setMessages(prev => [...prev, landed
+        ? { role: 'assistant', content: offer.confirm || 'Done — that switch is on the canvas now.',
+            summary: changeKeys.length ? summarizeKeys(changeKeys) : 'archetype',
+            undoIndex: Date.now(), turnId, undoTurnId: turnId, feedbackable: true }
+        // Truthful failure — never claim a switch the canvas contradicts.
+        : { role: 'assistant', content: "I tried that just now, but the canvas didn't take the switch. Try the “Try another layout” chip, or tap the element to edit it directly." }]);
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: "I couldn't apply that just now. Try the “Try another layout” chip, or tap the element to edit it." }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, onApplyPatch]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const send = useCallback(async (textOverride, meta = {}) => {
     const content = String(textOverride ?? input).trim();
     if (!content || loading) return;
+    // (WP-W1) A pendingOffer on the most recent assistant message + an affirmative
+    // reply → execute the offer DIRECTLY (no model round-trip). A non-affirmative
+    // reply CLEARS the pending offer and flows to the model as normal.
+    if (!meta.skipOfferCheck) {
+      const lastOfferMsg = [...messages].reverse().find(m => m.role === 'assistant' && m.pendingOffer);
+      if (lastOfferMsg && lastOfferMsg.pendingOffer) {
+        if (isAffirmative(content)) {
+          return executeOffer(lastOfferMsg.pendingOffer, content);
+        }
+        // Non-affirmative: clear the pending offer, then fall through to the model.
+        setMessages(prev => prev.map(m => m === lastOfferMsg ? { ...m, pendingOffer: null } : m));
+      }
+    }
     setError('');
     setRetryText('');   // (B4) clear any prior failed-turn retry affordance
     // WP-W capture: one turn id per exchange; a rephrase/re-ask of the just-said
@@ -394,9 +529,22 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       // the tokens already shown, reconcile with the authoritative final reply, and
       // attach the summary/undo/thumb chrome. Falls back to appending if — somehow —
       // no streaming bubble exists (e.g. a zero-token reply).
+      // (Law #4) If the model wrote its OWN offer ("…want me to switch?") it has no
+      // wired execution — strip that trailing clause and append the honest,
+      // tappable alternative so an affirmative can't fumble back to the model.
+      let replyText = data.reply || 'Done.';
+      if (hasBannedOffer(replyText)) {
+        const stripped = stripBannedOffer(replyText);
+        replyText = (stripped ? stripped + ' ' : '')
+          + 'Tap the “Try another layout” chip, or tap the element on the canvas to edit it directly.';
+        verdict.contradictions = verdict.contradictions || [];
+        verdict.contradictions.push('model-offer-rewritten-no-payload');
+        logFeedback({ turn_id: turnId, session_id: sessionIdRef.current || null,
+          verdict: { event: 'offer-rewritten', reason: 'model-offer-no-payload' } });
+      }
       const finalMsg = {
         role: 'assistant',
-        content: data.reply || 'Done.',
+        content: replyText,
         summary: summaryParts.join(', '),
         thumb,
         providerLabel,
@@ -521,9 +669,44 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
               return;
             }
           }
-          setMessages(prev => [...prev, {
+          // (WP-W1) The offer is NO LONGER bare words. It carries a concrete,
+          // serializable pendingOffer payload — the SAME deterministic layout-switch
+          // the inspector's one-tap "switch to a layout that shows it" applies
+          // (mediaObj ? editorial_split : label_headline). Typing "yes" or tapping
+          // the chip executes THIS patch directly (no model round-trip); the
+          // executor re-verifies render truth before confirming.
+          const hasImage = !!(stateBefore && stateBefore.hasImage);
+          const offerTarget = hasImage ? 'editorial_split' : 'label_headline';
+          const revealRoles = deadFields.map(([, role]) => role);
+          // COPY TRAVELS: carry the just-filled copy fields into the switch patch so
+          // materialization writes them into the NEW layout's roles deterministically
+          // (an archetype-only patch relies on closure copy, which can be stale in the
+          // async continuation — passing the values makes the reveal reliable).
+          const carryCopy = {};
+          for (const [field] of deadFields) {
+            const v = typeof patch[field] === 'string' ? patch[field] : undefined;
+            if (typeof v === 'string') carryCopy[field] = v;
+          }
+          const offer = offerTarget !== truthAfter.archetypeId
+            ? { id: newTurnId(), kind: 'patch', patch: { archetypeId: offerTarget, ...carryCopy }, revealRoles,
+                label: 'Yes — switch layout',
+                confirm: `Done — I moved you to a layout that shows ${deadHits.join(' or ')}. It's on the canvas now; tap Undo to keep the old one.`,
+                event: 'dead-role' }
+            : null;
+          verdict.offerMade = !!offer;
+          if (offer) {
+            logFeedback({ turn_id: turnId, session_id: sessionIdRef.current || null,
+              verdict: { event: 'offer-made', offerKind: 'patch', offerEvent: 'dead-role', target: offerTarget } });
+          }
+          setMessages(prev => [...prev, offer ? {
             role: 'assistant',
             content: `One honest note — this layout doesn't actually show ${deadHits.join(' or ')}, so it isn't visible on the canvas. Want me to switch to a layout that shows it?`,
+            pendingOffer: offer,
+          } : {
+            // No executable switch (already on the target) — the offer PHRASING is
+            // banned; state the honest alternative instead.
+            role: 'assistant',
+            content: `One honest note — this layout doesn't show ${deadHits.join(' or ')}. Tap the “Try another layout” chip, or tap the element to edit it directly.`,
           }]);
           setLoading(false);
           return;
@@ -552,12 +735,31 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             // Name the reason when the layout draws no logo at all (photo-restraint
             // archetypes / logoUse:"none"); otherwise offer the concrete next move.
             const noLogo = !truthAfter.logoBox;
-            setMessages(prev => [...prev, {
-              role: 'assistant',
-              content: noLogo
-                ? "This layout doesn't place a logo on its own — want me to switch to one that shows your mark, then put it there?"
-                : "Checking the canvas — the logo didn't land there on this layout. Try naming a corner (“put the logo top-left”), or drag it on the canvas and it'll stick.",
-            }]);
+            if (noLogo) {
+              // (WP-W1) The "switch to one that shows your mark, then put it there"
+              // offer now carries a real payload: a layout that draws the logo PLUS
+              // the requested placement, executed as one patch on accept.
+              const hasImage = !!(stateBefore && stateBefore.hasImage);
+              const logoTarget = hasImage ? 'editorial_split' : 'label_headline';
+              const offer = { id: newTurnId(), kind: 'patch',
+                patch: { archetypeId: logoTarget, ...(requested ? { logoPosition: requested } : {}) },
+                label: 'Yes — switch and place it',
+                confirm: "Done — switched to a layout that carries your mark, and placed it where you asked. Tap Undo to go back.",
+                event: 'logo-no-layout' };
+              verdict.offerMade = true;
+              logFeedback({ turn_id: turnId, session_id: sessionIdRef.current || null,
+                verdict: { event: 'offer-made', offerKind: 'patch', offerEvent: 'logo-no-layout', target: logoTarget } });
+              setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: "This layout doesn't place a logo on its own — want me to switch to one that shows your mark, then put it there?",
+                pendingOffer: offer,
+              }]);
+            } else {
+              setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: "Checking the canvas — the logo didn't land there on this layout. Try naming a corner (“put the logo top-left”), or drag it on the canvas and it'll stick.",
+              }]);
+            }
             setLoading(false);
             return;
           }
@@ -761,6 +963,21 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         {messages.map((m, i) => (
           <div key={i} className={`ad-msg ad-msg--${m.role}`}>
             <div className="ad-bubble">{m.content}</div>
+            {/* (WP-W1) PENDING-OFFER CHIP — one tap does the identical deterministic
+                thing typing "yes" does: executes the offer payload directly, no
+                model round-trip. Only shown while the offer is still live. */}
+            {m.role === 'assistant' && m.pendingOffer && (
+              <div className="ad-offer-actions">
+                <button
+                  type="button"
+                  className="ad-offer-chip"
+                  disabled={loading}
+                  onClick={() => executeOffer(m.pendingOffer, '')}
+                >
+                  {m.pendingOffer.label || 'Yes — do it'}
+                </button>
+              </div>
+            )}
             {m.role === 'assistant' && m.thumb && (
               <img className="ad-thumb" src={m.thumb} alt="Generated image applied to the design" />
             )}
