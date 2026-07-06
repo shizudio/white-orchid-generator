@@ -9,6 +9,7 @@ const STEPS = [
   ['Add what’s missing', 'The ＋ Add button in the top bar shows everything you can add — small text, a date, a button, the logo, a photo, and the signature petal Shapes. Tap a tile, no design words needed.'],
   ['Ask Orchid', 'The chat changes anything you can describe — “make the background wisteria”, “try another layout”, “generate a photo of children painting outdoors”.'],
   ['Check + export', 'Run the AI audit for contrast and on-brand polish, write a caption with the Caption writer, then Export — one format or all sizes at once.'],
+  ['Report something that’s off', 'Type “/feedback” in the chat followed by what isn’t working — Orchid notes it with a snapshot of your current design and sends it to the team. No form to fill in.'],
   ['Save for the team', 'Templates → “Save current design” adds it to the shared library so the whole team can reuse it.'],
 ];
 

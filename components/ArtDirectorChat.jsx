@@ -117,6 +117,96 @@ const ROLE_OF_FIELD = { headline: 'hero', subtext: 'support', microLabel: 'eyebr
 const ROLE_LABELS = { hero: 'the title', support: 'the small text', eyebrow: 'the little label', date: 'the date', pill: 'the button' };
 const settle = (ms) => new Promise(r => setTimeout(r, ms));
 
+/* ── (WP-Z) THE /feedback COMMAND ──────────────────────────────────────────────
+   A client-ratified escape hatch: any message starting with "/feedback" (also
+   "/feedback:" or a bare "/feedback" with no text) is intercepted DETERMINISTICALLY
+   in send() and NEVER goes to the model. It captures a rich context bundle (design
+   snapshot, recent turns, advisor findings, a downscaled canvas thumbnail) through
+   the SAME capture pipe the honesty loop uses, tagged kind:'user_feedback' so the
+   learning pass ranks it highest-grade. Orchid replies warmly + instantly,
+   disclosing the snapshot. A synthetic tester can't spoof this tag: its utterances
+   are intercepted client-side and its cloud writes are blocked anyway.
+
+   Everything in the bundle is BEST-EFFORT — a missing piece never blocks the note. */
+const FEEDBACK_CMD = /^\/feedback\b:?\s*/i;
+function isFeedbackCommand(text) {
+  const t = String(text || '').trim();
+  return /^\/feedback\b/i.test(t) || t === '/feedback';
+}
+function stripFeedbackCommand(text) {
+  return String(text || '').trim().replace(FEEDBACK_CMD, '').trim();
+}
+// A light heuristic for the addendum path: a next message that opens with "I
+// expected" / "it should" is treated as an elaboration of the just-filed feedback.
+const ADDENDUM_HINT = /^(i expected|it should|it shoud|i wanted|i'?d expected|expected)\b/i;
+function looksLikeAddendum(text) { return ADDENDUM_HINT.test(String(text || '').trim()); }
+
+// Best-effort build commit: NEXT_PUBLIC_COMMIT if wired, else the app version.
+function buildCommit() {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_COMMIT) {
+      return String(process.env.NEXT_PUBLIC_COMMIT);
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// Downscale the live canvas to a small JPEG dataURL (~480px wide) via an offscreen
+// canvas so the inline thumbnail stays well under ~150KB. Returns null on any
+// failure (tainted canvas, no context, etc.) — the note ships without it.
+function captureCanvasThumb() {
+  try {
+    if (typeof document === 'undefined') return null;
+    const src = document.querySelector('.generator-canvas-shell canvas') || document.querySelector('canvas');
+    if (!src || !src.width || !src.height) return null;
+    const targetW = 480;
+    const scale = Math.min(1, targetW / src.width);
+    const w = Math.max(1, Math.round(src.width * scale));
+    const h = Math.max(1, Math.round(src.height * scale));
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    const ctx = off.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(src, 0, 0, w, h);
+    const url = off.toDataURL('image/jpeg', 0.6);
+    // Guard the payload ceiling — drop the thumb rather than bloat the note.
+    return (typeof url === 'string' && url.length <= 150 * 1024) ? url : null;
+  } catch { return null; }
+}
+
+// Active advisor findings, best-effort, via the console-verifiable ready check.
+// Returns a compact, blob-free digest (never the whole verdict tree).
+function readAdvisorFindings() {
+  try {
+    if (typeof window === 'undefined' || typeof window.__woReadyCheck !== 'function') return null;
+    const r = window.__woReadyCheck();
+    const formats = Array.isArray(r?.formats) ? r.formats : [];
+    const digest = formats
+      .filter(f => f && (f.status === 'attention' || (Array.isArray(f.issues) && f.issues.length)))
+      .map(f => ({
+        dimensionId: f.dimensionId ?? null,
+        status: f.status ?? null,
+        issues: (Array.isArray(f.issues) ? f.issues : [])
+          .slice(0, 6)
+          .map(i => (typeof i === 'string' ? i : (i?.category || i?.label || i?.message || null)))
+          .filter(Boolean),
+      }));
+    return digest.length ? digest : null;
+  } catch { return null; }
+}
+
+// Recent console errors, ONLY if some buffer already exists (we do NOT install an
+// interceptor for this — best-effort per the design).
+function readConsoleErrors() {
+  try {
+    if (typeof window === 'undefined') return null;
+    const buf = window.__woConsoleErrors;
+    if (typeof buf === 'function') { const v = buf(); return Array.isArray(v) ? v.slice(-6) : null; }
+    if (Array.isArray(buf)) return buf.slice(-6);
+    return null;
+  } catch { return null; }
+}
+
 /* ── (WP-W1) "NEVER OFFER WHAT YOU CAN'T EXECUTE" ────────────────────────────────
    Client specimen: the assistant ended a turn with "Want me to switch to a layout
    that shows it?"; the user typed "yes"; that affirmative went to the MODEL as a
@@ -222,6 +312,11 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   // The previous turn's id + user message — for implicit verdict enrichment
   // (a rephrase/re-ask of the same thing marks the previous turn a "failure").
   const prevTurnRef = useRef(null);
+  // (WP-Z) The last /feedback event filed this session — so a next "I expected…"
+  // reply can be appended as an addendum that references it.
+  const lastFeedbackRef = useRef(null); // { turnId, sessionId }
+  const chipCtxRef = useRef(chipCtx);
+  chipCtxRef.current = chipCtx;
 
   // WP-W: is the parent driving sessions? (one session = one post — the
   // conversation belongs to the session, not the tab.)
@@ -366,9 +461,92 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     }
   }, [loading, onApplyPatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // (WP-Z) File a /feedback note. DETERMINISTIC + instant — never touches the model.
+  // Builds the best-effort context bundle, stores it through the existing capture
+  // pipe (tagged kind:'user_feedback', so the learning pass ranks it highest), and
+  // shows a warm confirmation that discloses the snapshot. Fire-and-forget storage;
+  // the pipe already mirrors to a localStorage ring buffer, so this works with the
+  // cloud configured AND unreachable.
+  const fileFeedback = useCallback((rawText) => {
+    const text = stripFeedbackCommand(rawText);
+    const turnId = newTurnId();
+    const sid = sessionIdRef.current || null;
+    // Record the user's line verbatim (with the command) so the thread reads true.
+    setMessages(prev => [...prev, { role: 'user', content: String(rawText).trim(), turnId }]);
+    // ── Context bundle (every piece best-effort; a miss never blocks the note) ──
+    let design = null;
+    try { const read = designStateRef.current || designState; design = read(); } catch { /* ignore */ }
+    let lastTurns = [];
+    try {
+      lastTurns = messages.slice(-6).map(m => ({ role: m.role, content: String(m.content || '').slice(0, 800) }));
+    } catch { /* ignore */ }
+    const bundle = {
+      kind: 'user_feedback',
+      text,
+      ts: new Date().toISOString(),
+      sessionId: sid,
+      commit: buildCommit(),
+      dimensionId: design?.dimensionId ?? null,
+      format: design?.dimensionId ?? null,
+      designState: design || null,
+      lastTurns,
+      advisorFindings: readAdvisorFindings(),
+      thumbnail: captureCanvasThumb(),
+      consoleErrors: readConsoleErrors(),
+    };
+    // Store through the capture pipe. user_message stays top-level (verbatim);
+    // the whole bundle rides in the verdict jsonb column (kind marks it).
+    logFeedback({
+      turn_id: turnId,
+      session_id: sid,
+      user_message: text || '[/feedback]',
+      verdict: bundle,
+    });
+    lastFeedbackRef.current = { turnId, sessionId: sid };
+    prevTurnRef.current = { turnId, content: text };
+    // Warm, instant, deterministic confirmation that discloses the snapshot.
+    setMessages(prev => [...prev, {
+      role: 'assistant',
+      content: "Thank you — I've noted this along with a snapshot of your current design and sent it to the team. If you like, tell me what you expected instead — I'll add it to the note.",
+    }]);
+    setInput('');
+    inputRef.current?.focus();
+  }, [designState, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // (WP-Z) Append an elaboration to the most recent /feedback event as an addendum
+  // (same pipe, kind:'user_feedback_addendum', ref back to the feedback turn id).
+  const fileFeedbackAddendum = useCallback((rawText) => {
+    const ref = lastFeedbackRef.current;
+    if (!ref) return false;
+    const text = String(rawText || '').trim();
+    const turnId = newTurnId();
+    setMessages(prev => [...prev, { role: 'user', content: text, turnId }]);
+    logFeedback({
+      turn_id: turnId,
+      session_id: ref.sessionId || sessionIdRef.current || null,
+      user_message: text,
+      verdict: { kind: 'user_feedback_addendum', ref: ref.turnId, text, ts: new Date().toISOString() },
+    });
+    setMessages(prev => [...prev, {
+      role: 'assistant',
+      content: "Got it — I've added that to your note. Thank you for the detail.",
+    }]);
+    setInput('');
+    inputRef.current?.focus();
+    return true;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const send = useCallback(async (textOverride, meta = {}) => {
     const content = String(textOverride ?? input).trim();
     if (!content || loading) return;
+    // (WP-Z) THE /feedback INTERCEPT — deterministic, first, never to the model.
+    if (isFeedbackCommand(content)) { fileFeedback(content); return; }
+    // (WP-Z) ADDENDUM — a light "I expected…"/"it should…" reply right after a
+    // /feedback note is appended to it rather than sent to the model. When in doubt
+    // (no recent note, or the heuristic doesn't match) the message flows on normally.
+    if (!meta.chip && lastFeedbackRef.current && looksLikeAddendum(content)) {
+      if (fileFeedbackAddendum(content)) return;
+    }
     // (WP-W1) A pendingOffer on the most recent assistant message + an affirmative
     // reply → execute the offer DIRECTLY (no model round-trip). A non-affirmative
     // reply CLEARS the pending offer and flows to the model as normal.
@@ -784,7 +962,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       commitLog();
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth]);
+  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth, fileFeedback, fileFeedbackAddendum]);
 
   // (findings actions-model law) Expose an imperative send so a finding's "Shorten it
   // for me" ai-fix action can route a targeted prompt through the SAME assistant +
@@ -1062,6 +1240,17 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           </button>
         ))}
       </div>
+
+      {/* (WP-Z) Slash discoverability — typing "/" alone reveals the one command we
+          have. Airy, on-brand, one line; disappears the moment the input grows. */}
+      {input.trim() === '/' && (
+        <div className="ad-slash-hint" role="status">
+          <button type="button" className="ad-slash-cmd" onClick={() => { setInput('/feedback '); inputRef.current?.focus(); }}>
+            <span className="ad-slash-name">/feedback</span>
+            <span className="ad-slash-desc">report something that isn’t working right</span>
+          </button>
+        </div>
+      )}
 
       <form className="ad-input-row" onSubmit={e => { e.preventDefault(); send(); }}>
         <textarea
