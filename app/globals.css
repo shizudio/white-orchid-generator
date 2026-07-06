@@ -365,6 +365,16 @@ canvas[role="application"]:focus-visible {
 }
 .ad-undo-chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .ad-error { font-family: var(--font-body); font-size: 13px; color: #a43c2d; margin: 0; }
+/* (B4) Warm, retryable error block — a failed turn is never a dead end. */
+.ad-error-block { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 4px; }
+.ad-retry-chip {
+  font-family: var(--font-syne, var(--font-body)); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.03em; color: var(--fg-strong, #254e48);
+  background: color-mix(in srgb, var(--tw-celadon) 24%, #fff);
+  border: 1px solid color-mix(in srgb, var(--tw-celadon-deep) 42%, transparent);
+  border-radius: 999px; padding: 6px 13px; cursor: pointer; transition: background 140ms;
+}
+.ad-retry-chip:hover { background: color-mix(in srgb, var(--tw-celadon) 40%, #fff); }
 
 /* (WP-W §3) Feedback chip — thumbs-down only, subtle + on-brand. */
 .ad-row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

@@ -154,6 +154,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // (B4) Never a dead end: when a turn fails (network / 500 / empty), we keep the
+  // exact message the user sent so the warm error can offer a one-tap Retry.
+  const [retryText, setRetryText] = useState('');
   const [hydrated, setHydrated] = useState(false);
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -245,6 +248,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     const content = String(textOverride ?? input).trim();
     if (!content || loading) return;
     setError('');
+    setRetryText('');   // (B4) clear any prior failed-turn retry affordance
     // WP-W capture: one turn id per exchange; a rephrase/re-ask of the just-said
     // thing marks the PREVIOUS turn a failure (implicit verdict enrichment §1).
     const turnId = newTurnId();
@@ -308,6 +312,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({}));
         setError(data.error || "AI isn't set up yet.");
+        setRetryText(content);
         setLoading(false);
         return;
       }
@@ -342,12 +347,14 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         // Drop the (possibly empty) streaming bubble and surface a warm, retryable error.
         if (streamIdx >= 0) setMessages(prev => prev.filter((_, i) => i !== streamIdx));
         setError(streamErr);
+        setRetryText(content);
         setLoading(false);
         return;
       }
       if (!data) {
         if (streamIdx >= 0) setMessages(prev => prev.filter((_, i) => i !== streamIdx));
         setError("That response came through incomplete. Please try again.");
+        setRetryText(content);
         setLoading(false);
         return;
       }
@@ -533,7 +540,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             verdict.contradictions.push('logo-move-not-rendered');
             setMessages(prev => [...prev, {
               role: 'assistant',
-              content: "Checking the canvas — the logo didn't actually move there on this layout. I couldn't do that yet.",
+              // (B4) Never a dead end — offer the concrete next move (name a corner,
+              // or drag it) instead of just "I couldn't".
+              content: "Checking the canvas — the logo didn't land there on this layout. Try naming a corner (“put the logo top-left”), or drag it on the canvas and it'll stick.",
             }]);
             setLoading(false);
             return;
@@ -552,7 +561,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         }
       }
     } catch {
-      setError("I couldn't reach the AI just now. Please try again.");
+      if (streamIdx >= 0) setMessages(prev => prev.filter((_, i) => i !== streamIdx));
+      setError("I couldn't reach the AI just now — that's on the connection, not you.");
+      setRetryText(content);
     } finally {
       commitLog();
       setLoading(false);
@@ -788,7 +799,20 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             <div className="ad-bubble ad-typing"><span /><span /><span /></div>
           </div>
         )}
-        {error && <p className="ad-error" role="alert">{error}</p>}
+        {/* (B4) NEVER A DEAD END — a failed turn shows a warm line AND a one-tap
+            Retry (re-sends the exact message), so the user is never stranded on a
+            bare error. Falls back to just the line if we somehow lost the text. */}
+        {error && (
+          <div className="ad-error-block" role="alert">
+            <p className="ad-error">{error}</p>
+            {retryText && (
+              <button type="button" className="ad-retry-chip"
+                onClick={() => { const t = retryText; setError(''); setRetryText(''); send(t); }}>
+                ↻ Try again
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="wo-chat-chips" role="toolbar" aria-label="Quick actions">
