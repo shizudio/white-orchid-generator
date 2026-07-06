@@ -28,6 +28,35 @@ create table if not exists brand_kit (
   guardrails    text not null default 'No identifiable children''s faces without explicit parental consent. No overclaiming language (e.g. "best", "only"). Keep copy warm and parent-facing, not child-facing.'
 );
 
+-- (Multi-tenancy P1 — docs/multi-tenancy-spec.md) Identity + voice + photo-brief
+-- fields, added so brand name/wordmark, the AI assistant's persona name, the
+-- voice/tone copy rules, and the Higgsfield photographer-brief template all
+-- live in the DB instead of hardcoded strings in app/api/assistant/route.js,
+-- lib/higgsfield.js and components/Generator.jsx. Idempotent; defaults are
+-- IDENTICAL to today's hardcoded values (lib/brand-defaults.js is the code
+-- fallback, kept in sync by hand) so an un-migrated DB or a missing column
+-- degrades to exactly the current White Orchid behaviour.
+alter table brand_kit add column if not exists name            text not null default 'The White Orchid';
+alter table brand_kit add column if not exists assistant_name  text not null default 'Orchid';
+alter table brand_kit add column if not exists tone            text not null default 'warm, thoughtful, premium, clear and human';
+alter table brand_kit add column if not exists voice_rules     text not null default 'Warm, plain-English, never salesy.
+COPY TONE (applies to EVERY copy field you write — headline, subtext, attribution, reply):
+- NEVER use an exclamation mark. Not one. Calm confidence, not excitement.
+- Never salesy or promotional ("Join us for a day of discovery and learning!" is exactly wrong). No urgency phrases, no hype adjectives, no "don''t miss".
+- Sentence case, not Title Case ("Come and see for yourself", not "Join Us For Our Open House").
+- Short, quiet, editorial. An invitation reads like a note from a calm teacher, not a flyer.
+- Avoid brochure clichés: "Join us for…", "a day of discovery and learning", "fun-filled", "exciting". Prefer plain, concrete lines ("Come and see for yourself", "Doors open at nine").';
+-- Photographer-brief template (lib/higgsfield.js brandPhotoPrompt): the fixed
+-- warm-grade + closing-negatives sentences, and the casting/setting brief used
+-- by the gpt-image-1 fallback. JSONB so a brand can override any slot
+-- independently; PHOTO_GRADE / PHOTO_CLOSING / castingBrief keys mirror
+-- lib/brand-defaults.js DEFAULT_PHOTO_BRIEF.
+alter table brand_kit add column if not exists photo_brief jsonb not null default '{
+  "grade": "Gentle warm color grade, palette of forest green, ivory and warm terracotta, natural warm Asian skin tones.",
+  "closing": "No text, no letters, no words, no logos, no UI, no poster, no frame, no layout, no captions, no border. A single full-frame edge-to-edge photograph.",
+  "castingBrief": "Editorial photography for a calm, premium preschool / early-education brand. Warm natural light, soft focus, gentle earthy palette (deep forest green, ivory, soft mauve, muted celadon). Authentic, unposed, documentary feel; shallow depth of field; no harsh flash."
+}'::jsonb;
+
 -- Logo variants (admin-managed, replaces hardcoded LOGO_VARIANTS)
 create table if not exists logo_variants (
   id          uuid primary key default gen_random_uuid(),
@@ -38,6 +67,41 @@ create table if not exists logo_variants (
   sort_order  int not null default 0,
   created_at  timestamptz default now()
 );
+
+-- (Multi-tenancy P1 item c) slug (a stable client-facing id, e.g. "p1-green"),
+-- shape (the render-selection class: horizontal|stacked|square|mark — see
+-- pickBrandLogo in components/Generator.jsx) and wide (extra-wide lockup
+-- bonus flag) — the fields GET /api/logo-variants needs to reproduce the
+-- LOGO_VARIANTS shape exactly. Idempotent; nullable so absent columns degrade
+-- gracefully (the client's hardcoded fallback keeps rendering unchanged).
+alter table logo_variants add column if not exists slug  text;
+alter table logo_variants add column if not exists shape text;
+alter table logo_variants add column if not exists wide  boolean not null default false;
+alter table logo_variants add column if not exists brand_id uuid default '00000000-0000-0000-0000-000000000001';
+create unique index if not exists logo_variants_slug_idx on logo_variants (brand_id, slug) where slug is not null;
+
+-- Seed the White Orchid's 14 logo variants (identical to the LOGO_VARIANTS
+-- fallback in lib/brand-defaults.js) — storage_path here is the SAME public
+-- asset path the app already serves today (/assets/logos/...), not a Supabase
+-- Storage object, so seeding this table changes nothing until a brand's admin
+-- actually re-points a row at an uploaded asset. on conflict keyed by slug so
+-- this insert is safe to run more than once.
+insert into logo_variants (slug, label, group_name, color_tone, shape, wide, storage_path, sort_order, brand_id) values
+  ('p1-green',  'Primary 1',       'primary',   'green', 'horizontal', false, '/assets/logos/primary/primary-1-green.svg',        0,  '00000000-0000-0000-0000-000000000001'),
+  ('p1-ivory',  'Primary 1',       'primary',   'ivory', 'horizontal', false, '/assets/logos/primary/primary-1-ivory.svg',        1,  '00000000-0000-0000-0000-000000000001'),
+  ('p2-green',  'Primary 2',       'primary',   'green', 'horizontal', true,  '/assets/logos/primary/primary-2-green.svg',        2,  '00000000-0000-0000-0000-000000000001'),
+  ('p2-ivory',  'Primary 2',       'primary',   'ivory', 'horizontal', true,  '/assets/logos/primary/primary-2-ivory.svg',        3,  '00000000-0000-0000-0000-000000000001'),
+  ('p3-green',  'Primary 3',       'primary',   'green', 'stacked',    false, '/assets/logos/primary/primary-3-green.svg',        4,  '00000000-0000-0000-0000-000000000001'),
+  ('p3-ivory',  'Primary 3',       'primary',   'ivory', 'stacked',    false, '/assets/logos/primary/primary-3-flat-ivory.svg',   5,  '00000000-0000-0000-0000-000000000001'),
+  ('p3f-green', 'Primary 3 Flat',  'primary',   'green', 'stacked',    false, '/assets/logos/primary/primary-3-flat-green.svg',   6,  '00000000-0000-0000-0000-000000000001'),
+  ('p4',        'Primary 4',       'primary',   'green', 'square',     false, '/assets/logos/primary/primary-4.svg',              7,  '00000000-0000-0000-0000-000000000001'),
+  ('p-central', 'Central',         'primary',   'green', 'horizontal', false, '/assets/logos/primary/primary-central-green.svg',  8,  '00000000-0000-0000-0000-000000000001'),
+  ('p-circle',  'Circle',          'primary',   'green', 'mark',       false, '/assets/logos/primary/primary-circle.svg',         9,  '00000000-0000-0000-0000-000000000001'),
+  ('p-bg',      'With BG',         'primary',   'green', 'mark',       false, '/assets/logos/primary/primary-bg-green.svg',       10, '00000000-0000-0000-0000-000000000001'),
+  ('s1-green',  'Secondary 1',     'secondary', 'green', 'square',     false, '/assets/logos/secondary/secondary-1-green.svg',    11, '00000000-0000-0000-0000-000000000001'),
+  ('s1-ivory',  'Secondary 1',     'secondary', 'ivory', 'square',     false, '/assets/logos/secondary/secondary-1-ivory.svg',    12, '00000000-0000-0000-0000-000000000001'),
+  ('s2-green',  'Secondary 2',     'secondary', 'green', 'horizontal', false, '/assets/logos/secondary/secondary-2-green.svg',    13, '00000000-0000-0000-0000-000000000001')
+on conflict (brand_id, slug) where slug is not null do nothing;
 
 -- Images (uploaded source assets)
 create table if not exists images (
