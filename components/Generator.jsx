@@ -3520,6 +3520,13 @@ export default function App() {
     }
     return applyDesignPatch(patch, opts);
   };
+  // Always-FRESH apply for async continuations. applyPatch compares patch values
+  // against ITS render's closure state — a handler that changes state first
+  // (e.g. moreLikeThis: startNewPost → gene patch) would diff against stale
+  // values and silently no-op. The ref always points at the latest render's
+  // applyPatch (same pattern as the chat's applyRef).
+  const applyPatchRef = useRef(null);
+  applyPatchRef.current = applyPatch;
   // (B3) Retrigger the settle animation by removing + re-adding the class (so a
   // rapid second patch restarts the fade). Guarded for SSR / unmounted shell.
   const pulseCanvasSettle = () => {
@@ -8177,7 +8184,9 @@ export default function App() {
   // Merge cloud + local tiles for the Posts list. Cloud wins on id; local-only
   // sessions still appear. Called on mount and after opening the Posts popover.
   const refreshPostTiles = useCallback(async () => {
-    const local = localGetAllSessions().map(s => ({ id: s.id, title: s.title, thumb: s.thumb, updatedAt: s.updatedAt, local: true }));
+    // liked/exportedAt ride the local tiles so the gallery fills hearts + marks
+    // exported posts (mergeSessionTiles keeps them when cloud rows lack columns).
+    const local = localGetAllSessions().map(s => ({ id: s.id, title: s.title, thumb: s.thumb, updatedAt: s.updatedAt, local: true, liked: s.liked === true, exportedAt: s.exportedAt || null }));
     const { configured, sessions } = await cloudListSessions();
     if (configured) setSessionCloudCfg(true);
     setPostTiles(mergeSessionTiles(local, configured ? sessions : []));
@@ -8252,8 +8261,10 @@ export default function App() {
     const genes = buildGenes(currentTemplateState(), { sceneCategory: classifySceneCategory(genBrief?.scene) });
     const hadPhoto = !!mediaObj;
     startNewPost();
-    // Let React commit the fresh session before re-applying the genes.
-    await new Promise(r => setTimeout(r, 80));
+    // Let React COMMIT the fresh session, then apply the genes through the
+    // LATEST render's applyPatch (applyPatchRef) — this render's closure would
+    // diff the patch against pre-reset state and silently no-op.
+    await new Promise(r => setTimeout(r, 250));
     const patch = {};
     if (genes.postType) patch.postType = genes.postType;
     if (genes.dimensionId) patch.dimensionId = genes.dimensionId;
@@ -8265,7 +8276,7 @@ export default function App() {
       if (genes.bgColor) patch.bgColor = genes.bgColor;
       if (genes.photoTreatment && genes.photoTreatment !== "none") patch.photoTreatment = genes.photoTreatment;
     }
-    applyPatch(patch, { source: "ui" });
+    (applyPatchRef.current || applyPatch)(patch, { source: "ui" });
     logFeedbackClient({
       turn_id: newTurnId(), session_id: getCurrentSessionId() || undefined,
       user_message: "[chip] More like this",
