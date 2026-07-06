@@ -368,23 +368,37 @@ canvas[role="application"]:focus-visible {
 
 /* (WP-W §3) Feedback chip — thumbs-down only, subtle + on-brand. */
 .ad-row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* (D1 item 8) Lighter feedback control. A calm transcript reads as success, so
+   "Not what I meant" is HIDDEN by default and revealed only when the reply is
+   hovered/focused (or the chip itself is focused) — the signal still exists (it
+   feeds the learning loop) but no longer trains the eye to see a column of tiny
+   complaints. It stays reachable on touch (no hover) and once acted on. */
 .ad-fb-chip {
   align-self: flex-start;
   min-height: 26px;
   padding: 2px 9px;
-  border: 1px solid var(--line, rgba(37,78,72,0.16));
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: transparent;
-  color: color-mix(in srgb, var(--tw-burnham) 55%, transparent);
+  color: color-mix(in srgb, var(--tw-burnham) 48%, transparent);
   font-family: var(--font-syne);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0;
   transition: opacity 0.15s, color 0.15s, border-color 0.15s;
 }
+/* Reveal on hover/focus of the message, or focus of the chip. */
+.ad-msg--assistant:hover .ad-fb-chip,
+.ad-msg--assistant:focus-within .ad-fb-chip,
+.ad-fb-chip:focus-visible { opacity: 0.75; border-color: var(--line, rgba(37,78,72,0.16)); }
 .ad-fb-chip:hover { opacity: 1; color: var(--tw-tangerine); border-color: color-mix(in srgb, var(--tw-tangerine) 40%, transparent); }
+/* Touch devices have no hover — keep it faintly visible so it's discoverable. */
+@media (hover: none) {
+  .ad-fb-chip { opacity: 0.5; border-color: var(--line, rgba(37,78,72,0.16)); }
+}
+/* Once acted on, it stays visible (it now carries state). */
 .ad-fb-chip--on { opacity: 1; color: var(--tw-tangerine); border-color: color-mix(in srgb, var(--tw-tangerine) 55%, transparent); background: color-mix(in srgb, var(--tw-tangerine) 8%, transparent); cursor: default; }
 .ad-fb-note { display: flex; gap: 6px; align-items: center; margin-top: 6px; align-self: stretch; }
 .ad-fb-note input {
