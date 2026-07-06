@@ -2690,6 +2690,10 @@ export default function App() {
   // Contextual inspector: which element's compact panel is open, or null.
   // Values: 'bg' | 'photo' | 'text' | 'logo' | <overlay-uid> | null.
   const [inspectorEl, setInspectorEl] = useState(null);
+  // (D1 item 6) The TEXT ROLE last tapped ('hero'|'support'|'date'|'eyebrow'|
+  // 'pill'), so the inspector titles itself by what the user actually clicked
+  // ("Title", "Text", "Date", …) instead of one generic post-type label.
+  const [textRole, setTextRole] = useState(null);
   const [contentOpen, setContentOpen] = useState(false);   // Content Sec open state (controllable for click-to-edit)
   const [formatThumbs, setFormatThumbs] = useState({});     // dimensionId -> dataURL (live format strip)
   const [galleryOpen, setGalleryOpen] = useState(true);     // template gallery Sec open state
@@ -2883,7 +2887,7 @@ export default function App() {
     setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
     setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
     if (kind === "photo")      { setPhotoSel(true); }
-    else if (kind === "text")  { setTextSelected(true); }
+    else if (kind === "text")  { setTextSelected(true); setTextRole(prev => prev || "hero"); }
     else if (kind === "logo")  { setLogoSel(true); }
     else if (kind === "bg")    { setBgSel(true); }
     else if (kind === "overlay" && uid) { setSelOverlay(uid); setOverlayChromeVisible(true); }
@@ -6591,6 +6595,7 @@ export default function App() {
             return;
           }
           setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
+          setTextRole(role);   // (D1 item 6) title the inspector by the tapped role
           setInspectorEl("text");
           dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
           try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
@@ -6606,6 +6611,7 @@ export default function App() {
     }
     if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
       setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
+      setTextRole("hero");   // (D1 item 6) whole-block tap = the headline
       // Canvas convergence: selecting text opens its inspector (tap → focus copy
       // input is handled in onPanEnd via focusPrimaryText).
       setInspectorEl("text");
@@ -7514,6 +7520,19 @@ export default function App() {
   const postHasCopy = ["quote","event","text_post","texture_text","photo_logo"].includes(postType);
   const logoRendered = !!(selectedLogoVariant && logoObj);
   const textRoleLabel = postType==="quote"?"Quote":postType==="event"?"Event text":postType==="texture_text"?"Overlay text":postType==="photo_logo"?"Caption":"Text";
+  // (D1 item 6) INSPECTOR TITLE by the tapped role — plain language matching what
+  // the user clicked, never a generic post-type label. The headline reads "Title"
+  // (a quote's headline is the "Quote"); smaller roles name themselves.
+  const textInspectorTitle = (() => {
+    switch (textRole) {
+      case "date":    return "Date";
+      case "eyebrow": return "Little label";
+      case "pill":    return "Button";
+      case "support": return "Text";
+      case "hero":    return postType==="quote" ? "Quote" : "Title";
+      default:        return "Text";
+    }
+  })();
   const activeElements = [
     { key:"bg",    label:"Background", icon:"◐" },
     ...(mediaObj ? [{ key:"photo", label:videoObj?"Video":"Photo", icon:"▣" }] : []),
@@ -7550,7 +7569,7 @@ export default function App() {
     if (inspectorEl == null) return null;
     if (inspectorEl === "bg")    return { title:"Background", body:renderBackgroundPanel() };
     if (inspectorEl === "photo") return { title:videoObj?"Video":"Photo", body:renderPhotoPanel() };
-    if (inspectorEl === "text")  return { title:textRoleLabel, body:renderTextPanel("wo-text-primary-inspector") };
+    if (inspectorEl === "text")  return { title:textInspectorTitle, body:renderTextPanel("wo-text-primary-inspector") };
     if (inspectorEl === "logo")  return { title:"Logo", body:(
       <>
         <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
