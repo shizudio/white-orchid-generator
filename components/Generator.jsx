@@ -4153,12 +4153,19 @@ export default function App() {
   // untouched; the generated path reuses the Try-another plumbing (fetchScenePhoto +
   // applyGeneratedImage) so undo and the silent harmonizer behave identically.
   const [refreshingPhoto, setRefreshingPhoto] = useState(false);
+  // (B2) Honest staged label for the in-editor photo wait: a generated (Higgsfield)
+  // refresh genuinely runs ~20s, so after a beat we say so rather than a bare spinner.
+  const [refreshStage, setRefreshStage] = useState("");
+  const refreshStageTimer = useRef(null);
   const refreshPhoto = async () => {
     if (refreshingPhoto || !mediaObj) return;
     setRefreshingPhoto(true);
     try {
       const scene = genBrief?.scene || "";
       if (scene) {
+        setRefreshStage("Finding a fresh photo…");
+        if (refreshStageTimer.current) clearTimeout(refreshStageTimer.current);
+        refreshStageTimer.current = setTimeout(() => setRefreshStage("Still looking — a few more seconds…"), 10_000);
         const url = await fetchScenePhoto(scene);
         if (url) { await applyGeneratedImage(url, { harmonize: true }); return; }
       }
@@ -4171,6 +4178,8 @@ export default function App() {
         applyPatch({ imageSrc: url }, { source: "ui" });   // WP-V: through THE pipeline
       }
     } finally {
+      if (refreshStageTimer.current) { clearTimeout(refreshStageTimer.current); refreshStageTimer.current = null; }
+      setRefreshStage("");
       setRefreshingPhoto(false);
     }
   };
@@ -8462,7 +8471,7 @@ export default function App() {
                     color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
                     cursor:refreshingPhoto?"wait":"pointer",opacity:refreshingPhoto?0.7:1}}>
                   <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
-                  {refreshingPhoto ? "Refreshing…" : "Refresh photo"}
+                  {refreshingPhoto ? (refreshStage || "Refreshing…") : "Refresh photo"}
                 </button>
               )}
               {(aiUndoStack.length>0||redoStack.length>0)&&(
