@@ -8883,7 +8883,7 @@ function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
   // Flip the popover to the left of the anchor when the dot is near the right edge
   // so it stays within (or gracefully overflows) the canvas without pushing the
   // page into horizontal scroll. Vertical: sit just below the anchor.
-  const nearRight = leftPct > 62;
+  const nearRight = leftPct > 52;
   return (
     <>
       <div className="wo-advisor-backdrop" onPointerDown={(e)=>{ e.stopPropagation(); onClose(); }} aria-hidden="true" />
