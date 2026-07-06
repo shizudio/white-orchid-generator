@@ -1628,6 +1628,55 @@ canvas[role="application"]:focus-visible {
   .wo-advisor-pop { width: min(260px, 84vw); }
 }
 
+/* The strip ✦ "adjusted" mark — its own button over the top-left of a tile. */
+.wo-adjusted-mark {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 3;
+}
+.wo-adjusted-mark > span {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--tw-burnham);
+  background: var(--tw-wisteria);
+  box-shadow: 0 0 0 1.5px #fff;
+}
+.wo-adjusted-mark:focus-visible { outline: none; }
+.wo-adjusted-mark:focus-visible > span { box-shadow: 0 0 0 1.5px #fff, 0 0 0 3px var(--tw-burnham); }
+.wo-adjusted-pop {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 41;
+  width: min(240px, 80vw);
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--tw-wisteria) 80%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 10px 34px rgba(37, 78, 72, 0.20);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
 /* ── Inspector: shared shell ── */
 .wo-inspector {
   display: flex;

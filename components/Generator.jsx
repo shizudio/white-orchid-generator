@@ -2749,6 +2749,9 @@ export default function App() {
   // (D1 discipline): shape { dimensionId, issues:[...], anchor:{leftPct,topPct},
   // collapsed:boolean }. Participates in the same close-the-others effects below.
   const [advisorDot, setAdvisorDot] = useState(null);
+  // (Advisor dots) The strip ✦ "adjusted" popover: the dimensionId whose ✦ was
+  // clicked, or null. Replaces the standing below-canvas "Adjusted for …" banner.
+  const [adjustedPopover, setAdjustedPopover] = useState(null);
 
   /* ── (WP-W) SESSIONS — one session = one post (ux-architecture §2.7) ──
      The current session binds this design + its chat conversation under one id;
@@ -7505,23 +7508,22 @@ export default function App() {
     return false;
   }, [typeLayoutsByDim, logoByDim, imgTByDim, overlayLayers]);
 
-  const currentDimAdjusted = dimHasOverride(dimensionId);
-
   // (WP-Y2) One-tap "reset to match the others" — clears EVERY local override for
   // the current format so it falls back to the master cascade (resolveTextLayout /
   // resolveLogoBase / auto reframe re-materialize per format). Consistency is the
   // default; this is how a deliberate divergence is undone in one gesture. Undoable
   // via the top-bar Undo (noteManualEdit snapshots the pre-reset override state,
   // exactly like every other manual gesture).
-  const resetFormatToMaster = useCallback(() => {
-    if (dimensionId === MASTER_DIM) return;
+  const resetFormatToMaster = useCallback((targetDim) => {
+    const dimId = targetDim || dimensionId;
+    if (dimId === MASTER_DIM) return;
     noteManualEdit(["text", "logo", "photo", "overlay"]);
-    setTypeLayoutsByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
-    setLogoByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
-    setImgTByDim(prev => { const n = { ...prev }; delete n[dimensionId]; return n; });
+    setTypeLayoutsByDim(prev => { const n = { ...prev }; delete n[dimId]; return n; });
+    setLogoByDim(prev => { const n = { ...prev }; delete n[dimId]; return n; });
+    setImgTByDim(prev => { const n = { ...prev }; delete n[dimId]; return n; });
     setOverlayLayers(prev => prev.map(l => {
-      if (!l?.byDim?.[dimensionId]) return l;
-      const nb = { ...l.byDim }; delete nb[dimensionId]; return { ...l, byDim: nb };
+      if (!l?.byDim?.[dimId]) return l;
+      const nb = { ...l.byDim }; delete nb[dimId]; return { ...l, byDim: nb };
     }));
     setOverlayDirty(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -8703,21 +8705,10 @@ export default function App() {
             </div>
           )}
 
-          {/* (WP-Y2) "Adjusted for this format" banner — when the CURRENT format
-              carries local overrides it has diverged from the master. Make that
-              legible (never silent) with a one-tap return to the cascade. Renders
-              below the canvas so it never covers the artwork. */}
-          {currentDimAdjusted && dimensionId !== MASTER_DIM && (
-            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
-              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
-              padding:"9px 14px",borderRadius:14,background:`${B.wisteria}44`,
-              border:`1px solid ${B.wisteria}`}}>
-              <span aria-hidden="true" style={{width:16,height:16,borderRadius:4,display:"grid",placeItems:"center",fontSize:10,fontWeight:800,color:B.burnham,background:B.wisteria}}>✦</span>
-              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>Adjusted for {dim.label} — this format no longer matches the others.</span>
-              <button type="button" onClick={resetFormatToMaster}
-                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Reset to match the others</button>
-            </div>
-          )}
+          {/* (Advisor dots) The standing "Adjusted for {format}" banner was
+              REMOVED — the strip ✦ mark IS the single indicator now, and clicking
+              it opens a small popover with the same message + Reset action (below,
+              in the format strip). Nothing persistent covers the artwork. */}
 
           {/* (Advisor dots) The below-canvas "worth a look" strip-fix card was
               REMOVED — readiness issues now surface as advisor dots anchored INSIDE
@@ -8752,30 +8743,58 @@ export default function App() {
               // (WP-Y5b) readiness dot: quiet celadon check = ready · soft wisteria dot
               // (no "!", no red) = worth a glance · dim while the sweep hasn't reported.
               const dotReady=v?v.ready:null;
+              // (Advisor dots) The ready dot goes "your call" (celadon-outline check)
+              // when the format is NOT ready but every remaining issue has been acked
+              // — a calm mark distinct from a plain ready ✓ only via its tooltip.
+              const openIssues = v && !v.ready
+                ? partitionIssues(v.issues, acks, d.id, (iss)=> d.id===dimensionId ? issueBoxOf(iss) : null).open
+                : [];
+              const yourCall = v && !v.ready && openIssues.length === 0;
               return (
-                <button key={d.id} aria-pressed={on}
+                <div key={d.id} style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
+                <button aria-pressed={on}
                   onClick={()=>{ applyPatch({dimensionId:d.id},{source:"ui"}); }}
-                  title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?" · needs a look":dotReady?" · ready":""}${adjusted?" · adjusted for this format":""} — tap to adjust`}
+                  title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?(yourCall?" · ready (includes choices you okayed)":" · needs a look"):dotReady?" · ready":""} — tap to adjust`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
                   <span style={{position:"relative",display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
                     {formatThumbs[d.id]
                       ? <img src={formatThumbs[d.id]} alt={`${d.label} preview`} style={{maxWidth:"100%",maxHeight:"100%",display:"block"}} />
                       : <span style={{fontSize:9,color:B.ash,fontFamily:FU.subtitle}}>{d.sub}</span>}
                     {dotReady!=null && (
-                      <span aria-hidden="true" title={dotReady?"Ready to post":"Worth a look"}
-                        style={{position:"absolute",top:4,right:4,width:dotReady?11:12,height:dotReady?11:12,borderRadius:"50%",display:"grid",placeItems:"center",
-                          fontSize:8,fontWeight:800,lineHeight:1,color:dotReady?B.burnham:"transparent",boxShadow:"0 0 0 1.5px #fff",
-                          background:dotReady?B.celadon:B.wisteria}}>{dotReady?"✓":""}</span>
-                    )}
-                    {adjusted && (
-                      <span aria-hidden="true" title="Adjusted for this format"
-                        style={{position:"absolute",top:4,left:4,width:14,height:14,borderRadius:4,display:"grid",placeItems:"center",
-                          fontSize:9,fontWeight:800,lineHeight:1,color:B.burnham,background:B.wisteria,boxShadow:"0 0 0 1.5px #fff"}}>✦</span>
+                      <span aria-hidden="true" title={dotReady?"Ready to post":yourCall?"Ready — includes choices you okayed":"Worth a look"}
+                        style={{position:"absolute",top:4,right:4,width:dotReady||yourCall?11:12,height:dotReady||yourCall?11:12,borderRadius:"50%",display:"grid",placeItems:"center",
+                          fontSize:8,fontWeight:800,lineHeight:1,
+                          color:dotReady?B.burnham:yourCall?B.celadonDeep:"transparent",
+                          boxShadow:"0 0 0 1.5px #fff",
+                          border:yourCall?`1.5px solid ${B.celadonDeep}`:"none",
+                          background:dotReady?B.celadon:yourCall?"#fff":B.wisteria}}>{dotReady?"✓":yourCall?"✓":""}</span>
                     )}
                   </span>
                   <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:on?700:600,letterSpacing:0.5,color:on?B.burnham:B.ash}}>{d.label}</span>
                   <span style={{fontSize:8,fontFamily:F.body,color:adjusted?B.celadonDeep:"transparent",lineHeight:1,minHeight:8}}>{adjusted?"adjusted":"·"}</span>
                 </button>
+                {/* (Advisor dots) The ✦ "adjusted" mark is now its OWN button (a
+                    sibling of the tile, not nested) — clicking it opens a small
+                    popover with the divergence note + Reset. */}
+                {adjusted && (
+                  <button type="button" className="wo-adjusted-mark"
+                    aria-label={`Adjusted for ${d.label} — this format no longer matches the others. Open options.`}
+                    aria-expanded={adjustedPopover===d.id}
+                    onClick={(e)=>{ e.stopPropagation(); setTopMenu(null); closeInspector(); setAuditOpen(false); setCaptionOpen(false); setAdvisorDot(null); setAdjustedPopover(prev=>prev===d.id?null:d.id); }}>
+                    <span aria-hidden="true">✦</span>
+                  </button>
+                )}
+                {adjustedPopover===d.id && (
+                  <>
+                    <div className="wo-advisor-backdrop" style={{position:"fixed",inset:0,zIndex:40}} onPointerDown={(e)=>{ e.stopPropagation(); setAdjustedPopover(null); }} aria-hidden="true" />
+                    <div role="dialog" aria-label={`Adjusted for ${d.label}`} className="wo-adjusted-pop">
+                      <span style={{fontSize:12,fontFamily:F.body,color:B.jet,lineHeight:1.4}}>Adjusted for {d.label} — this format no longer matches the others.</span>
+                      <button type="button" onClick={()=>{ if(d.id!==dimensionId) applyPatch({dimensionId:d.id},{source:"ui"}); resetFormatToMaster(d.id); setAdjustedPopover(null); }}
+                        style={{marginTop:9,padding:"6px 14px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,fontSize:10,fontWeight:600,letterSpacing:0.6,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Reset to match the others</button>
+                    </div>
+                  </>
+                )}
+                </div>
               );
             })}
             </div>
