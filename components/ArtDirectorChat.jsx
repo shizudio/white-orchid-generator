@@ -280,7 +280,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, liked, onMoreLikeThis }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
   // paint; reshuffled to a fresh mix after mount (see effect below).
@@ -1067,6 +1067,21 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         user_message: '[chip] Try another layout', verdict: { implicit: 'layout_rejection', rejected } });
     }
     send('Try another layout for this design — keep my words.', { chip: 'try_another_layout' });
+  } });
+  // (Ratified item 13) On a LIKED session: one tap starts a NEW post carrying the
+  // liked design's genes (same archetype/variant/palette/treatment — applied
+  // deterministically by the parent), then asks the assistant for fresh copy
+  // (+ a fresh photo when the liked design had one) through the normal pipeline.
+  if (liked && typeof onMoreLikeThis === 'function') chips.push({ label: '♥ More like this', act: async () => {
+    if (loading) return;
+    let info = null;
+    try { info = await onMoreLikeThis(); } catch { /* genes apply is best-effort */ }
+    setMessages(prev => [...prev, { role: 'assistant', content: 'Starting a new post in the same style you liked — fresh words coming up.' }]);
+    await settle(700); // let the gene patch commit so designState reads the new layout
+    send(info?.hadPhoto
+      ? 'Write fresh copy for this post — new words in the same calm voice. Keep the layout, colours and photo treatment exactly as they are, and generate a fresh photo of a similar scene.'
+      : 'Write fresh copy for this post — new words in the same calm voice. Keep the layout and colours exactly as they are.',
+      { chip: 'more_like_this' });
   } });
   chips.push({ label: 'New post', act: handleNewPost });
 

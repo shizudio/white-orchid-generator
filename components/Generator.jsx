@@ -8242,6 +8242,38 @@ export default function App() {
     logLike({ liked: nextLiked, genes, thumb: rec?.thumb || prior?.thumb || null, sessionId: target });
   };
 
+  /* ── (Ratified item 13) "MORE LIKE THIS" ───────────────────────────────────
+     On a LIKED session the chat offers a one-tap chip: start a NEW post that
+     inherits the liked design's GENES — same archetype/variant/palette/
+     treatment — then the chip routes a normal chat ask for fresh copy (+ a
+     fresh photo when the liked design carried one) through the standard
+     assistant pipeline. Returns { hadPhoto } so the chat words the ask right. */
+  const moreLikeThis = async () => {
+    const genes = buildGenes(currentTemplateState(), { sceneCategory: classifySceneCategory(genBrief?.scene) });
+    const hadPhoto = !!mediaObj;
+    startNewPost();
+    // Let React commit the fresh session before re-applying the genes.
+    await new Promise(r => setTimeout(r, 80));
+    const patch = {};
+    if (genes.postType) patch.postType = genes.postType;
+    if (genes.dimensionId) patch.dimensionId = genes.dimensionId;
+    if (genes.archetypeId && genes.archetypeId !== "none") {
+      // Archetype + variant carry the palette/treatment — materialization seeds them.
+      patch.archetypeId = genes.archetypeId;
+      patch.archVariant = genes.archVariant;
+    } else {
+      if (genes.bgColor) patch.bgColor = genes.bgColor;
+      if (genes.photoTreatment && genes.photoTreatment !== "none") patch.photoTreatment = genes.photoTreatment;
+    }
+    applyPatch(patch, { source: "ui" });
+    logFeedbackClient({
+      turn_id: newTurnId(), session_id: getCurrentSessionId() || undefined,
+      user_message: "[chip] More like this",
+      verdict: { event: "more-like-this", genes },
+    });
+    return { hadPhoto, genes };
+  };
+
   // (Feed gallery, item 9) Record an export on the session itself — the gallery
   // subtly marks exported posts. Local patch first, then the normal autosave
   // path pushes it to the cloud (graceful on an un-migrated DB).
@@ -9380,6 +9412,8 @@ export default function App() {
             chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(((postType === "quote" ? attribution : subtext) || "").trim()), hasDate: !!(dateText && dateText.trim()) }}
             onChangePhoto={mediaObj ? refreshPhoto : null}
             onNewPost={startNewPost}
+            liked={currentLiked}
+            onMoreLikeThis={moreLikeThis}
             sessionId={sessionId}
             initialMessages={sessionInitialMessages}
             restoreKey={sessionRestoreKey}
