@@ -608,21 +608,9 @@ canvas[role="application"]:focus-visible {
   font-size: 12px;
 }
 
-.quick-guide-trigger--floating {
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  z-index: 250;
-  min-height: 46px;
-  padding: 0 18px;
-  background: var(--tw-tangerine);
-  border-color: transparent;
-  box-shadow: var(--shadow-lg);
-  font-family: var(--font-syne);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
+/* (D1 item 4) The floating Guide duplicate is removed — a single header Guide
+   is the only entry point. The `--floating` variant + its instantiation are
+   deleted so the unnamed on-canvas circle can never return. */
 
 .quick-guide-icon {
   width: 20px;
