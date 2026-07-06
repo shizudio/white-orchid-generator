@@ -105,6 +105,11 @@ function applyBrandKit(kit) {
   if (heading) { F.title = `'${heading}',Georgia,serif`; F.quote = F.title; }
   if (body) F.body = `'${body}','Helvetica Neue',sans-serif`;
   if (ui) F.subtitle = `'${ui}','Helvetica Neue',sans-serif`;
+  // Mirror the UI-chrome roles (FU) so a brand font override reaches editor
+  // chrome too (item b). FU is declared far below at module scope; property
+  // mutation at call-time is fine (no TDZ once the module has evaluated).
+  if (body) FU.body = F.body;
+  if (ui) FU.subtitle = F.subtitle;
 }
 const PRESETS = {
   "top-left":[0.12,0.12],"top-center":[0.50,0.12],"top-right":[0.88,0.12],
@@ -10042,7 +10047,11 @@ function EditorChrome({ width, height, scale, photo, overlay, text }) {
 }
 
 /* ── UI Atoms ── */
-const FU={subtitle:"'Syne','Helvetica Neue',sans-serif",body:"'Fira Sans','Helvetica Neue',sans-serif"};
+// (multi-tenancy P1 item b) UI-chrome type roles. subtitle/body mirror the
+// canvas F map's roles; sourced from DEFAULT_FONTS (identical values today) and
+// hydrated in place by applyBrandKit() so a brand_kit font override reaches the
+// editor chrome too, not just the canvas.
+const FU={subtitle:DEFAULT_FONTS.subtitle,body:DEFAULT_FONTS.body};
 const xBtnAbs={position:"absolute",top:6,right:6,width:24,height:24,borderRadius:"50%",background:"rgba(0,0,0,0.45)",color:"#fff",border:"none",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"};
 
 function EditorSubhead({label,summary}){return <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 0 9px",paddingTop:13,borderTop:`1px solid ${B.ash}33`}}><span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:B.burnham}}>{label}</span>{summary&&<span style={{fontSize:10,fontFamily:FU.body,color:B.ash,marginLeft:"auto",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{summary}</span>}</div>;}
