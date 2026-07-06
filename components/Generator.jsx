@@ -9046,16 +9046,10 @@ export default function App() {
         </>
       );
     }
-    // (Declutter, ratified §3.5) The Format popover is GONE: the every-format
-    // strip under the canvas is the sole format surface.
-    if (topMenu === "type") return (
-      <>
-        <MenuHead label="Post type" sub="The kind of post — it shapes which text fields the design carries." />
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {POST_TYPES.map(t=><Chip key={t.id} on={postType===t.id} click={()=>applyPatch({postType:t.id},{source:"ui"})}>{t.label}</Chip>)}
-        </div>
-      </>
-    );
+    // (Declutter, ratified §3.5 + §3.6) The Format and Type popovers are GONE:
+    // the every-format strip under the canvas is the sole format surface, and
+    // post type is set by generation/chat ("make this a quote post" works via
+    // the patch grammar's postType enum).
     if (topMenu === "templates") return (
       <>
         {newerDraft&&(
@@ -9277,7 +9271,6 @@ export default function App() {
   const topBarButtons = [
     { id:"posts", label:"Posts" },
     { id:"templates", label:"Templates", badge:!!newerDraft },
-    { id:"type", label:`Type · ${curType?.label||"Post"}` },
     { id:"add", label:"＋ Add" },
   ];
 
