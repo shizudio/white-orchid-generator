@@ -2,6 +2,31 @@
 -- WHITE ORCHID — Supabase schema
 -- Run this in Supabase → SQL Editor → New query
 -- ─────────────────────────────────────────────
+--
+-- FULLY IDEMPOTENT: every statement is create-table-if-not-exists,
+-- add-column-if-not-exists, create-index-if-not-exists, or an insert guarded by
+-- `on conflict … do nothing`. Running this whole file top-to-bottom any number
+-- of times is safe and non-destructive — it never drops or rewrites data.
+--
+-- ── MULTI-TENANCY P1 MIGRATION (run once) ────────────────────────────────────
+-- The tokenization pass (docs/multi-tenancy-spec.md §P1) added the following.
+-- To apply it to an existing database, just re-run this file — the guarded
+-- statements below add exactly the new pieces and skip everything already there:
+--
+--   • brand_kit: new columns name, assistant_name, tone, voice_rules, photo_brief
+--     (identity + voice + photographer-brief; defaults IDENTICAL to today's
+--      hardcoded values — lib/brand-defaults.js is the code-side fallback).
+--   • logo_variants: new columns slug, shape, wide, brand_id (+ unique slug
+--     index) and the 14 White Orchid rows seeded (item c).
+--   • brand_overlays: NEW table + the 10 built-in petal/shape/accessory rows
+--     seeded (item d).
+--
+-- CONTRACT: every seeded value equals today's constant and every storage_path is
+-- the SAME public /assets/… path the app already serves, so running this
+-- migration changes NOTHING visible until a brand's admin actually edits a row.
+-- An un-migrated DB (or a missing column/table) degrades to the code fallbacks
+-- in lib/brand-defaults.js — i.e. exactly the current White Orchid behaviour.
+-- ─────────────────────────────────────────────
 
 -- Brand kit (single row, admin-managed)
 create table if not exists brand_kit (
