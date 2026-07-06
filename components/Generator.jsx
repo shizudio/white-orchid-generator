@@ -6235,6 +6235,10 @@ export default function App() {
     // (WP-Y5) per-format Ready-to-post verdicts (verification + future learning pass).
     window.__woReadyCheck = () => computeReadyAll();
   }, [runLocalAudit, auditAllFormats, computeReadyAll]);
+  // Refs so the ledger console hooks (installed after runAiAudit is defined, below)
+  // read the latest merged ledger + raw store each render without a TDZ on runAiAudit.
+  const ledgerRef = useRef(null); ledgerRef.current = ledgerCheck;
+  const auditFindingsRef = useRef(auditFindings); auditFindingsRef.current = liveAuditFindings;
 
   // (WP-Y5) Recompute the checklist whenever the Export popover opens. Fresh on
   // every open so it reflects the latest design; cleared on close to avoid stale
@@ -6995,6 +6999,31 @@ export default function App() {
     try { setReadyCheck(computeReadyAll()); } catch { /* keep last */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runLocalAudit, captureAuditImage, chatDesignState, dimensionId, designFingerprint, elementBoxOf, findingAckPinned, computeReadyAll, sessionId]);
+
+  // (One Advice Ledger) verification hooks — installed AFTER runAiAudit to avoid a TDZ.
+  // Inspect the merged ledger, the raw audit-findings store, run the manual audit, and
+  // inject/clear a synthetic audit finding (deterministic dedup/ack/staleness testing
+  // without a live vision call). Nothing user-facing.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__woLedger = () => ({
+      formats: (ledgerRef.current?.formats || []).map(f => ({
+        dimensionId: f.dimensionId, ready: f.ready,
+        issues: (f.issues || []).map(i => ({ id: i.id, category: i.category, sources: i.sources || ["local"], severity: i.severity, merged: !!i.merged, audit: !!i._audit, hasFix: !!i.fix, message: i.message })),
+      })),
+      auditFindings: auditFindingsRef.current.map(f => ({ id: f.id, key: f.key, category: f.category, element: f.anchor?.element, dimensionId: f.anchor?.dimensionId, designFP: (f.designFP || "").slice(0, 24) })),
+    });
+    window.__woRunAiAudit = () => runAiAudit();
+    window.__woInjectAudit = (raw, element) => {
+      const el = element || "text";
+      const box = elementBoxOf(el);
+      const n = normalizeAuditFinding(raw, { dimensionId, element: el, fingerprint: ackFingerprint(box), designFP: designFingerprint(), index: 0 });
+      setAuditFindings(prev => [...prev.filter(f => f.id !== n.id), n]);
+      return n;
+    };
+    window.__woClearAudit = () => setAuditFindings([]);
+    return () => { try { delete window.__woLedger; delete window.__woRunAiAudit; delete window.__woInjectAudit; delete window.__woClearAudit; } catch {} };
+  }, [runAiAudit, elementBoxOf, dimensionId, designFingerprint]);
 
   // NOTE: the former global-state collision guard useEffect was removed. Logo
   // placement (spec §1 default + §4 focal/text collision guard) is now resolved
