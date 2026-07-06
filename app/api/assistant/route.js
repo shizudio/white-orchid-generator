@@ -2,6 +2,7 @@ import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
 import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
+import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -12,11 +13,9 @@ export const maxDuration = 60;
 // a hard "no text/logos/watermarks" instruction, then append the model's concise
 // scene description. Keeps every generated background on-brand and text-free so the
 // studio's own type/logo lockup stays the only copy on the canvas.
-function brandImagePrompt(scene) {
+function brandImagePrompt(scene, photoBrief = DEFAULT_PHOTO_BRIEF) {
   return [
-    'Editorial photography for a calm, premium preschool / early-education brand.',
-    'Warm natural light, soft focus, gentle earthy palette (deep forest green, ivory, soft mauve, muted celadon).',
-    'Authentic, unposed, documentary feel; shallow depth of field; no harsh flash.',
+    photoBrief.castingBrief,
     'Absolutely NO text, letters, words, captions, logos, watermarks, or signage anywhere in the image.',
     `Scene: ${scene}`,
   ].join(' ');
@@ -29,10 +28,10 @@ function imageSizeForDimension(dimensionId) {
   return wide.includes(dimensionId) ? '1536x1024' : '1024x1024';
 }
 
-async function generateBrandImage(apiKey, scene, dimensionId) {
+async function generateBrandImage(apiKey, scene, dimensionId, photoBrief = DEFAULT_PHOTO_BRIEF) {
   const payload = {
     model: 'gpt-image-1',
-    prompt: brandImagePrompt(scene),
+    prompt: brandImagePrompt(scene, photoBrief),
     n: 1,
     size: imageSizeForDimension(dimensionId),
     quality: 'medium',
@@ -193,14 +192,9 @@ function pickPhotoLedArchetype(intent) {
 }
 // Server-side fallback photographer briefs, per intent — used when the model
 // omitted scenePrompt for a photo-led plan so the photo pipeline ALWAYS fires
-// (lib/higgsfield adds the grade / camera / no-text scaffold).
-const DEFAULT_SCENES = {
-  event:       'an average ten-year-old Asian child arranging fresh flowers on a welcome table beside an open classroom door, bright soft morning daylight',
-  text_post:   'an average ten-year-old Asian child reading at a pale oak table in a bright plant-filled classroom, absorbed and quietly happy, soft natural daylight',
-  photo_logo:  'an average ten-year-old Asian child laughing mid-play in a sunlit garden, candid and unposed, bright airy daylight',
-  texture_text:'a small still-life of eucalyptus stems in a ceramic jar on a pale linen cloth by a bright window, soft morning light',
-  quote:       'an average ten-year-old Asian child watering a potted plant on a bright windowsill, gentle and calm, soft natural daylight',
-};
+// (lib/higgsfield adds the grade / camera / no-text scaffold). Single-sourced
+// from lib/brand-defaults.js DEFAULT_PHOTO_BRIEF.defaultScenes (P1 item e).
+const DEFAULT_SCENES = DEFAULT_PHOTO_BRIEF.defaultScenes;
 function fallbackScene(intent) {
   return DEFAULT_SCENES[intent] || DEFAULT_SCENES.text_post;
 }
@@ -529,7 +523,7 @@ async function handleCaption({ apiKey, designState, brandContext, model, rewrite
   const platform = platformForDimension(designState.dimensionId);
   const hasCopy = !!(designState.headline || designState.subtext || designState.attribution || designState.dateText);
 
-  const systemPrompt = `You are the social copywriter for The White Orchid, a Singaporean preschool / early-education brand for young families. You write the post caption that a staff member will publish alongside a design they just made.
+  const systemPrompt = `You are the social copywriter for ${brandContext.name}, a Singaporean preschool / early-education brand for young families. You write the post caption that a staff member will publish alongside a design they just made.
 
 Brand voice: ${brandContext.tone}. Warm, plain-English, parent-facing, gently reassuring, never salesy, never corporate. NEVER use exclamation marks — calm sentence case throughout. Singapore preschool context (write for local parents; British/Singapore English is fine).
 
@@ -796,8 +790,10 @@ export async function POST(request) {
   }
 
   const brandContext = {
-    name: brandKit?.name || 'The White Orchid',
-    tone: brandKit?.tone || 'warm, thoughtful, premium, clear and human',
+    name: brandKit?.name || DEFAULT_BRAND_NAME,
+    assistantName: brandKit?.assistant_name || DEFAULT_ASSISTANT_NAME,
+    tone: brandKit?.tone || DEFAULT_TONE,
+    voiceRules: brandKit?.voice_rules || DEFAULT_VOICE_RULES,
     colors: (brandKit?.colors || []).map(({ label, hex }) => ({ label, hex })),
     guardrails: brandKit?.guardrails || [],
   };
@@ -886,15 +882,10 @@ VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describ
 TEACH THE TERM BACK: when you add or change a mapped element, your reply gently names it once so the user learns the word — e.g. "Added that as a caption — the small text under your headline. Tap it anytime to edit." or "That's the eyebrow — the little label up top. Done." Keep it warm, one sentence, never lecture.
 REMOVING: "get rid of the small text / label / button" → set that field to "" (empty string removes it explicitly).`;
 
-  const systemPrompt = `You are the Art Director for The White Orchid, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
+  const systemPrompt = `You are the Art Director for ${brandContext.name}, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
 
-Brand voice: ${brandContext.tone}. Warm, plain-English, never salesy.
-COPY TONE (applies to EVERY copy field you write — headline, subtext, attribution, reply):
-- NEVER use an exclamation mark. Not one. Calm confidence, not excitement.
-- Never salesy or promotional ("Join us for a day of discovery and learning!" is exactly wrong). No urgency phrases, no hype adjectives, no "don't miss".
-- Sentence case, not Title Case ("Come and see for yourself", not "Join Us For Our Open House").
-- Short, quiet, editorial. An invitation reads like a note from a calm teacher, not a flyer.
-- Avoid brochure clichés: "Join us for…", "a day of discovery and learning", "fun-filled", "exciting". Prefer plain, concrete lines ("Come and see for yourself", "Doors open at nine").
+Brand voice: ${brandContext.tone}.
+${brandContext.voiceRules}
 ${likePrefs.exemplars.length ? `
 HOUSE STYLE — learned from designs the owner LIKED (lean toward these whenever the request leaves room; an explicit ask always wins):
 ${likePrefs.exemplars.map(e => `- ${e}`).join('\n')}
@@ -1247,9 +1238,11 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     });
 
     if (!imageB64) {
-      // FALLBACK: gpt-image-1.
+      // FALLBACK: gpt-image-1. brandKit.photo_brief overrides the casting brief
+      // when the owner has customised it; otherwise DEFAULT_PHOTO_BRIEF (P1 item e).
       imageProvider = 'openai';
-      ({ imageB64 } = await generateBrandImage(apiKey, imagePrompt, designState.dimensionId));
+      const photoBrief = (brandKit?.photo_brief && typeof brandKit.photo_brief === 'object') ? brandKit.photo_brief : DEFAULT_PHOTO_BRIEF;
+      ({ imageB64 } = await generateBrandImage(apiKey, imagePrompt, designState.dimensionId, photoBrief));
     }
 
     if (imageB64) {
