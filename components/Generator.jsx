@@ -4980,6 +4980,16 @@ export default function App() {
     // same box is one treatment (the same tint deepened), so only the terminal solid
     // band counts toward the per-role tally.
     let _doubleBackdrop=0;
+    // (item 4a · decor law) Decorative overlays (scattered motifs) are the LOWEST
+    // priority element: they must YIELD to text and never land in the photo's focal /
+    // face zone. These count decor pieces that were DRAWN over a text role or inside the
+    // focal zone (should be 0 — the scatter drops any offending piece); the stress sweep
+    // asserts both are zero. A frame mask/photo misalignment is asserted separately.
+    let _decorOverlapsText=0, _decorInFocal=0;
+    // (item 4b/4d) render-local copy of the drawn photo window so the frame-alignment
+    // assertion works on the OFFSCREEN stress sweep too (the live ref is only written
+    // when live=true, for B2 pan hit-testing).
+    let _photoWin=null;
     const _bandedRoles=new Map();
     const _bandRole=(box)=>{ const k=`${Math.round(box.x)}.${Math.round(box.y)}.${Math.round(box.w)}`; const n=(_bandedRoles.get(k)||0)+1; _bandedRoles.set(k,n); if(n>1)_doubleBackdrop++; };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
@@ -5131,7 +5141,7 @@ export default function App() {
       // NORMALIZED transform the window actually rendered with (from effImgTFor) — the
       // pan seeds its cx/cy/zoom from it so the FIRST drag continues from the drawn crop
       // (no jump) even when the auto focal crop, not imgT, produced the frame.
-      const _recPhotoWin=(rect,kind,sideBand,eff)=>{ if(live && mediaObj) photoWindowRef.current={x:rect.x,y:rect.y,w:rect.w,h:rect.h,kind,sideBand:!!sideBand,eff:eff?{cx:eff.cx,cy:eff.cy,zoom:eff.zoom,rotation:eff.rotation||0}:null}; };
+      const _recPhotoWin=(rect,kind,sideBand,eff)=>{ if(!mediaObj) return; const rec={x:rect.x,y:rect.y,w:rect.w,h:rect.h,kind,sideBand:!!sideBand,eff:eff?{cx:eff.cx,cy:eff.cy,zoom:eff.zoom,rotation:eff.rotation||0}:null}; _photoWin=rec; if(live) photoWindowRef.current=rec; };
       // 1. Base field or full-bleed photo (photoTreatment materialized as state).
       if(mat.fullBleed && mediaObj){
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
@@ -5864,6 +5874,17 @@ export default function App() {
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
             seamStraddles, degeneratePhoto, logoDominant, logoLowContrast,
             doubleBackdrop:_doubleBackdrop,   // (single-owner) a role banded >1× per render
+            decorOverlapsText:_decorOverlapsText, decorInFocal:_decorInFocal,  // (item 4a) decor law
+            frameMisalign:(()=>{               // (item 4b/4d) mask/outline/photo window must be ONE unit
+              const fb=(frame.type==="card")?cardBox:(frame.type==="petalMask")?maskBox:null;
+              const pw=_photoWin;
+              if(!fb||!pw||!mediaObj) return 0;
+              // The frame's mask rect and the photo's DRAWN window must coincide (±1.5% of
+              // the short side). A divergence is the wide-format "rectangle floating in a
+              // larger petal outline" bug B8 fixed — assert it stays fixed.
+              const tol=0.015*Math.min(w,h);
+              return (Math.abs(fb.x-pw.x)>tol||Math.abs(fb.y-pw.y)>tol||Math.abs(fb.w-pw.w)>tol||Math.abs(fb.h-pw.h)>tol)?1:0;
+            })(),
             logoPhotoContrast: auditLogo.overPhoto ? auditLogo.photoContrast : null,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
                     photo:photoObs||null, fullBleed:!!mat.fullBleed, sm:{...sm}, postType },
@@ -5897,12 +5918,38 @@ export default function App() {
         const heroObs=heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null;
         const supObs=(supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:(fontMeta.subtext||supBox.h*0.4)*1.5}:null;
         const ixm=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+        // (item 4a · decor law) DECOR YIELDS to EVERY text role + the logo, and never
+        // lands in the photo's focal / face zone. The old scatter only dodged hero +
+        // caption, so a motif could sit on the DATE/eyebrow (the client's "jet plus-sign
+        // on the date") or on a child's FACE (the "white dot on a face"). Build the full
+        // decor-avoid set from the SAME drawn role boxes the audit uses, plus a focal box
+        // around estimateFocalPoint (a face-sized square centred on the subject).
+        // Use boxes visible in THIS (motif) scope — the audit block's labelDrawn/logoBx
+        // are block-scoped there. labelBox / dateDrawn / auditLogo.box are renderScene-
+        // scoped and carry the same geometry.
+        const _labelObs=(eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelBox.h}:null;
+        const _decorText=[heroObs,supObs,_labelObs,dateDrawn,auditLogo.box].filter(Boolean);
+        const _focalBox=(()=>{
+          if(!mediaObj) return null;
+          const fp=estimateFocalPoint(mediaObj); if(!fp) return null;
+          // Face-sized guard: ~30% of the photo's short side centred on the subject,
+          // biased to the subject band. In canvas px over the photo's drawn region
+          // (full canvas for full-bleed; the photo rect otherwise).
+          const pr=(mat.fullBleed||!mat.photoRegion)?{x:0,y:0,w,h}:bleedBox(mat.photoRegion);
+          if(!pr) return null;
+          const fsz=0.30*Math.min(pr.w,pr.h);
+          const cx=pr.x+fp.fx*pr.w, cy=pr.y+fp.fy*pr.h;
+          return {x:cx-fsz/2,y:cy-fsz/2,w:fsz,h:fsz};
+        })();
         for(let i=0;i<count;i++){
           const img=archAssetImgs.current[shapes[i%shapes.length]]; if(!img) continue;
           const [fx,fy,rot,szMul]=spots[i%spots.length];
           const sz=0.14*Math.min(w,h)*szMul; // (T7) larger so motifs read as deliberate botanicals
           const box={x:fx*w-sz/2,y:fy*h-sz/2,w:sz,h:sz};
-          if(ixm(box,heroObs)||ixm(box,supObs)) continue; // never crowd hero/caption
+          // Decor is lowest priority: DROP it if it would touch any text/logo role or the
+          // photo focal zone (never relocate onto another collision — a clean drop reads
+          // calmer than a shuffled motif). The assertions below stay 0 by construction.
+          if(_decorText.some(t=>ixm(box,t)) || (_focalBox&&ixm(box,_focalBox))) continue;
           // (R3c) DEEPER MOTIFS — v4 tile 11 still read washy. Deepen the pastel toward
           // burnham 0.30→0.42 (more saturation/contrast on the ivory field) and paint at
           // full alpha so the shapes read as deliberate botanicals, not ghost blobs. ONE
@@ -5915,6 +5962,11 @@ export default function App() {
           const tinted=tintedAccessory(img,deep);
           const cx=box.x+sz/2, cy=box.y+sz/2;
           if(tinted){ ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot*Math.PI/180); ctx.translate(-cx,-cy); containDraw(ctx,tinted,cx,cy,sz,sz,1.0); ctx.restore(); }
+          // (item 4a) Defensive assertion: a piece that reached the draw MUST clear every
+          // text/logo role and the focal zone. If a future change drops the guard above,
+          // these counters go non-zero and __woArchStress fails — catching the regression.
+          if(_decorText.some(t=>ixm(box,t))) _decorOverlapsText++;
+          if(_focalBox&&ixm(box,_focalBox)) _decorInFocal++;
         }
       }
       // Shared overlay-layer draw (motifs + any user accessories). Motifs are tinted
@@ -6805,7 +6857,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0, dblband = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0, dblband = 0, decortext = 0, decorfocal = 0, framemis = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -6817,12 +6869,13 @@ export default function App() {
             const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
             const ll = dr.logoLowContrast ? 1 : 0;   // (brand ruling) = illegible logo NOT flagged (never fabricate a backing; flag instead)
             const db = dr.doubleBackdrop || 0;        // (single-owner) a text role got >1 contrast band
-            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll; dblband += db;
-            if (o || cr || mc || sea || dg || ld || ll || db) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, doubleBackdrop: db, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
+            const dt = dr.decorOverlapsText || 0, df = dr.decorInFocal || 0, fm = dr.frameMisalign || 0;  // (item 4) decor law + frame geometry
+            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll; dblband += db; decortext += dt; decorfocal += df; framemis += fm;
+            if (o || cr || mc || sea || dg || ld || ll || db || dt || df || fm) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, doubleBackdrop: db, decorOverlapsText: dt, decorInFocal: df, frameMisalign: fm, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0 && dblband === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, totalDoubleBackdrop: dblband, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0 && dblband === 0 && decortext === 0 && decorfocal === 0 && framemis === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, totalDoubleBackdrop: dblband, totalDecorOverlapsText: decortext, totalDecorInFocal: decorfocal, totalFrameMisalign: framemis, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
