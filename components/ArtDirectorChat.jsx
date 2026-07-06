@@ -529,20 +529,34 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           return;
         }
 
-        // 3. LOGO: a placement patch that the render ignored (specimen B).
+        // 3. LOGO: an explicit placement patch. Explicit user placement ALWAYS
+        // wins now — the render draws the logo where the user named it (the
+        // safe-area/collision guards may not veto or relocate an explicit
+        // instruction; they only surface an advisor dot on the canvas). So the
+        // placement is HONORED when the drawn box's position matches the request
+        // OR the box moved. It only counts as "not rendered" when neither holds —
+        // which with explicit-placement-wins is rare (e.g. no logo drawn at all on
+        // a photo-restraint layout). In that genuine case we name WHY and offer a
+        // concrete next move (never the banned generic "didn't change anything").
         if (changeKeys.includes('logoPosition')) {
+          const requested = patch.logoPosition;
+          const drawnPos = truthAfter.logoBox?.position || null;
           const cB = logoCenter(truthBefore.logoBox), cA = logoCenter(truthAfter.logoBox);
           const eps = (truthAfter.canvas?.w || 1080) * 0.01;
           const moved = (!cB && cA) || (cB && cA && (Math.abs(cA.x - cB.x) > eps || Math.abs(cA.y - cB.y) > eps));
-          if (!moved) {
+          const honored = (drawnPos && requested && drawnPos === requested) || moved;
+          if (!honored) {
             verdict.honesty = 'corrected';
             verdict.corrected = true;
             verdict.contradictions.push('logo-move-not-rendered');
+            // Name the reason when the layout draws no logo at all (photo-restraint
+            // archetypes / logoUse:"none"); otherwise offer the concrete next move.
+            const noLogo = !truthAfter.logoBox;
             setMessages(prev => [...prev, {
               role: 'assistant',
-              // (B4) Never a dead end — offer the concrete next move (name a corner,
-              // or drag it) instead of just "I couldn't".
-              content: "Checking the canvas — the logo didn't land there on this layout. Try naming a corner (“put the logo top-left”), or drag it on the canvas and it'll stick.",
+              content: noLogo
+                ? "This layout doesn't place a logo on its own — want me to switch to one that shows your mark, then put it there?"
+                : "Checking the canvas — the logo didn't land there on this layout. Try naming a corner (“put the logo top-left”), or drag it on the canvas and it'll stick.",
             }]);
             setLoading(false);
             return;
