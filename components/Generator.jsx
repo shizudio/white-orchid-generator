@@ -2895,6 +2895,7 @@ export default function App() {
     // contextual inspector CLOSES every top-bar popover + advisory panel so the
     // inspector is never stacked under another surface.
     setTopMenu(null); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
+    setAdvisorDot(null); // (Advisor dots) selecting an element closes the popover
     // Reset every selection flag first, then set the one for `kind`.
     setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
     setOverlayChromeVisible(false); setBgSel(false); setLogoSel(false);
@@ -2918,10 +2919,11 @@ export default function App() {
   useEffect(() => {
     if (!topMenu) return;
     closeInspector(); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
+    setAdvisorDot(null); // (Advisor dots) the anchored popover is an overlay too
   }, [topMenu]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!auditOpen && !captionOpen) return;
-    closeInspector(); setTopMenu(null);
+    closeInspector(); setTopMenu(null); setAdvisorDot(null);
     if (auditOpen) setCaptionOpen(false);
     if (captionOpen) setAuditOpen(false);
   }, [auditOpen, captionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -4031,6 +4033,15 @@ export default function App() {
     document.addEventListener("pointerdown",clearSelection,true);
     return()=>document.removeEventListener("pointerdown",clearSelection,true);
   },[]);
+
+  // (Advisor dots) Escape closes the anchored popover (D1 discipline). Outside-
+  // click is handled by the popover's own backdrop layer.
+  useEffect(()=>{
+    if(!advisorDot)return;
+    const onKey=e=>{ if(e.key==="Escape"){ e.stopPropagation(); setAdvisorDot(null); } };
+    document.addEventListener("keydown",onKey,true);
+    return()=>document.removeEventListener("keydown",onKey,true);
+  },[advisorDot]);
 
   /* ── Load image + auto-save to library ── */
   // NOTE (WP-V): not memoized — applyPatch closes over live design state, and a
@@ -6113,6 +6124,29 @@ export default function App() {
     return false;
   }, [issueBoxOf]);
 
+  // (Advisor dots) Open the anchored popover for one dot (single issue or a
+  // collapsed group). Closes every OTHER overlay first (D1 one-overlay-at-a-time).
+  const openAdvisorPopover = useCallback((payload) => {
+    setTopMenu(null); closeInspector(); setAuditOpen(false); setCaptionOpen(false);
+    setAdvisorDot(payload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const closeAdvisorPopover = useCallback(() => setAdvisorDot(null), []);
+
+  // Acknowledge ONE issue from the open popover ("Keep it this way"). In a
+  // collapsed group, keep the popover open for the remaining issues; when the
+  // last one is okayed (or a single-issue dot), close it.
+  const acknowledgePopoverIssue = useCallback((issue) => {
+    if (!issue) return;
+    acknowledgeIssue(issue, dimensionId);
+    setAdvisorDot(prev => {
+      if (!prev) return prev;
+      const rest = (prev.issues || []).filter(x => (x.id || x) !== (issue.id || issue));
+      return rest.length ? { ...prev, issues: rest } : null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acknowledgeIssue, dimensionId]);
+
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
   useEffect(() => {
@@ -7362,7 +7396,7 @@ export default function App() {
       groupId: prior?.groupId ?? null, groupTitle: prior?.groupTitle, groupOrder: prior?.groupOrder,
     };
     saveSession(rec).then(r => { if (r?.configured) setSessionCloudCfg(true); });
-  }, [sessionId, sessionConversation, sessionTitle, genBrief, headline, subtext]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, sessionConversation, sessionTitle, genBrief, headline, subtext, acks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!ready || !sessionId) return;
@@ -8405,6 +8439,32 @@ export default function App() {
     return out;
   })();
 
+  /* ── ADVISOR DOTS for the CURRENTLY-VIEWED format ──────────────────────────
+     Partition this format's readiness issues into open vs acknowledged, then
+     anchor each OPEN issue to its element's box corner. 4+ open issues collapse
+     to ONE dot at the canvas top-right (never measle the canvas). Issues without
+     precise geometry also pin to the top-right. Acked issues get NO dot. */
+  const advisorDots = (() => {
+    const fmt = (readyCheck?.formats || []).find(f => f.dimensionId === dimensionId);
+    if (!fmt || !Array.isArray(fmt.issues) || !fmt.issues.length) return { anchored: [], corner: null };
+    const { open } = partitionIssues(fmt.issues, acks, dimensionId, issueBoxOf);
+    if (!open.length) return { anchored: [], corner: null };
+    // Collapse rule: 4+ open issues → a single corner dot listing them all.
+    if (open.length >= 4) {
+      return { anchored: [], corner: { issues: open, collapsed: true } };
+    }
+    const anchored = [], cornerless = [];
+    for (const iss of open) {
+      const box = iss._ackBox || issueBoxOf(iss);
+      if (box && typeof box.x === "number") anchored.push({ issue: iss, box });
+      else cornerless.push(iss);
+    }
+    return {
+      anchored,
+      corner: cornerless.length ? { issues: cornerless, collapsed: false } : null,
+    };
+  })();
+
   const topBarButtons = [
     { id:"posts", label:"Posts" },
     { id:"templates", label:"Templates", badge:!!newerDraft },
@@ -8538,6 +8598,50 @@ export default function App() {
                   {g.label}
                 </button>
               ))}
+
+              {/* ── ADVISOR DOTS (readiness issues on THIS format) ── A small
+                    wisteria dot anchored to the affected element's box corner
+                    (logo box for logo issues, text box otherwise); a top-right
+                    corner dot for issues without precise geometry or a collapsed
+                    4+ group. CLICK/tap opens an anchored popover: the issue in one
+                    sentence + Fix + Keep it this way. Each dot is a real button
+                    with a generous invisible halo (≥40px) + accessible name. Dots
+                    live INSIDE the canvas bounds; the popover may overflow. */}
+              {advisorDots.anchored.map(({ issue, box }, i) => {
+                // Anchor at the box's TOP-RIGHT corner, nudged outward so tapping
+                // the element itself still selects it. Clamp inside the shell.
+                const leftPct = Math.max(2, Math.min(97, (box.x + box.w) * 100));
+                const topPct  = Math.max(2, Math.min(97, box.y * 100));
+                const open = advisorDot && !advisorDot.collapsed && advisorDot.issues?.[0]?.id === issue.id;
+                return (
+                  <AdvisorDot key={issue.id||i} leftPct={leftPct} topPct={topPct}
+                    label={`Suggestion: ${advisorSummary(issue.message)}`} active={!!open}
+                    onOpen={()=>openAdvisorPopover({ issues:[issue], collapsed:false, leftPct, topPct })} />
+                );
+              })}
+              {advisorDots.corner && (() => {
+                const leftPct = 97, topPct = 3;
+                const n = advisorDots.corner.issues.length;
+                const open = advisorDot && (advisorDot.collapsed || advisorDot.issues?.length !== 1) && (advisorDot.issues||[]).length === n;
+                const nm = advisorDots.corner.collapsed
+                  ? `Suggestions: ${n} to review on this format`
+                  : `Suggestion: ${advisorSummary(advisorDots.corner.issues[0].message)}`;
+                return (
+                  <AdvisorDot leftPct={leftPct} topPct={topPct} label={nm} active={!!open} corner
+                    onOpen={()=>openAdvisorPopover({ issues:advisorDots.corner.issues, collapsed:advisorDots.corner.collapsed, leftPct, topPct })} />
+                );
+              })()}
+
+              {/* ── ANCHORED POPOVER for the open dot ── message(s) + Fix + Keep
+                    it this way. Outside-click backdrop; Escape handled globally. */}
+              {advisorDot && (
+                <AdvisorPopover
+                  payload={advisorDot}
+                  onClose={closeAdvisorPopover}
+                  onFix={(fix)=>{ if(fix) applyReadyFix(fix); closeAdvisorPopover(); }}
+                  onKeep={(iss)=>acknowledgePopoverIssue(iss)}
+                />
+              )}
             </div>
           </div>
 
@@ -8726,6 +8830,78 @@ export default function App() {
    grammar §7). Fixes route through onFix (the one patch pipeline) + are undoable
    via the top-bar Undo. */
 const READY_LABELS = { ig_square:"IG Square", ig_portrait:"IG Portrait", story:"Story / Reel", twitter:"Twitter / X", facebook:"Facebook", banner:"Banner" };
+
+/* ── Advisor dots (canvas-anchored readiness pointers) ─────────────────────── */
+
+// A short accessible-name summary of an issue message (first clause, ≤ ~64 chars).
+function advisorSummary(message) {
+  const s = String(message || "").trim();
+  const clause = s.split(/[.—(]/)[0].trim() || s;
+  return clause.length > 64 ? clause.slice(0, 61).trimEnd() + "…" : clause;
+}
+
+// One dot: a small wisteria point with a slow breathe pulse (static under
+// reduced-motion via CSS), wrapped in a ≥40px invisible halo button so it is an
+// easy, mobile-friendly tap target with its own accessible name + focus ring.
+function AdvisorDot({ leftPct, topPct, label, onOpen, active, corner }) {
+  return (
+    <button type="button" className="wo-advisor-dot-hit" aria-label={label} aria-expanded={!!active}
+      onClick={(e)=>{ e.stopPropagation(); onOpen(); }}
+      onPointerDown={(e)=>e.stopPropagation()}
+      style={{ position:"absolute", left:`${leftPct}%`, top:`${topPct}%` }}>
+      <span aria-hidden="true" className={`wo-advisor-dot${active?" wo-advisor-dot--active":""}${corner?" wo-advisor-dot--corner":""}`} />
+    </button>
+  );
+}
+
+// The anchored popover for the open dot. One plain sentence per issue + two
+// actions (Fix / Keep it this way). A backdrop layer closes it on outside click.
+function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
+  const issues = payload?.issues || [];
+  if (!issues.length) return null;
+  const { leftPct = 50, topPct = 50, collapsed } = payload;
+  // Flip the popover to the left of the anchor when the dot is near the right edge
+  // so it stays within (or gracefully overflows) the canvas without pushing the
+  // page into horizontal scroll. Vertical: sit just below the anchor.
+  const nearRight = leftPct > 62;
+  return (
+    <>
+      <div className="wo-advisor-backdrop" onPointerDown={(e)=>{ e.stopPropagation(); onClose(); }} aria-hidden="true" />
+      <div role="dialog" aria-label="Suggestion" className="wo-advisor-pop"
+        onPointerDown={(e)=>e.stopPropagation()}
+        style={{
+          position:"absolute", top:`calc(${topPct}% + 14px)`, zIndex:24,
+          ...(nearRight ? { right:`${(100-leftPct).toFixed(2)}%` } : { left:`${leftPct}%` }),
+        }}>
+        {collapsed && issues.length > 1 && (
+          <div style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.4,color:B.burnham,marginBottom:8,textTransform:"uppercase"}}>
+            {issues.length} suggestions
+          </div>
+        )}
+        <div style={{display:"flex",flexDirection:"column",gap:collapsed?12:9}}>
+          {issues.map((iss,i)=>(
+            <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:8}}>
+              <span style={{fontSize:12.5,color:B.jet,fontFamily:F.body,lineHeight:1.42}}>{iss.message}</span>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                {iss.fix ? (
+                  <button type="button" onClick={()=>onFix(iss.fix)}
+                    style={{padding:"6px 16px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
+                      fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Fix</button>
+                ) : (
+                  <span style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.4,textTransform:"uppercase"}}>Edit the copy to resolve</span>
+                )}
+                <button type="button" onClick={()=>onKeep(iss)}
+                  style={{padding:"6px 14px",background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}55`,borderRadius:40,
+                    fontSize:10,fontWeight:600,letterSpacing:0.6,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Keep it this way</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim }) {
   const formats = check?.formats || [];
   const loading = !check;

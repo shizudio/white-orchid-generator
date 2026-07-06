@@ -1560,6 +1560,74 @@ canvas[role="application"]:focus-visible {
   .wo-ghost { opacity: 0.45; }
 }
 
+/* ── Advisor dots (canvas-anchored readiness pointers) ──────────────────────
+   A small wisteria point anchored to an element's box corner, wrapped in a
+   ≥40px invisible halo so it is an easy tap target. The dot itself sits at the
+   halo centre, translated up-left so it clings to the corner point. */
+.wo-advisor-dot-hit {
+  z-index: 22;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;   /* centre the 40px halo on the anchor point */
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.wo-advisor-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--tw-wisteria);
+  box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(37, 78, 72, 0.28);
+  animation: wo-advisor-breathe 2.5s ease-in-out infinite;
+}
+.wo-advisor-dot--corner {
+  border-radius: 4px;   /* the collapsed / no-geometry corner dot reads distinct */
+}
+.wo-advisor-dot--active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px color-mix(in srgb, var(--tw-wisteria) 60%, transparent);
+}
+.wo-advisor-dot-hit:focus-visible {
+  outline: none;
+}
+.wo-advisor-dot-hit:focus-visible .wo-advisor-dot {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--tw-burnham);
+}
+@keyframes wo-advisor-breathe {
+  0%, 100% { transform: scale(1);    opacity: 0.78; }
+  50%      { transform: scale(1.28); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wo-advisor-dot { animation: none !important; transform: none !important; opacity: 1; }
+}
+
+/* The anchored popover + its outside-click backdrop. The backdrop is scoped to
+   the canvas shell (position:absolute inset:0) so a tap anywhere else closes it
+   without dimming the whole page. */
+.wo-advisor-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 23;
+  background: transparent;
+}
+.wo-advisor-pop {
+  width: min(280px, 78vw);
+  max-width: 280px;
+  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--tw-wisteria) 80%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 10px 34px rgba(37, 78, 72, 0.20);
+  padding: 13px 15px;
+}
+@media (max-width: 760px) {
+  .wo-advisor-pop { width: min(260px, 84vw); }
+}
+
 /* ── Inspector: shared shell ── */
 .wo-inspector {
   display: flex;
