@@ -17,11 +17,13 @@ class Run {
     this.eventsPath = path.join(runDir, 'events.jsonl');
     this.startedAt = Date.now();
     this.llmCalls = 0;         // counted from network (assistant + landing plan)
-    this.higgsfieldCalls = 0;  // must stay 0
+    this.higgsfieldCalls = 0;  // blocked-call counter for the MOCKED phases (must stay 0)
+    this.realGenerations = 0;  // real Higgsfield generations spent in the probe (≤ cap)
     this.cloudWriteAttempts = 0;
     this.events = [];
     this.journeys = [];        // { name, ok, steps: [{ label, ok, detail }] }
     this.fuzz = [];            // { utterance, kind, oracles: [...], defects: n }
+    this.realPhotoProbe = null;// [ { label, real, oracles, screenshot } ] if the probe ran
     this.shotSeq = 0;
   }
 
@@ -67,6 +69,10 @@ class Run {
     catch { return null; }
   }
 
+  // Save a screenshot the client will WANT to see (a generated design), not just a
+  // defect capture. Same store, but the caller keeps the path to show in the report.
+  async shotNamed(page, label) { return this.shot(page, label); }
+
   defects() { return this.events.filter(e => e.type === 'defect'); }
 }
 
@@ -74,15 +80,21 @@ class Run {
 // Blocks every route that would spend money or pollute cloud data, tags synthetic
 // traffic, and counts LLM + Higgsfield + cloud-write attempts. Returns helpers the
 // runner uses; the caller owns the browser lifecycle.
-async function fortifyContext(context, run) {
+async function fortifyContext(context, run, opts = {}) {
+  // In the REAL-PHOTO PROBE we DELIBERATELY allow Higgsfield through (that's the
+  // whole point — a genuine, billed generation). Everywhere else it's hard-blocked.
+  // Cloud-write blocking stays on in BOTH modes: the probe still must never write a
+  // synthetic session to the client's account.
+  const allowHiggsfield = !!opts.allowHiggsfield;
   await context.route('**/*', async (route) => {
     const req = route.request();
     const url = req.url();
     const method = req.method();
 
-    // 1. Block Higgsfield outright — zero credits, ever. (Belt: the server is also
-    //    launched with the Higgsfield keys UNSET so the route degrades to Library.)
-    if (config.blockedHosts.some(h => url.includes(h))) {
+    // 1. Block Higgsfield outright — zero credits, ever — UNLESS this is the probe.
+    //    (Belt: the mocked server is also launched with the keys UNSET so the route
+    //    degrades to Library; the probe server is launched WITH the keys.)
+    if (!allowHiggsfield && config.blockedHosts.some(h => url.includes(h))) {
       run.higgsfieldCalls++;
       run.recordInfo({ note: 'BLOCKED higgsfield call (should never happen)', url });
       return route.abort();

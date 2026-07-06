@@ -22,6 +22,7 @@ const config = require('./config');
 const { Run, fortifyContext, captureConsole } = require('./harness');
 const { runJourneys } = require('./journeys');
 const { runFuzz } = require('./fuzz');
+const { runRealPhotoProbe } = require('./real-photo-probe');
 const report = require('./report');
 
 const REPO = path.resolve(__dirname, '../..');
@@ -30,6 +31,33 @@ const DIST_DIR = process.env.WO_DIST_DIR || '.next-resident';
 const notes = [];
 
 function log(...a) { console.log('[resident]', ...a); }
+
+// Launch the isolated production build. `mockPhotos:true` (default) unsets the
+// Higgsfield keys so photo generation degrades to Library samples (ZERO credits);
+// `mockPhotos:false` (the real-photo probe) passes the keys through, exactly as
+// `next start` normally would, so genuine generations flow. Returns { server, kill }.
+// The caller waits for the server and owns teardown ordering. Frees the port first
+// (a lingering next-server grandchild from a prior phase would serve a stale build).
+function launchServer(runDir, { mockPhotos }) {
+  try { execSync(`lsof -ti:${config.port} | xargs kill -9`, { stdio: 'ignore' }); } catch {}
+  const env = { ...process.env, WO_DIST_DIR: DIST_DIR, PORT: String(config.port) };
+  if (mockPhotos) { env.HIGGSFIELD_API_KEY = ''; env.HIGGSFIELD_API_SECRET = ''; }
+  log(`starting: next start -p ${config.port} (${mockPhotos ? 'Higgsfield keys unset → photo gen MOCKED' : 'Higgsfield keys LIVE → REAL photo probe'})`);
+  // detached:true → the child leads its own process group so we can signal the whole
+  // tree (npx + next-server grandchild) on teardown and never orphan it.
+  const server = spawn('npx', ['next', 'start', '-p', String(config.port)], { cwd: REPO, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const serverLogPath = path.join(runDir, mockPhotos ? 'server.log' : 'server-probe.log');
+  const serverLog = fs.createWriteStream(serverLogPath, { flags: 'a' });
+  server.stdout.pipe(serverLog); server.stderr.pipe(serverLog);
+  const kill = () => {
+    // Kill the server's process group (negative pid) so the next-server GRANDCHILD
+    // dies too. We do NOT `lsof -ti:PORT | kill` — this runner holds client sockets
+    // to the port, so that would SIGKILL us (the 137 self-destruct bug).
+    try { process.kill(-server.pid, 'SIGKILL'); } catch {}
+    try { server.kill('SIGKILL'); } catch {}
+  };
+  return { server, kill, serverLogPath };
+}
 
 // Poll the server root until it answers or times out.
 function waitForServer(url, timeoutMs = 90000) {
@@ -76,14 +104,10 @@ async function main() {
   const run = new Run(runDir);
   log('run dir:', runDir);
 
-  // ── 1. Launch the production server with photo generation mocked ──────────
-  // Unset Higgsfield creds → higgsfieldConfigured() is false → /api/design-generate
-  // returns { unconfigured } → the client falls back to Library/sample photos.
-  // ZERO Higgsfield credits by construction; the Playwright route-block is the belt.
-  // Free the port first — a lingering next-server from a prior run (npx spawns
-  // next-server as a GRANDCHILD, which a plain kill can orphan) would serve a stale
-  // .next and cause MODULE_NOT_FOUND after a rebuild. Belt: kill the whole group.
-  try { execSync(`lsof -ti:${config.port} | xargs kill -9`, { stdio: 'ignore' }); } catch {}
+  const NIGHTLY = config.nightly;
+  const probeOnly = process.argv.includes('--probe-only'); // verification/debug: skip the mocked phase
+  log(`mode: ${NIGHTLY ? 'NIGHTLY' : 'SMOKE'}${probeOnly ? ' (probe-only)' : ''}  ·  real-photo cap: ${config.realPhotos}`);
+  notes.push(`Run mode: ${NIGHTLY ? 'nightly deep sweep' : 'deploy smoke'}. Real-photo generations budgeted this run: ${config.realPhotos} (hard cap ${config.realPhotosHardCap}).`);
 
   // Guard: refuse to start against a build that is missing its BUILD_ID (a
   // half-written .next from an interrupted build serves MODULE_NOT_FOUND 500s and
@@ -93,108 +117,124 @@ async function main() {
     process.exit(2);
   }
 
-  // WO_DIST_DIR makes `next start` serve the isolated build dir, so a concurrent
-  // `next dev` on another port can't corrupt what we test.
-  const env = { ...process.env, WO_DIST_DIR: DIST_DIR, PORT: String(config.port), HIGGSFIELD_API_KEY: '', HIGGSFIELD_API_SECRET: '' };
-  log(`starting: next start -p ${config.port} (Higgsfield keys unset → photo gen mocked)`);
-  // detached:true → the child leads its own process group so we can signal the
-  // whole tree (npx + next-server grandchild) on teardown and never orphan it.
-  const server = spawn('npx', ['next', 'start', '-p', String(config.port)], { cwd: REPO, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-  const serverLog = fs.createWriteStream(path.join(runDir, 'server.log'));
-  server.stdout.pipe(serverLog); server.stderr.pipe(serverLog);
-
+  const { chromium } = require('playwright');
   let browser;
+  let currentKill = null;
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return; cleaned = true;
     try { if (browser) browser.close(); } catch {}
-    // Kill the server's process group (negative pid) so the next-server GRANDCHILD
-    // dies too — the fix for the orphaned-server / corrupted-.next class. Because
-    // the child was spawned `detached`, its pid IS its group leader and is distinct
-    // from OUR group, so signalling -server.pid never kills this runner.
-    try { process.kill(-server.pid, 'SIGKILL'); } catch {}
-    try { server.kill('SIGKILL'); } catch {}
-    // NOTE: we do NOT `lsof -ti:PORT | kill` here — this runner holds CLIENT
-    // sockets to the port (the cloud-verify fetches), so that would kill US
-    // (the SIGKILL/137 self-destruct bug). The process-group kill above is enough.
+    try { if (currentKill) currentKill(); } catch {}
   };
-  // On a signal we clean up then exit; the plain `exit` listener is a last-resort
-  // reaper (synchronous only). We deliberately do NOT process.kill our own group.
   process.on('SIGINT', () => { cleanup(); process.exit(130); });
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
-  try {
-    await waitForServer(config.baseUrl + '/', 90000);
-    log('server up at', config.baseUrl);
+  // ── PHASE A — MOCKED sweep (journeys + persona fuzzing) ───────────────────
+  // Photos hard-mocked → zero credits. In NIGHTLY we run the full pool twice.
+  if (!probeOnly) {
+    const { kill } = launchServer(runDir, { mockPhotos: true });
+    currentKill = kill;
+    try {
+      await waitForServer(config.baseUrl + '/', 90000);
+      log('server up (mocked) at', config.baseUrl);
 
-    // ── 2. VERIFY BASELINE — cloud session IDS before the run ───────────────
-    const before = await cloudSessionIds(config.baseUrl);
-    const beforeSet = new Set([...before.active, ...before.archived]);
-    notes.push(`Cloud sessions before run: ${before.configured ? `${before.active.length} active + ${before.archived.length} archived` : 'cloud unconfigured (nothing to pollute)'}.`);
-    log('cloud baseline:', before.configured ? `${before.active.length}+${before.archived.length}` : 'unconfigured');
+      // VERIFY BASELINE — cloud session IDS before the run.
+      const before = await cloudSessionIds(config.baseUrl);
+      const beforeSet = new Set([...before.active, ...before.archived]);
+      notes.push(`Cloud sessions before run: ${before.configured ? `${before.active.length} active + ${before.archived.length} archived` : 'cloud unconfigured (nothing to pollute)'}.`);
+      log('cloud baseline:', before.configured ? `${before.active.length}+${before.archived.length}` : 'unconfigured');
 
-    // ── 3. Launch a hardened, headless Chromium ─────────────────────────────
-    const { chromium } = require('playwright');
-    const profileDir = path.join(runDir, 'chrome-profile');
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      userAgent: 'WhiteOrchidResidentTester/1.0',
-    });
-    await fortifyContext(context, run);
-    const page = await context.newPage();
-    const cons = captureConsole(page);
+      browser = await chromium.launch({ headless: true });
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, userAgent: 'WhiteOrchidResidentTester/1.0' });
+      await fortifyContext(context, run); // Higgsfield BLOCKED here
+      const page = await context.newPage();
+      const cons = captureConsole(page);
 
-    // ── 4. Golden journeys ───────────────────────────────────────────────────
-    log('running golden journeys…');
-    await runJourneys(page, run, cons, config.baseUrl);
-    log(`journeys done — ${run.defects().length} defect(s) so far; elapsed ${(run.elapsedMs() / 1000).toFixed(0)}s`);
+      // Golden journeys (every run).
+      log('running golden journeys…');
+      await runJourneys(page, run, cons, config.baseUrl);
+      log(`journeys done — ${run.defects().length} defect(s) so far; elapsed ${(run.elapsedMs() / 1000).toFixed(0)}s`);
 
-    // ── 5. Persona fuzzing (budget-capped) ──────────────────────────────────
-    if (!run.overBudget()) {
-      log('running persona fuzzing…');
-      // Trim target if the clock is already tight (leave 5 min of headroom).
-      const remainingMs = config.budget.wallClockMs - run.elapsedMs();
-      const roomFor = Math.floor((remainingMs - 3 * 60000) / 20000); // ~20s/turn budget
-      const target = Math.max(config.fuzz.minSamples, Math.min(config.fuzz.targetSamples, roomFor));
-      notes.push(`Fuzzing target this run: ${target} utterances (from a pool of realistic staff phrasings).`);
-      await runFuzz(page, run, cons, { targetSamples: target, minSamples: config.fuzz.minSamples });
-    } else {
-      notes.push('Fuzzing skipped — journeys alone reached the time/spend cap.');
+      // Persona fuzzing. SMOKE: full pool once. NIGHTLY: full pool × nightlyPasses.
+      const passes = NIGHTLY ? config.fuzz.nightlyPasses : 1;
+      for (let pass = 1; pass <= passes; pass++) {
+        if (run.overBudget()) { notes.push(`Fuzzing pass ${pass}+ skipped — reached the time/spend cap.`); break; }
+        log(`running persona fuzzing (pass ${pass}/${passes})…`);
+        // Trim target only if the clock is genuinely tight (leave 3 min headroom).
+        const remainingMs = config.budget.wallClockMs - run.elapsedMs();
+        const roomFor = Math.floor((remainingMs - 3 * 60000) / 20000); // ~20s/turn budget
+        const target = Math.max(config.fuzz.minSamples, Math.min(config.fuzz.targetSamples, roomFor));
+        notes.push(`Fuzzing pass ${pass}/${passes}: up to ${Number.isFinite(target) ? target : 'full pool'} utterances (full pool = ${require('./personas').length}).`);
+        await runFuzz(page, run, cons, { targetSamples: target, minSamples: config.fuzz.minSamples });
+      }
+      log(`fuzz done — ${run.fuzz.length} utterances; ${run.defects().length} total defect(s)`);
+
+      // VERIFY — cloud session IDS after the run (no NEW ids may appear).
+      const after = await cloudSessionIds(config.baseUrl);
+      const afterSet = new Set([...after.active, ...after.archived]);
+      const newIds = [...afterSet].filter(id => !beforeSet.has(id));
+      notes.push(`Cloud sessions after run: ${after.configured ? `${after.active.length} active + ${after.archived.length} archived` : 'cloud unconfigured'} → ${newIds.length === 0 ? 'ZERO new session ids (verified clean — the tester wrote nothing to your account).' : `${newIds.length} NEW SESSION ID(S) appeared — investigate: ${newIds.join(', ')}`}`);
+      notes.push(`Higgsfield calls intercepted during the MOCKED phase: ${run.higgsfieldCalls} (must be 0).`);
+      notes.push(`Cloud write attempts intercepted + discarded: ${run.cloudWriteAttempts}.`);
+      run.recordInfo({ verify: { beforeCount: beforeSet.size, afterCount: afterSet.size, newSessionIds: newIds, higgsfieldCalls: run.higgsfieldCalls, cloudWriteAttempts: run.cloudWriteAttempts } });
+
+      await context.close();
+      await browser.close(); browser = null;
+    } catch (e) {
+      log('MOCKED PHASE ERROR:', e.message);
+      notes.push('Mocked-phase error: ' + e.message);
+      run.recordInfo({ error: e.message, stack: e.stack, phase: 'mocked' });
+    } finally {
+      if (currentKill) { currentKill(); currentKill = null; }
     }
-    log(`fuzz done — ${run.fuzz.length} utterances; ${run.defects().length} total defect(s)`);
-
-    // ── 6. VERIFY — cloud session IDS after the run (no NEW ids may appear) ──
-    const after = await cloudSessionIds(config.baseUrl);
-    const afterSet = new Set([...after.active, ...after.archived]);
-    // A leak = an id present AFTER that was absent BEFORE. (The archived top-N
-    // membership can shift for unrelated reasons; only genuinely NEW ids matter.)
-    const newIds = [...afterSet].filter(id => !beforeSet.has(id));
-    notes.push(`Cloud sessions after run: ${after.configured ? `${after.active.length} active + ${after.archived.length} archived` : 'cloud unconfigured'} → ${newIds.length === 0 ? 'ZERO new session ids (verified clean — the tester wrote nothing to your account).' : `${newIds.length} NEW SESSION ID(S) appeared — investigate: ${newIds.join(', ')}`}`);
-    notes.push(`Higgsfield (photo-credit) calls intercepted: ${run.higgsfieldCalls} (must be 0).`);
-    notes.push(`Cloud write attempts intercepted + discarded: ${run.cloudWriteAttempts}.`);
-    run.recordInfo({ verify: { beforeCount: beforeSet.size, afterCount: afterSet.size, newSessionIds: newIds, higgsfieldCalls: run.higgsfieldCalls, cloudWriteAttempts: run.cloudWriteAttempts } });
-
-    await context.close();
-  } catch (e) {
-    log('RUN ERROR:', e.message);
-    notes.push('Run error: ' + e.message);
-    run.recordInfo({ error: e.message, stack: e.stack });
-  } finally {
-    cleanup();
   }
 
-  // ── 7. Write the client-facing report ─────────────────────────────────────
-  const md = report.generate(run, { notes });
+  // ── PHASE B — REAL-PHOTO PROBE (nightly only; hard-capped Higgsfield spend) ─
+  // A SEPARATE server started WITH the real keys, so genuine generations flow. At
+  // most config.realPhotos (≤3) generations. Everything else already ran mocked.
+  if (config.realPhotos > 0) {
+    log(`starting REAL-PHOTO PROBE (cap ${config.realPhotos})…`);
+    const { kill, serverLogPath } = launchServer(runDir, { mockPhotos: false });
+    currentKill = kill;
+    try {
+      await waitForServer(config.baseUrl + '/', 90000);
+      log('server up (REAL keys) at', config.baseUrl);
+      browser = await chromium.launch({ headless: true });
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, userAgent: 'WhiteOrchidResidentTester/1.0' });
+      await fortifyContext(context, run, { allowHiggsfield: true }); // real photos allowed; cloud writes still blocked
+      const page = await context.newPage();
+      const cons = captureConsole(page);
+
+      const probe = await runRealPhotoProbe(page, run, cons, config.baseUrl, serverLogPath);
+      run.realPhotoProbeSummary = probe;
+      if (probe.degraded) notes.push(`Real-photo probe note: ${probe.degraded}`);
+      notes.push(`Real Higgsfield generations spent this run: ${run.realGenerations} (cap ${config.realPhotos}).`);
+      log(`real-photo probe done — ${run.realGenerations} generation(s) spent, ${probe.generations.length} evaluated`);
+
+      await context.close();
+      await browser.close(); browser = null;
+    } catch (e) {
+      log('PROBE PHASE ERROR:', e.message);
+      notes.push('Real-photo probe degraded (error): ' + e.message + ` — spent ${run.realGenerations} generation(s).`);
+      run.recordInfo({ error: e.message, stack: e.stack, phase: 'probe' });
+    } finally {
+      if (currentKill) { currentKill(); currentKill = null; }
+    }
+  }
+
+  cleanup();
+
+  // ── Write the client-facing report ────────────────────────────────────────
+  const md = report.generate(run, { notes, nightly: NIGHTLY });
   const dateStr = new Date(run.startedAt).toISOString().slice(0, 10);
-  const reportPath = path.join(REPO, 'docs', 'resident-tester', `smoke-report-${dateStr}.md`);
+  const kind = NIGHTLY ? 'nightly' : 'smoke';
+  const reportPath = path.join(REPO, 'docs', 'resident-tester', `${kind}-report-${dateStr}.md`);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, md);
-  // Also drop a copy inside the run dir for a self-contained artifact.
   fs.writeFileSync(path.join(runDir, 'report.md'), md);
 
   log('─'.repeat(60));
-  log(`DONE — ${run.defects().length} defect(s), ${run.fuzz.length} utterances, ${(run.elapsedMs() / 60000).toFixed(1)} min, ~$${run.estCostUsd().toFixed(2)}`);
+  log(`DONE — ${run.defects().length} defect(s), ${run.fuzz.length} utterances, ${run.realGenerations} real photo(s), ${(run.elapsedMs() / 60000).toFixed(1)} min, ~$${run.estCostUsd().toFixed(2)}`);
   log('report:', path.relative(REPO, reportPath));
   log('events:', path.relative(REPO, run.eventsPath));
   process.exit(0);

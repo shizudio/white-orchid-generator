@@ -21,6 +21,7 @@ const ORACLE_PLAIN = {
   'inspector-opens': 'Clicking the design did not open the editing panel',
   'add-renders': 'Adding an element did not appear on the design',
   'ready-checklist-present': 'The pre-download checklist was missing',
+  'real-photo-present': 'A real-photo test fell back to a stock photo instead of generating one',
 };
 
 function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
@@ -52,6 +53,7 @@ function rankDefects(defects) {
 }
 
 function generate(run, meta) {
+  const nightly = !!(meta && meta.nightly);
   const defects = run.defects();
   const ranked = rankDefects(defects);
   const wallMin = (run.elapsedMs() / 60000);
@@ -60,15 +62,20 @@ function generate(run, meta) {
   const journeySteps = (run.journeys[0]?.steps) || [];
   const passSteps = journeySteps.filter(s => s.ok).length;
   const fuzzWithDefects = run.fuzz.filter(f => f.defects > 0).length;
+  const probe = run.realPhotoProbeSummary || null;
 
   const L = [];
   L.push(`# White Orchid Content Studio — Automated Test Report`);
   L.push('');
-  L.push(`**Date:** ${dateStr}  ·  **Type:** 30-minute smoke run (first run)`);
+  L.push(`**Date:** ${dateStr}  ·  **Type:** ${nightly ? 'nightly deep sweep (unattended)' : 'deploy smoke run'}`);
   L.push('');
   L.push(`This report is produced by the studio's automated "resident tester" — a program that opens the studio like a member of your staff would, tries the everyday things (start a post, change a colour, switch sizes, download), and also throws dozens of realistic, messy requests at the design helper to see how it copes. It checks the result of each action against a set of quality rules and writes down anything that looked wrong, with a screenshot.`);
   L.push('');
-  L.push(`Nothing in this run cost you any photo-generation credits, and nothing it did was saved to your real account — it runs in a sealed sandbox.`);
+  if (nightly && run.realGenerations > 0) {
+    L.push(`This is a **nightly** run, so it did two things a deploy smoke run doesn't: it repeated the realistic-request sweep **twice** (to catch anything that only misbehaves sometimes), and it generated **${run.realGenerations} real photo${run.realGenerations === 1 ? '' : 's'}** through the live image pipeline so you can see genuine generated results below. Everything else still ran in a sealed sandbox on built-in sample photos.`);
+  } else {
+    L.push(`Nothing in this run cost you any photo-generation credits, and nothing it did was saved to your real account — it runs in a sealed sandbox.`);
+  }
   L.push('');
 
   // ── Headline ────────────────────────────────────────────────────────────
@@ -78,9 +85,46 @@ function generate(run, meta) {
   L.push(`- **Realistic requests tried:** ${run.fuzz.length}. Of those, ${fuzzWithDefects} triggered at least one quality flag.`);
   L.push(`- **Total quality flags raised:** ${defects.length}${defects.length ? ` (across ${ranked.length} distinct issue type${ranked.length === 1 ? '' : 's'})` : ''}.`);
   L.push(`- **Time taken:** ${wallMin.toFixed(1)} minutes.  **Estimated AI cost:** $${run.estCostUsd().toFixed(2)} (${run.llmCalls} helper requests).`);
-  L.push(`- **Photo credits spent:** ${run.higgsfieldCalls === 0 ? '0 (confirmed — photo generation was fully mocked).' : `${run.higgsfieldCalls} — WARNING, this should be zero.`}`);
+  if (run.realGenerations > 0) {
+    L.push(`- **Real photos generated:** ${run.realGenerations} (a deliberate, capped test of the live image pipeline — see "Real generated photos" below). During the rest of the run, photo generation was fully mocked.`);
+  } else {
+    L.push(`- **Photo credits spent:** ${run.higgsfieldCalls === 0 ? '0 (confirmed — photo generation was fully mocked).' : `${run.higgsfieldCalls} — WARNING, this should be zero.`}`);
+  }
   L.push(`- **Data saved to your account:** none (${run.cloudWriteAttempts} save attempt${run.cloudWriteAttempts === 1 ? ' was' : 's were'} intercepted and discarded).`);
   L.push('');
+
+  // ── Real generated photos (nightly probe) ─────────────────────────────────
+  if (probe) {
+    L.push(`## Real generated photos`);
+    L.push('');
+    L.push(`Once a night, the tester deliberately generates a small, capped number of **real** photos through the live image pipeline (at most ${probe.cap}) so you can see genuine results — not sample images. This is the only part of the run that uses photo-generation credits.`);
+    L.push('');
+    if (probe.degraded) {
+      L.push(`> **Heads up:** ${probe.degraded}`);
+      L.push('');
+    }
+    if (probe.generations.length === 0) {
+      L.push(`No real photo was produced this run. ${probe.degraded ? '' : 'The image service may have been unavailable or out of quota.'} Total credits spent: ${run.realGenerations}.`);
+    } else {
+      for (const g of probe.generations) {
+        L.push(`### ${g.label}`);
+        L.push('');
+        L.push(`- **Brief used:** "${String(g.brief || '').replace(/\|/g, '/')}"`);
+        L.push(`- **Real photo produced?** ${g.real ? 'Yes — ' : 'No — '}${g.realHow}`);
+        L.push(`- **Generations submitted:** ${g.generationsSubmitted}  ·  **completed:** ${g.completed}  ·  **failures:** ${g.failures}${g.lastError ? ` (last: ${g.lastError})` : ''}`);
+        L.push(`- **Quality flags on the result:** ${g.defects}`);
+        if (g.screenshot) L.push(`- **Screenshot of the generated design:** \`${path.relative(process.cwd(), g.screenshot)}\``);
+        L.push('');
+      }
+    }
+    L.push(`**Total real photos generated this run: ${run.realGenerations}** (hard cap ${probe.cap}).`);
+    if (probe.serverErrors && probe.serverErrors.length) {
+      L.push('');
+      L.push(`Server-side notes during generation:`);
+      for (const e of probe.serverErrors) L.push(`- \`${String(e).replace(/\|/g, '/').slice(0, 200)}\``);
+    }
+    L.push('');
+  }
 
   // ── Top issues ranked ─────────────────────────────────────────────────────
   L.push(`## What needs attention (most important first)`);
@@ -154,9 +198,13 @@ function generate(run, meta) {
   L.push(`## Run details (for the record)`);
   L.push('');
   L.push(`- **Ran against:** a production build of the studio, identical to what goes live, running locally in a sandbox.`);
-  L.push(`- **Photo generation:** fully mocked — the studio fell back to its built-in sample photos, so no credits were used.`);
+  if (run.realGenerations > 0) {
+    L.push(`- **Photo generation:** mocked for the whole run EXCEPT a deliberate, capped probe of ${run.realGenerations} real photo(s) through the live pipeline (see "Real generated photos").`);
+  } else {
+    L.push(`- **Photo generation:** fully mocked — the studio fell back to its built-in sample photos, so no credits were used.`);
+  }
   L.push(`- **Account safety:** all "save to cloud" requests were blocked, so this run added nothing to your Posts or history.`);
-  L.push(`- **Budget caps:** the run stops automatically at 30 minutes or about $3 of AI usage, whichever comes first.`);
+  L.push(`- **Budget caps:** the run stops automatically at ${nightly ? '60 minutes or about $2 of AI usage' : '30 minutes or about $3 of AI usage'}, whichever comes first.`);
   L.push(`- **Raw log:** every flag is also recorded in machine-readable form at \`${path.relative(process.cwd(), run.eventsPath)}\`, with screenshots in the same folder.`);
   if (meta && meta.notes && meta.notes.length) {
     L.push('');
@@ -165,7 +213,9 @@ function generate(run, meta) {
   }
   L.push('');
   L.push(`---`);
-  L.push(`*Generated by the White Orchid resident tester. This is stage 1 (on-demand). Nightly automatic runs are a later step, pending your go-ahead on this first report.*`);
+  L.push(nightly
+    ? `*Generated by the White Orchid resident tester (nightly deep sweep). Deploy smoke runs — a lighter version of this — also run automatically on every staging deploy.*`
+    : `*Generated by the White Orchid resident tester (deploy smoke run). A deeper nightly sweep — including a small, capped test of real photo generation — runs automatically each night.*`);
   L.push('');
 
   return L.join('\n');
