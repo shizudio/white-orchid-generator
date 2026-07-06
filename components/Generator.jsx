@@ -7662,7 +7662,7 @@ export default function App() {
           <rect x="6" y="29" width="20" height="4" rx="1" fill={B.burnham} opacity="0.7"/>
         </AddTile>
       </div>
-      <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Photo</div>
+      <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Photo</div>
       <div style={{display:"flex",gap:6,marginBottom:14}}>
         <button onClick={()=>{setShowLibPicker(true);setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:"transparent",border:`1px solid ${B.burnham}33`,borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:B.burnham,letterSpacing:0.5}}>📂 From the Library</button>
         <button onClick={()=>{imgRef.current?.click();setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:B.burnham,border:"none",borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:"#fff",letterSpacing:0.5}}>＋ Upload a photo</button>
@@ -7683,7 +7683,7 @@ export default function App() {
             <button key={o.id} aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else{toggleOverlay(o);}setTopMenu(null);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
               style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
               <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
-              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,color:placed?B.burnham:B.ash,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
+              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
               {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
             </button>
           );
@@ -7692,12 +7692,12 @@ export default function App() {
         const decorations=overlays.filter(o=>!(o.builtin&&o.category==="overlays"));
         return (
           <>
-            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Shapes</div>
-            <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,margin:"-4px 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
+            <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Shapes</div>
+            <div style={{fontSize:10,color:B.jet,fontFamily:F.body,lineHeight:1.45,margin:"-4px 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
               {petals.map(shapeTile)}
             </div>
-            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
+            <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
               {decorations.map(shapeTile)}
               <button onClick={()=>overlayInputRef.current?.click()} title="Upload a new SVG/PNG decoration"
@@ -7787,7 +7787,7 @@ export default function App() {
   const MenuHead = ({label, sub}) => (
     <div style={{margin:"4px 0 10px"}}>
       <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.burnham}}>{label}</div>
-      {sub && <div style={{fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.5,marginTop:3}}>{sub}</div>}
+      {sub && <div style={{fontSize:11,fontFamily:F.body,color:B.jet,lineHeight:1.5,marginTop:3}}>{sub}</div>}
     </div>
   );
   const topMenuContent = () => {
