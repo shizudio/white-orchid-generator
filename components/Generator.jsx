@@ -8,6 +8,22 @@ import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAc
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions } from "@/lib/sessions";
 
+/* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
+   DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
+   at build time, so every branch gated on it is dead-code-eliminated from
+   production bundles (nothing reachable from a live user's console).
+   TEST_HOOKS — the resident tester's oracles (__woTruth, __woRoleBounds,
+   __woReadyCheck, __woArchStress, __woLegacyDupGuard, __woBornCleanGuard, and
+   lib/sessions' __woFeedbackDump) additionally survive the tester's ISOLATED
+   production build, which sets NEXT_PUBLIC_WO_TEST_HOOKS=1 at build time
+   (package.json test:resident / scripts/resident-tester/deploy-smoke.sh).
+   NEXT_PUBLIC_* is inlined at build time too, so a real deploy (flag unset)
+   drops the oracle branches as dead code as well.
+   __woBuildLibrary (spends real credits) is gated on the NODE_ENV literal
+   directly — it must NEVER exist in ANY production build, tester's included. */
+const DEV_HOOKS = process.env.NODE_ENV !== "production";
+const TEST_HOOKS = DEV_HOOKS || process.env.NEXT_PUBLIC_WO_TEST_HOOKS === "1";
+
 /* ───────── BRAND ───────── */
 const B = {
   burnham:"#254E48", whiteSmoke:"#F5F6E7", wisteria:"#DEC5D8",
@@ -3814,75 +3830,92 @@ export default function App() {
     return()=>{active=false;};
   }, []);
 
-  // Dev-only verification hook (Commit 3): drive an archetype design + sample
-  // content from the console so each of the 12 can be rendered + asserted. Reads
-  // fontMetaRef/auditRef the same signals the audit uses. Harmless in prod.
+  // Verification hooks (item 8: gated — nothing on a production window).
+  // TEST_HOOKS: the tester's render-truth oracles. DEV_HOOKS: console drivers.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.__woSetArchetype = (id, content = {}) => {
-      // Set copy + postType FIRST so materialization writes roles for the right
-      // postType and the eyebrow/register reflect the actual copy.
-      if (content.headline !== undefined) setHeadline(content.headline);
-      if (content.subtext !== undefined) setSubtext(content.subtext);
-      if (content.attribution !== undefined) setAttribution(content.attribution);
-      if (content.dateText !== undefined) setDateText(content.dateText);
-      if (content.postType) setPostType(content.postType);
-      if (content.dimensionId) setDimensionId(content.dimensionId);
-      materializeArchetype(id === "none" ? null : id, {
-        postType: content.postType || postType,
-        attribution: content.attribution ?? attribution,
-        subtext: content.subtext ?? subtext,
-      });
-    };
-    window.__woArchAudit = () => auditRef.current;
-    window.__woArchFontMeta = () => fontMetaRef.current;
-    window.__woArchTextBounds = () => textBoundsRef.current;
+    if (typeof window === "undefined" || !TEST_HOOKS) return;
+    // ── ORACLES (tester builds too) ──
     window.__woRoleBounds = () => roleBoundsRef.current;   // (WP-U fix #1) per-role hit boxes
     // (WP-W0) RENDER TRUTH — what's actually on the canvas (verification + honesty).
     window.__woTruth = () => renderTruth();
-    window.__woArchetypeIds = ARCHETYPE_IDS;
+
+    if (DEV_HOOKS) {
+      // Dev-only verification hook (Commit 3): drive an archetype design + sample
+      // content from the console so each of the 12 can be rendered + asserted.
+      window.__woSetArchetype = (id, content = {}) => {
+        // Set copy + postType FIRST so materialization writes roles for the right
+        // postType and the eyebrow/register reflect the actual copy.
+        if (content.headline !== undefined) setHeadline(content.headline);
+        if (content.subtext !== undefined) setSubtext(content.subtext);
+        if (content.attribution !== undefined) setAttribution(content.attribution);
+        if (content.dateText !== undefined) setDateText(content.dateText);
+        if (content.postType) setPostType(content.postType);
+        if (content.dimensionId) setDimensionId(content.dimensionId);
+        materializeArchetype(id === "none" ? null : id, {
+          postType: content.postType || postType,
+          attribution: content.attribution ?? attribution,
+          subtext: content.subtext ?? subtext,
+        });
+      };
+      window.__woArchAudit = () => auditRef.current;
+      window.__woArchFontMeta = () => fontMetaRef.current;
+      window.__woArchTextBounds = () => textBoundsRef.current;
+      window.__woArchetypeIds = ARCHETYPE_IDS;
+    }
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
-    // window.__woBuildLibrary(n) generates up to n diverse, archetype-primed brand
-    // photos SEQUENTIALLY via /api/brand-library (Higgsfield-first, gpt-image-1
-    // fallback), saving each straight to the Supabase Library. Small delay between
-    // jobs to respect rate limits. Resumable (pass startIndex) and cancellable via
-    // window.__woBuildLibraryStop(). Logs progress to the console.
-    window.__woBuildLibraryStop = () => { window.__woBuildLibraryStopFlag = true; };
-    window.__woBuildLibrary = async (n, startIndex = 0) => {
-      window.__woBuildLibraryStopFlag = false;
-      // Discover the plan size so a bare call builds the whole set.
-      let total = 8;
-      try { const p = await (await fetch('/api/brand-library')).json(); total = p.total || total; } catch {}
-      const count = Number.isInteger(n) && n > 0 ? Math.min(n, total - startIndex) : (total - startIndex);
-      const results = [];
-      console.log(`[brand-library] building ${count} photos (index ${startIndex}…${startIndex + count - 1} of ${total})`);
-      for (let k = 0; k < count; k++) {
-        if (window.__woBuildLibraryStopFlag) { console.log('[brand-library] stopped by request'); break; }
-        const index = startIndex + k;
-        try {
-          const res = await fetch('/api/brand-library', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (data.ok) console.log(`[brand-library] ${k + 1}/${count} ✓ index ${index} via ${data.provider} — ${String(data.scene || '').slice(0, 48)}…`);
-          else console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index}:`, data.error || res.status);
-          results.push({ index, ...data });
-        } catch (err) {
-          console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index} threw:`, err?.message || err);
-          results.push({ index, ok: false, error: String(err?.message || err) });
+    // SPENDS REAL CREDITS. Gated on the NODE_ENV literal so the whole block is
+    // dead-code-eliminated from EVERY production build — including the resident
+    // tester's isolated build (which sets NEXT_PUBLIC_WO_TEST_HOOKS=1). It must
+    // never be reachable from a live console (item 8, mandatory).
+    if (process.env.NODE_ENV !== "production") {
+      // window.__woBuildLibrary(n) generates up to n diverse, archetype-primed brand
+      // photos SEQUENTIALLY via /api/brand-library (Higgsfield-first, gpt-image-1
+      // fallback), saving each straight to the Supabase Library. Small delay between
+      // jobs to respect rate limits. Resumable (pass startIndex) and cancellable via
+      // window.__woBuildLibraryStop(). Logs progress to the console.
+      window.__woBuildLibraryStop = () => { window.__woBuildLibraryStopFlag = true; };
+      window.__woBuildLibrary = async (n, startIndex = 0) => {
+        window.__woBuildLibraryStopFlag = false;
+        // Discover the plan size so a bare call builds the whole set.
+        let total = 8;
+        try { const p = await (await fetch('/api/brand-library')).json(); total = p.total || total; } catch {}
+        const count = Number.isInteger(n) && n > 0 ? Math.min(n, total - startIndex) : (total - startIndex);
+        const results = [];
+        console.log(`[brand-library] building ${count} photos (index ${startIndex}…${startIndex + count - 1} of ${total})`);
+        for (let k = 0; k < count; k++) {
+          if (window.__woBuildLibraryStopFlag) { console.log('[brand-library] stopped by request'); break; }
+          const index = startIndex + k;
+          try {
+            const res = await fetch('/api/brand-library', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data.ok) console.log(`[brand-library] ${k + 1}/${count} ✓ index ${index} via ${data.provider} — ${String(data.scene || '').slice(0, 48)}…`);
+            else console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index}:`, data.error || res.status);
+            results.push({ index, ...data });
+          } catch (err) {
+            console.warn(`[brand-library] ${k + 1}/${count} ✗ index ${index} threw:`, err?.message || err);
+            results.push({ index, ok: false, error: String(err?.message || err) });
+          }
+          // Rate-limit courtesy delay between jobs (skip after the last).
+          if (k < count - 1) await new Promise(r => setTimeout(r, 1500));
         }
-        // Rate-limit courtesy delay between jobs (skip after the last).
-        if (k < count - 1) await new Promise(r => setTimeout(r, 1500));
-      }
-      const ok = results.filter(r => r.ok).length;
-      console.log(`[brand-library] done — ${ok}/${results.length} saved to the Library. Refresh /library to view.`);
-      return results;
-    };
+        const ok = results.filter(r => r.ok).length;
+        console.log(`[brand-library] done — ${ok}/${results.length} saved to the Library. Refresh /library to view.`);
+        return results;
+      };
+    }
 
     return () => {
       try {
+        delete window.__woRoleBounds;
+        delete window.__woTruth;
         delete window.__woSetArchetype;
+        delete window.__woArchAudit;
+        delete window.__woArchFontMeta;
+        delete window.__woArchTextBounds;
+        delete window.__woArchetypeIds;
         delete window.__woBuildLibrary;
         delete window.__woBuildLibraryStop;
       } catch {}
@@ -6292,7 +6325,7 @@ export default function App() {
     // same no-loop pattern as dropHint above).
     const dr=deadRolesRef.current||[];
     setDeadRoles(prev=>prev.join(",")===dr.join(",")?prev:dr);
-    if(typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook
+    if(DEV_HOOKS&&typeof window!=="undefined")window.__woFontMeta=fontMetaRef.current;   // Task 4 test hook (dev-only, item 8)
   },[draw,fontsLoaded]);
 
   // (fix) A format switch resizes the canvas backing buffer. Without a redraw
@@ -6338,7 +6371,7 @@ export default function App() {
     // harmonizer forever after — the landing logo-over-caption repair never ran
     // because of exactly this poisoning.
     if (c && auditRef.current) localAuditCacheRef.current = { sig, findings };
-    if (typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };
+    if (DEV_HOOKS && typeof window !== "undefined") window.__woAudit = { signal: auditRef.current, findings };   // dev-only (item 8)
     return findings;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScene, W, H, dimensionId, postType, archetypeId, archVariant, bgColor, textColorId, backdropMode, headline, subtext, attribution, dateText, selectedLogoId, logoPosition, logoSize, userLogoTouched, fontSizes, logoByDim, typeLayouts, typeLayoutsByDim, overlayLayers, imageObj, videoObj, image]);
@@ -6652,10 +6685,14 @@ export default function App() {
 
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
+  // (item 8) __woReadyCheck is a tester ORACLE (test-hooks builds); the raw
+  // audit drivers are dev-only. Nothing lands on a production window.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.__runWoAudit = () => runLocalAudit();
-    window.__runWoAuditAll = () => auditAllFormats();
+    if (typeof window === "undefined" || !TEST_HOOKS) return;
+    if (DEV_HOOKS) {
+      window.__runWoAudit = () => runLocalAudit();
+      window.__runWoAuditAll = () => auditAllFormats();
+    }
     // (WP-Y5) per-format Ready-to-post verdicts (verification + future learning pass).
     window.__woReadyCheck = () => computeReadyAll();
   }, [runLocalAudit, auditAllFormats, computeReadyAll]);
@@ -6679,7 +6716,7 @@ export default function App() {
      state mutation). If `content` is passed, its headline/subtext/attribution/
      dateText override the current copy for the board only (per-cell, not state). */
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !DEV_HOOKS) return;   // dev-only (item 8)
     window.__woCalibrationBoard = (content, variant) => {
       const V = Number.isInteger(variant) ? variant : 0;
       // Bare calls must never render an empty design: fall back to the standard
@@ -6764,6 +6801,7 @@ export default function App() {
       { arch:"stat_tile",   v:0, c:{ attribution:"OUR RATIO", dateText:"1 : 6", subtext:"one guide, six children — a room that stays quiet" } },
       { arch:"closing_card",v:0, c:{ headline:"Come and *see for yourself*", subtext:"thewhiteorchid.sg" } },
     ];
+    if (!DEV_HOOKS) return;   // dev-only (item 8)
     window.__woFeedBoard = (photos) => {
       const P = photos || {};
       const CELL = 360, cols = 3, rows = 4, pad = 6;
@@ -6813,7 +6851,10 @@ export default function App() {
      collision and twitter right-edge clip were invisible while only square/story/banner
      were asserted. The permanent stress set is ALL six DIMENSIONS. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    // (item 8) __woArchStress / __woBornCleanGuard / __woLegacyDupGuard are the
+    // tester's GUARD ORACLES — available in dev and in the tester's isolated
+    // test-hooks build, never on a real production window. __woCell is dev-only.
+    if (typeof window === "undefined" || !TEST_HOOKS) return;
     window.__woArchStress = (content) => {
       const cc = content || {
         headline: "Early Childhood *Educators* Wanted for Our Growing Nurturing Community",
@@ -6907,8 +6948,8 @@ export default function App() {
       return report;
     };
     // Single-cell probe (verification): render ONE archetype x format offscreen and
-    // return that cell's drift snapshot (boxes + overlap/crop flags).
-    window.__woCell = (archId, dimId, content) => {
+    // return that cell's drift snapshot (boxes + overlap/crop flags). Dev-only.
+    if (DEV_HOOKS) window.__woCell = (archId, dimId, content) => {
       const dm = DIMENSIONS.find(d => d.id === dimId);
       if (!dm || !ARCHETYPE_IDS.includes(archId)) return null;
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
@@ -7087,7 +7128,7 @@ export default function App() {
       const rec = checkFormatFit();
       if (rec) {
         if (isDev) { /* eslint-disable-next-line no-console */ console.warn("[woFormatFit] divergence", rec); }
-        window.__woFormatFitLast = rec;
+        if (isDev) window.__woFormatFitLast = rec;   // dev-only window write (item 8)
         // Bounded divergence ring (dev verification): lets a heavy real-usage session
         // surface transient mis-fits even when the tab is backgrounded/throttled.
         if (isDev) { (window.__woFormatFitLog = window.__woFormatFitLog || []).push({ t: Date.now(), ...rec }); if (window.__woFormatFitLog.length > 50) window.__woFormatFitLog.shift(); }
@@ -7104,11 +7145,11 @@ export default function App() {
           if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
           setTimeout(heal, 32);
         }
-      } else { window.__woFormatFitLast = null; }
+      } else if (isDev) { window.__woFormatFitLast = null; }
     };
     // Dev-only steady interval so any regression is caught during real usage flows.
     if (isDev) timer = setInterval(run, 250);
-    window.__woFmtFitCheck = () => checkFormatFit();
+    if (isDev) window.__woFmtFitCheck = () => checkFormatFit();   // dev-only (item 8)
     return () => { if (raf) cancelAnimationFrame(raf); if (timer) clearInterval(timer); try { delete window.__woFmtFitCheck; } catch {} };
   }, [checkFormatFit]);
 
@@ -7119,7 +7160,7 @@ export default function App() {
      the right/bottom edge (the mis-fit fingerprint). Returns {pass, failures:[...]}.
      Mirrors the manual repro but automated for CI-style verification. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !DEV_HOOKS) return;   // dev-only harness (item 8)
     // Settle after a state change: give React its commit + a couple of paints. rAF is
     // THROTTLED/PAUSED in a backgrounded tab (headless verification), so race a short
     // rAF pair against a plain timer — whichever fires first resolves. A trailing
@@ -7193,7 +7234,7 @@ export default function App() {
      text colour (applies) → add overlay (layout does NOT jump) → drag text (moves).
      Returns a compact snapshot read back from the live audit after the next render. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !DEV_HOOKS) return;   // dev-only harness (item 8)
     window.__woReproStep = (step, arg) => {
       if (step === "archetype") materializeArchetype(arg || "petal_window", { postType, attribution, subtext });
       else if (step === "textColor") { noteManualEdit("colour"); setTextColorId(arg || "tangerine"); }   // manual colour pick
@@ -7526,7 +7567,7 @@ export default function App() {
   // inject/clear a synthetic audit finding (deterministic dedup/ack/staleness testing
   // without a live vision call). Nothing user-facing.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !DEV_HOOKS) return;   // dev-only (item 8)
     window.__woLedger = () => ({
       formats: (ledgerRef.current?.formats || []).map(f => ({
         dimensionId: f.dimensionId, ready: f.ready,

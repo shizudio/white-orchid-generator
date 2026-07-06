@@ -6,8 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test:resident": "WO_DIST_DIR=.next-resident next build && node scripts/resident-tester/run.js",
-    "test:resident:nightly": "WO_DIST_DIR=.next-resident next build && WO_NIGHTLY=1 node scripts/resident-tester/run.js --nightly"
+    "test:resident": "WO_DIST_DIR=.next-resident NEXT_PUBLIC_WO_TEST_HOOKS=1 next build && node scripts/resident-tester/run.js",
+    "test:resident:nightly": "WO_DIST_DIR=.next-resident NEXT_PUBLIC_WO_TEST_HOOKS=1 next build && WO_NIGHTLY=1 node scripts/resident-tester/run.js --nightly"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

@@ -55,7 +55,11 @@ else
 fi
 
 if [[ "$needs_build" == "1" ]]; then
-  if ! WO_DIST_DIR="$DIST_DIR" npx next build; then
+  # NEXT_PUBLIC_WO_TEST_HOOKS=1 keeps the tester's ORACLES (__woTruth,
+  # __woReadyCheck, the guard sweeps, __woFeedbackDump…) alive in this ISOLATED
+  # build only — a real production build (flag unset) carries no __wo hooks at
+  # all (security item 8, ratified 2026-07-06).
+  if ! WO_DIST_DIR="$DIST_DIR" NEXT_PUBLIC_WO_TEST_HOOKS=1 npx next build; then
     echo "[deploy-smoke] ❌ BUILD FAILED — blocking the push (fix the build, then re-push)."
     exit 1
   fi
