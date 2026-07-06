@@ -1,0 +1,3 @@
+# Per-run artifacts are heavy (screenshots + logs) and reproducible — the report
+# in docs/resident-tester/ is the durable output that gets committed, not these.
+runs/
