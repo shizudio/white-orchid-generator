@@ -212,7 +212,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
   // base64 thumb (transient chat chrome, not state — would blow the quota).
   useEffect(() => {
     if (!hydrated) return;
-    const slim = messages.slice(-60).map(({ thumb, ...rest }) => rest);
+    const slim = messages.slice(-60).map(({ thumb, streaming, ...rest }) => rest);
     if (sessionMode) {
       onConversationChange(slim);
     } else {
@@ -276,19 +276,78 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       });
       prevTurnRef.current = { turnId, content };
     };
+    // (B1) A placeholder assistant bubble we stream tokens into. `streaming:true`
+    // swaps the typing dots for the live text as it arrives. Its index is captured
+    // so reply_delta events append to exactly this message.
+    let streamIdx = -1;
+    const startStreamingBubble = () => {
+      setMessages(prev => {
+        streamIdx = prev.length;
+        return [...prev, { role: 'assistant', content: '', streaming: true, turnId }];
+      });
+    };
+    const appendDelta = (text) => {
+      setMessages(prev => {
+        if (streamIdx < 0 || !prev[streamIdx]) return prev;
+        const copy = prev.slice();
+        copy[streamIdx] = { ...copy[streamIdx], content: (copy[streamIdx].content || '') + text };
+        return copy;
+      });
+    };
     try {
       const response = await fetch('/api/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           context: 'editor',
+          stream: true,
           messages: nextHistory.slice(-10).map(m => ({ role: m.role, content: m.content })),
           designState: designState(),
         }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
         setError(data.error || "AI isn't set up yet.");
+        setLoading(false);
+        return;
+      }
+      // ── (B1) Read the SSE stream: render reply tokens live, collect the final
+      //    { done } payload, then apply the patch atomically once the stream ends. ──
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', data = null, streamErr = null;
+      for (;;) {
+        const { done: rdDone, value } = await reader.read();
+        if (rdDone) break;
+        buf += decoder.decode(value, { stream: true });
+        const events = buf.split('\n\n');
+        buf = events.pop() || '';
+        for (const evt of events) {
+          const line = evt.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          let msg; try { msg = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (msg.type === 'reply_delta') {
+            if (streamIdx < 0) startStreamingBubble();
+            appendDelta(msg.text);
+          } else if (msg.type === 'done') {
+            data = msg;
+          } else if (msg.type === 'error') {
+            streamErr = msg.error || "I ran into a problem just now. Please try again.";
+          }
+          // 'status' events (thinking/applying) are advisory — the typing dots +
+          // streamed text already communicate progress; no extra UI needed here.
+        }
+      }
+      if (streamErr) {
+        // Drop the (possibly empty) streaming bubble and surface a warm, retryable error.
+        if (streamIdx >= 0) setMessages(prev => prev.filter((_, i) => i !== streamIdx));
+        setError(streamErr);
+        setLoading(false);
+        return;
+      }
+      if (!data) {
+        if (streamIdx >= 0) setMessages(prev => prev.filter((_, i) => i !== streamIdx));
+        setError("That response came through incomplete. Please try again.");
         setLoading(false);
         return;
       }
@@ -324,7 +383,11 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       // Only attach an undo chip when a real change actually landed. The turnId +
       // feedbackable flag let the thumbs-down chip enrich THIS turn's verdict, and
       // undoTurnId ties an Undo click back to the turn it reverts (implicit reject).
-      setMessages(prev => [...prev, {
+      // (B1) FINALIZE the streamed bubble in place (don't append a second one): keep
+      // the tokens already shown, reconcile with the authoritative final reply, and
+      // attach the summary/undo/thumb chrome. Falls back to appending if — somehow —
+      // no streaming bubble exists (e.g. a zero-token reply).
+      const finalMsg = {
         role: 'assistant',
         content: data.reply || 'Done.',
         summary: summaryParts.join(', '),
@@ -334,7 +397,16 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         turnId,
         undoTurnId: didChange ? turnId : null,
         feedbackable: true,
-      }]);
+        streaming: false,
+      };
+      setMessages(prev => {
+        if (streamIdx >= 0 && prev[streamIdx]) {
+          const copy = prev.slice();
+          copy[streamIdx] = { ...copy[streamIdx], ...finalMsg };
+          return copy;
+        }
+        return [...prev, finalMsg];
+      });
       verdict.didChange = didChange;
       verdict.archetypeBefore = truthBefore?.archetypeId ?? null;
 
@@ -709,7 +781,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             )}
           </div>
         ))}
-        {loading && (
+        {/* (B1) Typing dots only until the first token streams in — once a streaming
+            bubble is rendering live text, it IS the progress indicator. */}
+        {loading && !messages.some(m => m.streaming) && (
           <div className="ad-msg ad-msg--assistant">
             <div className="ad-bubble ad-typing"><span /><span /><span /></div>
           </div>

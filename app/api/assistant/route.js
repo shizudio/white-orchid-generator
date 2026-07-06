@@ -602,6 +602,109 @@ function getOutputText(response) {
   return null;
 }
 
+// (B1) The design_patch schema streams `reply` FIRST (it's the first required
+// property and OpenAI emits strict-schema keys in order), so as the JSON grows we
+// can pull the reply string out progressively and render it token-by-token — the
+// patch is only parsed/applied once the whole object is complete (atomic). This
+// tolerant extractor reads the value of the top-level "reply" key from a partial
+// JSON string, handling escapes; returns '' until the key's opening quote arrives.
+function extractPartialReply(partial) {
+  const keyIdx = partial.indexOf('"reply"');
+  if (keyIdx < 0) return '';
+  // Find the colon, then the opening quote of the value.
+  let i = partial.indexOf(':', keyIdx + 7);
+  if (i < 0) return '';
+  i++;
+  while (i < partial.length && /\s/.test(partial[i])) i++;
+  if (partial[i] !== '"') return '';
+  i++; // past opening quote
+  let out = '';
+  while (i < partial.length) {
+    const ch = partial[i];
+    if (ch === '\\') {
+      const next = partial[i + 1];
+      if (next === undefined) break; // escape split across chunks — stop here, resume next chunk
+      if (next === 'n') out += '\n';
+      else if (next === 't') out += '\t';
+      else if (next === 'r') out += '\r';
+      else if (next === '"') out += '"';
+      else if (next === '\\') out += '\\';
+      else if (next === '/') out += '/';
+      else if (next === 'u') { out += partial.slice(i, i + 6) && ''; /* unicode: emit on final parse */ }
+      else out += next;
+      i += 2;
+      continue;
+    }
+    if (ch === '"') break; // closing quote — reply value complete
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+// (B1) Call the OpenAI Responses API with streaming. Parses the SSE event stream,
+// invokes onReplyDelta(newReplyText) as the `reply` field grows, and resolves with
+// { ok, text, status, reason }. `text` is the full accumulated output JSON (parsed
+// by the caller exactly like the non-streaming path). Never throws — network errors
+// resolve { ok:false }.
+async function streamOpenAI(apiKey, payload, onReplyDelta) {
+  let res;
+  try {
+    res = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, stream: true }),
+    });
+  } catch {
+    return { ok: false, text: '', status: 502, reason: 'network' };
+  }
+  if (!res.ok || !res.body) {
+    let reason = res.statusText;
+    try { const j = await res.json(); reason = j?.error?.message || reason; } catch { /* ignore */ }
+    return { ok: false, text: '', status: res.status || 502, reason };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '', full = '', lastReply = '';
+  const pump = (raw) => {
+    buffer += raw;
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || '';
+    for (const evt of events) {
+      const dataLine = evt.split('\n').find(l => l.startsWith('data:'));
+      if (!dataLine) continue;
+      const data = dataLine.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      let json; try { json = JSON.parse(data); } catch { continue; }
+      // Responses API streaming: text deltas arrive as response.output_text.delta.
+      if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
+        full += json.delta;
+        const reply = extractPartialReply(full);
+        if (reply && reply.length > lastReply.length) {
+          const added = reply.slice(lastReply.length);
+          lastReply = reply;
+          try { onReplyDelta(added, reply); } catch { /* ignore */ }
+        }
+      } else if (json.type === 'response.output_text.done' && typeof json.text === 'string') {
+        full = json.text; // authoritative final text
+      } else if (json.type === 'response.completed' && json.response) {
+        const t = getOutputText(json.response);
+        if (t) full = t;
+      }
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pump(decoder.decode(value, { stream: true }));
+    }
+  } catch {
+    return { ok: false, text: full, status: 502, reason: 'stream-interrupted' };
+  }
+  return { ok: true, text: full, status: 200 };
+}
+
 function isRateLimited(request) {
   const key = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
   const now = Date.now();
@@ -820,41 +923,97 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   };
   if (isReasoning) payload.reasoning = { effort: 'low' };
 
-  let openAIResponse;
-  try {
-    openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+  // (B1) STREAMING vs one-shot. The client sets body.stream to render the reply
+  // token-by-token (perceived speed). finalize() does ALL the post-processing on the
+  // parsed { reply, patch } and returns a plain { status, payload } — shared by both
+  // paths so the streaming reply and the one-shot JSON always agree. The patch is only
+  // ever applied client-side AFTER the stream completes (finalize runs on the FULL
+  // text), so streaming never applies a half-parsed patch.
+  const wantsStream = body.stream === true && context !== 'caption';
+
+  // finalize(parsed) → { status, payload }. Returns the final response object the
+  // client consumes (both the streamed `done` event and the one-shot body).
+  async function finalize(parsed) {
+    // (Tone) scrub exclamation marks from every model-written copy surface —
+    // the brand never exclaims (spec §0 voice; deterministic belt over the prompt).
+    const reply = typeof parsed?.reply === 'string' ? toneScrub(parsed.reply) : '';
+    const patch = toneScrubPatch(parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {});
+    if (!reply) {
+      return { status: 502, payload: { error: "That response came back incomplete. Please try again." } };
+    }
+    return await finalizeBody(reply, patch);
+  }
+
+  // Fetch the model output as a single string, streaming reply deltas to `onDelta`
+  // when requested. Returns { ok, text, status, reason }.
+  async function getModelText(onDelta) {
+    if (onDelta) return streamOpenAI(apiKey, payload, onDelta);
+    let openAIResponse;
+    try {
+      openAIResponse = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      return { ok: false, text: '', status: 502, reason: 'network' };
+    }
+    const result = await openAIResponse.json().catch(() => ({}));
+    if (!openAIResponse.ok) {
+      return { ok: false, text: '', status: 502, reason: result?.error?.message || openAIResponse.statusText };
+    }
+    return { ok: true, text: getOutputText(result) || '', status: 200 };
+  }
+
+  // ── STREAMING PATH ──────────────────────────────────────────────────────────
+  if (wantsStream) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj) => { try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* closed */ } };
+        try {
+          send({ type: 'status', stage: 'thinking' });
+          const r = await getModelText((added) => send({ type: 'reply_delta', text: added }));
+          if (!r.ok) {
+            console.error('OpenAI assistant stream error:', r.reason);
+            send({ type: 'error', error: "I ran into a problem just now. Please try again.", status: r.status });
+            controller.close(); return;
+          }
+          let parsed;
+          try { parsed = JSON.parse(r.text); } catch { parsed = null; }
+          if (!parsed) { send({ type: 'error', error: "That response came back incomplete. Please try again." }); controller.close(); return; }
+          send({ type: 'status', stage: 'applying' });
+          const { status, payload: out } = await finalize(parsed);
+          if (out.error) send({ type: 'error', error: out.error, status });
+          else send({ type: 'done', ...out });
+        } catch (e) {
+          send({ type: 'error', error: "I ran into a problem just now. Please try again." });
+        } finally {
+          controller.close();
+        }
       },
-      body: JSON.stringify(payload),
     });
-  } catch {
-    return Response.json({ error: "I couldn't reach the AI service. Please try again in a moment." }, { status: 502 });
+    return new Response(stream, {
+      headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' },
+    });
   }
 
-  const result = await openAIResponse.json().catch(() => ({}));
-  if (!openAIResponse.ok) {
-    const reason = result?.error?.message || openAIResponse.statusText;
-    console.error('OpenAI assistant error:', reason);
-    // Surface the upstream reason so misconfig (bad key / model / quota) is debuggable.
-    return Response.json({ error: "I ran into a problem just now. Please try again.", detail: reason }, { status: 502 });
+  // ── ONE-SHOT PATH (fallback / non-streaming clients) ─────────────────────────
+  const r = await getModelText(null);
+  if (!r.ok) {
+    console.error('OpenAI assistant error:', r.reason);
+    return Response.json({ error: "I ran into a problem just now. Please try again.", detail: r.reason }, { status: r.status });
   }
-
   let parsed;
-  try {
-    parsed = JSON.parse(getOutputText(result));
-  } catch {
-    return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
-  }
-  // (Tone) scrub exclamation marks from every model-written copy surface —
-  // the brand never exclaims (spec §0 voice; deterministic belt over the prompt).
-  const reply = typeof parsed?.reply === 'string' ? toneScrub(parsed.reply) : '';
-  const patch = toneScrubPatch(parsed?.patch && typeof parsed.patch === 'object' ? parsed.patch : {});
-  if (!reply) {
-    return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
-  }
+  try { parsed = JSON.parse(r.text); } catch { parsed = null; }
+  if (!parsed) return Response.json({ error: "That response came back incomplete. Please try again." }, { status: 502 });
+  const fin = await finalize(parsed);
+  return Response.json(fin.payload, { status: fin.status });
+
+  // finalizeBody(reply, patch) → { status, payload }: the full patch-gate +
+  // image-gen pipeline, shared by streaming and one-shot. Hoisted (function decl)
+  // so it's usable above despite appearing after the returns.
+  async function finalizeBody(reply, patch) {
 
   // (Commit 3) Landing photo attach URL — set inside the landing block below, returned
   // separately from the patch so the client applies it as the background image.
@@ -1072,20 +1231,21 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     }
 
     if (imageB64) {
-      return Response.json({ reply, patch, imageB64, imageProvider });
+      return { status: 200, payload: { reply, patch, imageB64, imageProvider } };
     }
     // Both providers declined — never a 500. Keep any design patch the model also
     // produced, but explain the image couldn't be made and suggest a tweak.
-    return Response.json({
+    return { status: 200, payload: {
       reply: "I couldn't generate that one — it may have been outside what I can create. Try describing a simple, everyday scene (for example “children reading together in a bright classroom”), or upload a photo instead.",
       patch,
       imageB64: null,
       imageRefused: true,
-    });
+    } };
   }
 
   // (Photo-first) Return the landing photo URL (Library fallback) AND the scenePrompt
   // (photographer brief) so the client can start a Higgsfield photo job for photo-led
   // designs. Both null for text-only archetypes / editor turns.
-  return Response.json({ reply, patch, imageB64: null, imageUrl: landingPhotoUrl, scenePrompt: landingScenePrompt });
+  return { status: 200, payload: { reply, patch, imageB64: null, imageUrl: landingPhotoUrl, scenePrompt: landingScenePrompt } };
+  } // end finalizeBody
 }
