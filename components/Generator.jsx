@@ -3245,21 +3245,10 @@ export default function App() {
   };
   // Back-compat alias — older call sites (dev hook, patch path) call applyArchetype.
   const applyArchetype = (id) => materializeArchetype(id);
-  // Picker click: first click on an archetype materializes its base variant; clicking
-  // the ALREADY-ACTIVE archetype cycles to the next sanctioned palette variant (spec §3
-  // measured rotation, user-driven). Re-materializes so the new bg/ink/motif land.
-  // (WP-V) Picker clicks emit an archetypeId patch through THE pipeline so a
-  // layout change from the UI is undoable + harmonized exactly like a chat one.
-  const pickArchetype = (id) => {
-    if (id === null) { applyPatch({ archetypeId: "none" }, { source: "ui" }); return; }
-    let variant = 0;
-    if (id === archetypeId) {
-      const count = ARCHETYPES_BY_ID[id]?.variants?.length || 1;
-      if (count <= 1) return; // already active, nothing to cycle
-      variant = (archVariant + 1) % count;
-    }
-    applyPatch({ archetypeId: id, archVariant: variant }, { source: "ui" });
-  };
+  // (Declutter, ratified §3.3) The Templates-popover "Layouts" grid was removed —
+  // the chat chip "Try another layout" is the one layout surface, so the picker
+  // helper (pickArchetype) went with it. Layout changes still flow through the
+  // patch pipeline via chat / the AI.
 
   const applyDesignPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
@@ -9092,38 +9081,11 @@ export default function App() {
         <button onClick={saveDesignTemplate} style={{width:"100%",marginTop:14,padding:"10px 12px",borderRadius:999,border:`1px solid ${B.burnham}44`,background:"transparent",color:B.burnham,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,cursor:"pointer"}}>
           Save current design as a template
         </button>
-        <div style={{height:18}} />
-        <MenuHead label="Layouts" sub="12 editorial compositions. Applying one restyles the whole design; everything stays editable." />
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-          <button onClick={()=>pickArchetype(null)} aria-pressed={archetypeId===null} title="Free layout (no archetype)"
-            style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1px solid ${archetypeId===null?B.burnham:B.ash+"33"}`,background:archetypeId===null?`${B.celadon}22`:"#fff",cursor:"pointer"}}>
-            <span style={{width:"100%",aspectRatio:"1/1",borderRadius:6,border:`1px dashed ${B.ash}66`,display:"grid",placeItems:"center",color:B.ash,fontSize:18}}>∅</span>
-            <span style={{fontSize:9,fontWeight:600,fontFamily:FU.subtitle,letterSpacing:0.2,color:archetypeId===null?B.burnham:B.jet,textAlign:"center",lineHeight:1.2}}>None (free)</span>
-          </button>
-          {ARCHETYPES.map(a=>{
-            const on=archetypeId===a.id;
-            const el=a.elements||{};
-            const box=(b,fill,op=1)=>b?<rect x={(b.x*40).toFixed(1)} y={(b.y*40).toFixed(1)} width={(Math.min(b.w,1-b.x)*40).toFixed(1)} height={(Math.min(b.h,1-b.y)*40).toFixed(1)} rx="1.5" fill={fill} opacity={op}/>:null;
-            const fieldC=(BG_OPTIONS.find(o=>o.id===a.palette?.bg)?.color)||B.whiteSmoke;
-            const inkC=(BG_OPTIONS.find(o=>o.id===a.palette?.ink)?.color)||B.burnham;
-            return (
-              <button key={a.id} onClick={()=>pickArchetype(a.id)} aria-pressed={on} title={on&&(a.variants?.length||1)>1?`${a.name} — click again to cycle palette (${(archVariant%(a.variants.length))+1}/${a.variants.length})`:`${a.name} — suits ${a.suitedPostTypes.join(", ")}`}
-                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"8px 4px",borderRadius:9,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?`${B.celadon}22`:"#fff",cursor:"pointer"}}>
-                <svg viewBox="0 0 40 40" style={{width:"100%",aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
-                  <rect x="0" y="0" width="40" height="40" rx="3" fill={fieldC} stroke={`${B.ash}44`} strokeWidth="0.6"/>
-                  {a.fullBleed&&el.photo?box(el.photo,B.celadonDeep,0.85):null}
-                  {a.special==="floatedCard"&&el.card?box(el.card,B.celadonDeep,0.9):null}
-                  {a.special==="petalWindow"&&el.mask?<ellipse cx={((el.mask.x+el.mask.w/2)*40).toFixed(1)} cy={((el.mask.y+el.mask.h/2)*40).toFixed(1)} rx={(el.mask.w*20).toFixed(1)} ry={(el.mask.h*20).toFixed(1)} fill={B.celadonDeep} opacity="0.9"/>:null}
-                  {(!a.fullBleed&&!a.special&&el.photo)?box(el.photo,B.celadonDeep,0.85):null}
-                  {a.special==="motifField"?<><circle cx="6" cy="6" r="2" fill={ARCHETYPE_COLORS.sage}/><circle cx="34" cy="7" r="2" fill={ARCHETYPE_COLORS.butter}/><circle cx="35" cy="33" r="1.6" fill={ARCHETYPE_COLORS.sage}/></>:null}
-                  {el.microLabel?box(el.microLabel,inkC,0.5):null}
-                  {el.hero?box(el.hero,inkC,0.85):null}
-                  {el.support?box(el.support,inkC,0.4):null}
-                </svg>
-                <span style={{fontSize:8.5,fontWeight:600,fontFamily:FU.subtitle,letterSpacing:0.1,color:on?B.burnham:B.jet,textAlign:"center",lineHeight:1.15}}>{a.name}</span>
-              </button>
-            );
-          })}
+        {/* (Declutter, ratified §3.3) The "Layouts" archetype grid left this menu —
+            the chat chip "Try another layout" is the ONE layout surface. A quiet
+            pointer keeps the path discoverable without a second grid of nouns. */}
+        <div style={{marginTop:12,fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.5}}>
+          Looking for a different layout? Tap <strong style={{color:B.burnham,fontWeight:600}}>“Try another layout”</strong> in the chat.
         </div>
       </>
     );
