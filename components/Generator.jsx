@@ -3,7 +3,6 @@ import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
 import MidjourneyLauncher from "./MidjourneyLauncher";
 import ArtDirectorChat from "./ArtDirectorChat";
-import CaptionPanel from "./CaptionPanel";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
@@ -2807,7 +2806,8 @@ export default function App() {
   // landing page handoff (sessionStorage "wo-landing-plan").
   const [chatSeed, setChatSeed] = useState(null);
   const [auditOpen, setAuditOpen] = useState(false);   // AI audit runner/status surface
-  const [captionOpen, setCaptionOpen] = useState(false); // Caption writer panel
+  // (Declutter, ratified §6.4) The Caption writer panel is gone — the chat's
+  // "Rewrite caption" chip covers caption work (one voice, chat-first law).
   // (One Advice Ledger) The AI auditor emits findings into the SAME store as the local
   // checker — normalized to the canonical ledger shape and merged into readyCheck so
   // they render as the same dots + Export checklist rows (never a parallel list). Each
@@ -3006,7 +3006,7 @@ export default function App() {
     // (D1 item 1 — panel discipline) One overlay at a time: opening the
     // contextual inspector CLOSES every top-bar popover + advisory panel so the
     // inspector is never stacked under another surface.
-    setTopMenu(null); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
+    setTopMenu(null); setAuditOpen(false); setShowLibPicker(false);
     setAdvisorDot(null); // (Advisor dots) selecting an element closes the popover
     // Reset every selection flag first, then set the one for `kind`.
     setPhotoSel(false); setTextSelected(false); setSelOverlay(null);
@@ -3030,15 +3030,13 @@ export default function App() {
   // surfaces, never reopen, so they can't loop.
   useEffect(() => {
     if (!topMenu) return;
-    closeInspector(); setAuditOpen(false); setCaptionOpen(false); setShowLibPicker(false);
+    closeInspector(); setAuditOpen(false); setShowLibPicker(false);
     setAdvisorDot(null); // (Advisor dots) the anchored popover is an overlay too
   }, [topMenu]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!auditOpen && !captionOpen) return;
+    if (!auditOpen) return;
     closeInspector(); setTopMenu(null); setAdvisorDot(null);
-    if (auditOpen) setCaptionOpen(false);
-    if (captionOpen) setAuditOpen(false);
-  }, [auditOpen, captionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [auditOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape closes the ACTIVE overlay (top-bar popover, advisory panel, or the
   // contextual inspector) — but not while typing in one of its fields (there
@@ -3050,13 +3048,12 @@ export default function App() {
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) { t.blur(); return; }
       if (topMenu) { setTopMenu(null); return; }
       if (auditOpen) { setAuditOpen(false); return; }
-      if (captionOpen) { setCaptionOpen(false); return; }
       if (showLibPicker) { setShowLibPicker(false); return; }
       if (inspectorEl != null) { closeInspector(); return; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectorEl, topMenu, auditOpen, captionOpen, showLibPicker]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [inspectorEl, topMenu, auditOpen, showLibPicker]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── UNIFIED AI APPLY PATH ──
      applyDesignPatch(patch) is the ONE place any AI-driven change touches the
@@ -6567,7 +6564,7 @@ export default function App() {
   // (Advisor dots) Open the anchored popover for one dot (single issue or a
   // collapsed group). Closes every OTHER overlay first (D1 one-overlay-at-a-time).
   const openAdvisorPopover = useCallback((payload) => {
-    setTopMenu(null); closeInspector(); setAuditOpen(false); setCaptionOpen(false);
+    setTopMenu(null); closeInspector(); setAuditOpen(false);
     setAdvisorDot(payload);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -9127,17 +9124,14 @@ export default function App() {
         <div style={{display:"flex",gap:8,marginTop:14}}>
           {/* (One Advice Ledger) The manual AI audit — its findings merge into the SAME
               dots + checklist above (one voice). Opens a slim runner surface for status
-              + summary; there is no separate findings list. */}
+              + summary; there is no separate findings list.
+              (Declutter §6.4) The Caption writer button is gone — caption work lives
+              in chat ("Rewrite caption" chip). */}
           <button onClick={()=>{setAuditOpen(true);setTopMenu(null);runAiAudit();}} title="Review this design for on-brand polish (advisory). Findings appear as the same dots + checklist." style={{
             flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
             border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
             letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
           }}><span aria-hidden="true">✓</span> AI audit</button>
-          <button onClick={()=>{setCaptionOpen(true);setTopMenu(null);}} title="Write a brand-voice caption + hashtags for this design" style={{
-            flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
-            border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
-            letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
-          }}><span aria-hidden="true">✎</span> Caption</button>
         </div>
         {history.length>0&&(
           <div style={{marginTop:16,paddingTop:12,borderTop:`1px solid ${B.ash}22`}}>
@@ -9556,7 +9550,7 @@ export default function App() {
                   <button type="button" className="wo-adjusted-mark"
                     aria-label={`Adjusted for ${d.label} — this format no longer matches the others. Open options.`}
                     aria-expanded={adjustedPopover===d.id}
-                    onClick={(e)=>{ e.stopPropagation(); setTopMenu(null); closeInspector(); setAuditOpen(false); setCaptionOpen(false); setAdvisorDot(null); setAdjustedPopover(prev=>prev===d.id?null:d.id); }}>
+                    onClick={(e)=>{ e.stopPropagation(); setTopMenu(null); closeInspector(); setAuditOpen(false); setAdvisorDot(null); setAdjustedPopover(prev=>prev===d.id?null:d.id); }}>
                     <span aria-hidden="true">✦</span>
                   </button>
                 )}
@@ -9601,15 +9595,6 @@ export default function App() {
         setOpen={setAuditOpen}
         run={auditRun}
         onRerun={runAiAudit}
-      />
-      {/* Caption writer — brand-voice caption + hashtags from the current design.
-          Top-level mount (never inside a transformed ancestor) so its fixed panel
-          anchors to the viewport, matching the Audit + Art Director panels. */}
-      <CaptionPanel
-        open={captionOpen}
-        setOpen={setCaptionOpen}
-        designState={chatDesignState}
-        dimensionId={dimensionId}
       />
     </div>
   );
