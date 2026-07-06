@@ -40,7 +40,12 @@ function isMissingConfig(err) {
 // columns still saves standalone sessions (we retry without the group fields).
 function isMissingColumn(err) {
   const msg = String(err?.message || err || '');
-  return err?.code === '42703' || /column .* does not exist|group_id|group_title|group_order/i.test(msg);
+  // 42703 = Postgres undefined_column (SELECT); PGRST204 = PostgREST "Could not
+  // find the 'X' column … in the schema cache" (INSERT/UPSERT payload against an
+  // un-migrated DB). Both mean "retry without the newer columns", NOT unconfigured
+  // — check this BEFORE isMissingConfig (whose /schema cache/ would swallow it).
+  return err?.code === '42703' || err?.code === 'PGRST204'
+    || /column .* does not exist|could not find the '.+' column|group_id|group_title|group_order|liked|exported_at/i.test(msg);
 }
 
 // GET /api/sessions            → list latest LIST_CAP unarchived (thumbnails, no heavy state)
@@ -53,26 +58,23 @@ export async function GET(request) {
   const id = params.get('id');
   const archived = params.get('archived') === '1';
 
-  // (WP-Y1a) Include the group_* columns when present. If the migration hasn't run
-  // (42703), retry with the base column set so listing/opening standalone sessions
-  // never breaks — the cloud simply omits group data until schema.sql is applied.
+  // (WP-Y1a / Hearts) Include the group_* + liked/exported_at columns when
+  // present. If a migration hasn't run (42703), retry down the chain so listing/
+  // opening sessions never breaks — the cloud simply omits the newer fields
+  // until schema.sql is applied (hearts then stay device-local).
   const SINGLE_COLS = 'id, title, thumb, state, conversation, created_at, updated_at, archived';
   const LIST_COLS = 'id, title, thumb, created_at, updated_at, archived';
   const GROUP_COLS = ', group_id, group_title, group_order';
+  const LIKE_COLS = ', liked, exported_at';
 
   try {
     if (id) {
-      let { data, error } = await supabase
-        .from('design_sessions')
-        .select(SINGLE_COLS + GROUP_COLS)
-        .eq('id', id)
-        .eq('brand_id', BRAND_ID)
-        .maybeSingle();
-      if (error && isMissingColumn(error)) {
-        ({ data, error } = await supabase
-          .from('design_sessions').select(SINGLE_COLS)
-          .eq('id', id).eq('brand_id', BRAND_ID).maybeSingle());
-      }
+      const single = (cols) => supabase
+        .from('design_sessions').select(cols)
+        .eq('id', id).eq('brand_id', BRAND_ID).maybeSingle();
+      let { data, error } = await single(SINGLE_COLS + GROUP_COLS + LIKE_COLS);
+      if (error && isMissingColumn(error)) ({ data, error } = await single(SINGLE_COLS + GROUP_COLS));
+      if (error && isMissingColumn(error)) ({ data, error } = await single(SINGLE_COLS));
       if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
       return Response.json({ session: data || null, configured: true });
     }
@@ -84,7 +86,8 @@ export async function GET(request) {
       .eq('archived', archived)
       .order('updated_at', { ascending: false })
       .limit(archived ? 50 : LIST_CAP);
-    let { data, error } = await listQuery(LIST_COLS + GROUP_COLS);
+    let { data, error } = await listQuery(LIST_COLS + GROUP_COLS + LIKE_COLS);
+    if (error && isMissingColumn(error)) ({ data, error } = await listQuery(LIST_COLS + GROUP_COLS));
     if (error && isMissingColumn(error)) ({ data, error } = await listQuery(LIST_COLS));
     if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ sessions: data || [], configured: true });
@@ -160,22 +163,29 @@ export async function POST(request) {
   else if (body?.groupId === null) row.group_id = null;
   if (typeof body?.groupTitle === 'string') row.group_title = body.groupTitle.slice(0, TITLE_MAX);
   if (Number.isInteger(body?.groupOrder)) row.group_order = body.groupOrder;
+  // (Hearts, item 10) liked + exported_at — optional; dropped on an un-migrated
+  // DB by the retry below, so sending them is always safe.
+  if (typeof body?.liked === 'boolean') row.liked = body.liked;
+  if (Number.isFinite(body?.exportedAt)) row.exported_at = new Date(body.exportedAt).toISOString();
+  else if (body?.exportedAt === null) row.exported_at = null;
 
   try {
-    let { data, error } = await supabase
+    const upsert = (r) => supabase
       .from('design_sessions')
-      .upsert(row)
+      .upsert(r)
       .select('id, title, thumb, created_at, updated_at, archived')
       .single();
-    // If the group_* columns aren't in the DB yet, retry without them so the
-    // standalone session still saves (cloud group persistence needs schema.sql).
+    let { data, error } = await upsert(row);
+    // If the liked/exported columns aren't in the DB yet, retry without them;
+    // if the group_* columns are missing too, retry with the base set — the
+    // session itself always saves (cloud heart/group persistence needs schema.sql).
     if (error && isMissingColumn(error)) {
-      const { group_id, group_title, group_order, ...base } = row; // eslint-disable-line no-unused-vars
-      ({ data, error } = await supabase
-        .from('design_sessions')
-        .upsert(base)
-        .select('id, title, thumb, created_at, updated_at, archived')
-        .single());
+      const { liked, exported_at, ...noLikes } = row; // eslint-disable-line no-unused-vars
+      ({ data, error } = await upsert(noLikes));
+      if (error && isMissingColumn(error)) {
+        const { group_id, group_title, group_order, ...base } = noLikes; // eslint-disable-line no-unused-vars
+        ({ data, error } = await upsert(base));
+      }
     }
     if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
 

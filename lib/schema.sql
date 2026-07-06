@@ -125,6 +125,14 @@ alter table design_sessions add column if not exists group_title  text;
 alter table design_sessions add column if not exists group_order  int;
 create index if not exists design_sessions_group_idx on design_sessions (brand_id, group_id, group_order);
 
+-- (Hearts + Feed gallery, ratified 2026-07-06) liked = the owner hearted this
+-- post (its design GENES feed the preference-weighted rotation + house-style
+-- exemplars); exported_at = the post was downloaded (the gallery marks it).
+-- Idempotent; absent columns degrade gracefully (hearts stay device-local
+-- until this runs — the API retries without them).
+alter table design_sessions add column if not exists liked        boolean default false;
+alter table design_sessions add column if not exists exported_at  timestamptz;
+
 -- Official decorative assets (Declutter item 7, 2026-07-06): stored as OBJECTS
 -- in the existing PUBLIC `logos` bucket under the `brand-assets/` prefix (see
 -- app/api/brand-assets/route.js) — no table needed. Metadata rides in the
