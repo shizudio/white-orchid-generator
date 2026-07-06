@@ -8380,10 +8380,18 @@ export default function App() {
             surrounding chrome is quieted (top bar re-rank, inspector as column)
             so the design dominates the squint test. No new decoration. */}
         <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"36px 28px 30px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
+          {/* (A3) FIXED-HEIGHT STAGE — the stage reserves the TALLEST format's height
+              (the --generator-preview-height budget) at all times and centers the
+              canvas within it. Switching format changes the canvas size INSIDE the
+              stage, but the stage's own height never moves, so the controls + format
+              strip below keep a constant Y position (no layout shift). The canvas
+              still hugs its own artwork; the stage (page background, not the card)
+              absorbs the difference. */}
           <div ref={previewRef} className="generator-preview-frame"
-            style={{width:"100%",maxWidth:820,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
+            style={{width:"100%",maxWidth:820,height:"var(--generator-preview-height, 78vh)",display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef} style={{
-              position:"relative", width:"100%", maxWidth:`calc(var(--generator-preview-height, 78vh) * ${W / H})`,
+              position:"relative", maxWidth:"100%", maxHeight:"100%",
+              width:`calc(var(--generator-preview-height, 78vh) * ${W / H})`,
               aspectRatio:`${W} / ${H}`, flex:"0 1 auto", overflow:"visible",
             }}>
               <canvas ref={canvasRef} width={W} height={H}
