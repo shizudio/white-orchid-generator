@@ -2582,6 +2582,10 @@ export default function App() {
   const [dimensionId, setDimensionId] = useState("ig_square");
   const dim = DIMENSIONS.find(d => d.id === dimensionId) || DIMENSIONS[0];
   const W = dim.w, H = dim.h;
+  // Live mirror of dimensionId for async guards/timers that must read the CURRENT
+  // format after a setState burst has committed (state closures would be stale).
+  const dimensionIdRef = useRef(dimensionId);
+  dimensionIdRef.current = dimensionId;
 
   // Photo reframe: normalized focal point + zoom (cover-fill, clamped no-gap)
   const [imgT, setImgT] = useState({ zoom:1, cx:0.5, cy:0.5, rotation:0 });
@@ -3846,7 +3850,7 @@ export default function App() {
     const need = overlays.filter(o => !overlayImgs.current[o.id]);
     if (!need.length) return;
     Promise.all(need.map(o => imgFrom(o.dataUrl || o.src).then(img => { if (img) overlayImgs.current[o.id] = img; })))
-      .then(() => { if (!cancelled) drawRef.current?.(); });
+      .then(() => { if (!cancelled) drawRef.current?.("drawRef-async"); });
     return () => { cancelled = true; };
   }, [overlays]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3868,7 +3872,7 @@ export default function App() {
     Promise.all(need.map(id => {
       const a = DEFAULT_OVERLAYS.find(o=>o.id===id); if (!a) return Promise.resolve();
       return imgFrom(a.src).then(img => { if (img) archAssetImgs.current[id] = img; });
-    })).then(() => { if (!cancelled) drawRef.current?.(); });
+    })).then(() => { if (!cancelled) drawRef.current?.("drawRef-async"); });
     return () => { cancelled = true; };
   }, [archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3891,7 +3895,7 @@ export default function App() {
     let cancelled = false;
     Promise.all(LOGO_VARIANTS.filter(v => !logoVariantImgs.current[v.id]).map(v =>
       imgFrom(v.src).then(img => { if (img) logoVariantImgs.current[v.id] = img; })
-    )).then(() => { if (!cancelled && archetypeId) drawRef.current?.(); });
+    )).then(() => { if (!cancelled && archetypeId) drawRef.current?.("drawRef-async"); });
     return () => { cancelled = true; };
   }, [selectedLogoId, selectedLogoVariant, archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const _logoInkLum = (color) => color === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64);
@@ -4224,6 +4228,17 @@ export default function App() {
     if(ctx.canvas && (ctx.canvas.width!==w || ctx.canvas.height!==h))
       ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
     ctx.clearRect(0,0,w,h);
+    // (FMT-FIT instrumentation/guard) Tag the LIVE canvas with the source + dims of
+    // the draw that most recently painted it. The per-frame invariant checker
+    // (__woFmtFitCheck) reads dataset.lastDrawSource to name the culprit when the
+    // buffer/state/CSS-box/drawn-bbox disagree. Only the ON-SCREEN canvas is tagged
+    // (offscreen renderers pass their own createElement canvas → no dataset here).
+    if(live && ctx.canvas === canvasRef.current){
+      try {
+        ctx.canvas.dataset.lastDrawSource = opts.source || "live-draw";
+        ctx.canvas.dataset.lastDrawDims = w + "x" + h;
+      } catch { /* dataset unavailable (offscreen/SSR) */ }
+    }
     // Per-format spec composition defaults for this dimension + post type.
     const fmt=formatLayoutFor(dimId,postType);
     // ── PER-DIMENSION logo placement (spec §1 + §4 focal/collision guard) ──
@@ -5803,9 +5818,9 @@ export default function App() {
   },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
 
   // Live preview draws the current dimension into the on-screen canvas.
-  const draw = useCallback(() => {
+  const draw = useCallback((source) => {
     const c=canvasRef.current; if(!c) return;
-    renderScene(c.getContext("2d"),W,H,{dimensionId,live:true});
+    renderScene(c.getContext("2d"),W,H,{dimensionId,live:true,source:source||"live-draw"});
   },[renderScene,W,H,dimensionId]);
   // Keep the latest draw reachable from async image-load callbacks that resolve
   // after a format switch, so they never repaint a stale format (see drawRef note).
@@ -5834,7 +5849,7 @@ export default function App() {
   // synchronously on any W/H change so a switch is flash-free. Keyed on [W,H]
   // only (they change solely on a format switch), so this never fires on a
   // normal edit/drag and adds no interaction jank.
-  useLayoutEffect(()=>{ if(fontsLoaded && canvasRef.current) draw(); }, [W, H]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(()=>{ if(fontsLoaded && canvasRef.current) draw("layout-effect"); }, [W, H]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── LOCAL DESIGN AUDIT (Commit 1) ──────────────────────────────────────────
      Free/instant deterministic checks over the CURRENT dimension. Re-renders the
@@ -5862,7 +5877,7 @@ export default function App() {
     const cache = localAuditCacheRef.current;
     if (cache.sig === sig && cache.findings) return cache.findings;
     const c = canvasRef.current;
-    if (c) { try { renderScene(c.getContext("2d"), W, H, { dimensionId, live: true }); } catch { /* keep last snapshot */ } }
+    if (c) { try { renderScene(c.getContext("2d"), W, H, { dimensionId, live: true, source: "audit-live" }); } catch { /* keep last snapshot */ } }
     const findings = computeLocalAudit(auditRef.current);
     // (WP-U) Only CACHE a result computed from a real render: before the canvas
     // mounts (or when the render kept a stale/null snapshot) an EMPTY findings
@@ -6226,6 +6241,180 @@ export default function App() {
     return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; } catch {} };
   }, [renderScene]);
 
+  /* ── FORMAT-FIT INVARIANT (the mis-fitted-card bug class) ─────────────────────
+     At rest on the LIVE canvas these must agree:
+       (S) state dims    = current dimensionId's W×H
+       (B) buffer dims    = canvasRef.width × height (the <canvas> backing store)
+       (C) CSS box aspect = shell clientWidth / clientHeight
+       (D) painted fill   = renderScene fills the WHOLE frame, so no large edge strip
+                            is left at the canvas's default ivory (B.whiteSmoke)
+     The client bug is any of these diverging: a SQUARE layout painted into a WIDE
+     buffer strands ivory dead space to the right + clips at the bottom (B/C already
+     switched while the draw used old dims); or the draw simply didn't cover the frame.
+     Note: the "ink bbox" was tried first but false-positives on legitimately sparse
+     editorial designs (small hero on a full green field). The RELIABLE signal is an
+     UNPAINTED background dead-strip — a full edge line still at ivory when the design's
+     own background is not ivory. */
+  const IVORY = [245, 240, 232];   // B.whiteSmoke — the at-rest background fill
+
+  // One structured divergence check over the LIVE canvas. Returns null when all
+  // systems agree, else a record naming which diverged + the last draw source.
+  const checkFormatFit = useCallback(() => {
+    const c = canvasRef.current; if (!c) return null;
+    const shell = canvasShellRef.current;
+    const stateW = W, stateH = H;
+    const bufW = c.width, bufH = c.height;
+    const rec = { source: c.dataset.lastDrawSource || "?", drawDims: c.dataset.lastDrawDims || "?",
+      state: stateW + "x" + stateH, buffer: bufW + "x" + bufH, diverged: [] };
+    // (B vs S) backing store must match current state dims.
+    if (bufW !== stateW || bufH !== stateH) rec.diverged.push("buffer≠state");
+    // (C vs S) shell CSS box aspect must match the state aspect (±2%).
+    if (shell && shell.clientWidth > 0 && shell.clientHeight > 0) {
+      const cssAspect = shell.clientWidth / shell.clientHeight, stateAspect = stateW / stateH;
+      rec.css = shell.clientWidth + "x" + shell.clientHeight;
+      if (Math.abs(cssAspect - stateAspect) / stateAspect > 0.02) rec.diverged.push("css-aspect≠state");
+    }
+    // (D vs B) The TRUE mis-fit fingerprint is an UNPAINTED background dead-strip.
+    // renderScene always fills the whole (w,h) frame — with the design's bgColor, a
+    // photo, or a scrim — so a correctly-fit design has NO large edge region left at
+    // the canvas's default ivory (B.whiteSmoke). The client bug (square layout in a
+    // wide/tall frame) leaves the frame's own fill covering only part of the buffer,
+    // exposing a contiguous ivory strip along the RIGHT or BOTTOM edge. Sparse
+    // editorial ink on a green field is NOT this — the green fill still covers the
+    // whole frame, so no ivory strip exists. We therefore measure the ivory coverage
+    // of the four edge lines; a large ivory fraction on a whole edge = a dead strip.
+    // (Skipped when the design's OWN background is ivory-like — then ivory is legit.)
+    try {
+      const ictx = c.getContext("2d");
+      const bgIvory = (() => {
+        // Detect an ivory-BACKGROUND design (where a right/bottom ivory strip is legit)
+        // by sampling the TOP-LEFT corner region. renderScene fills the frame from the
+        // origin, and in the mis-fit bug the design's layout occupies the top-left while
+        // ivory is stranded to the right/bottom — so the top-left is painted with the
+        // DESIGN's true bg in BOTH the correct and mis-fit cases. It reads ivory only
+        // when the design's own background actually is ivory (then skip the check).
+        const pts = [[bufW*0.04,bufH*0.04],[bufW*0.10,bufH*0.06],[bufW*0.06,bufH*0.10]];
+        let ivoryPts = 0;
+        for (const [x,y] of pts) { try { const d=ictx.getImageData(Math.floor(x),Math.floor(y),1,1).data; if(Math.abs(d[0]-IVORY[0])+Math.abs(d[1]-IVORY[1])+Math.abs(d[2]-IVORY[2])<24) ivoryPts++; } catch {} }
+        return ivoryPts >= 2;   // top-left corner already ivory ⇒ ivory-bg design
+      })();
+      if (!bgIvory) {
+        const edgeIvory = (horiz, at) => {   // fraction of a scan line that is ivory
+          let ivory = 0, n = 0;
+          const len = horiz ? bufW : bufH;
+          const step = Math.max(1, Math.floor(len / 80));
+          for (let i = 0; i < len; i += step) {
+            const x = horiz ? i : at, y = horiz ? at : i;
+            try { const d = ictx.getImageData(x, y, 1, 1).data; n++; if (Math.abs(d[0]-IVORY[0])+Math.abs(d[1]-IVORY[1])+Math.abs(d[2]-IVORY[2]) < 24) ivory++; } catch {}
+          }
+          return n ? ivory / n : 0;
+        };
+        const right = edgeIvory(false, bufW - 2), bottom = edgeIvory(true, bufH - 2);
+        // A dead-strip edge is ≥60% ivory across a full edge line. A correctly-fit
+        // design paints its fill to the edges, so this is ~0 for green/photo fields.
+        if (right >= 0.6) rec.diverged.push("dead-strip-right(" + right.toFixed(2) + ")");
+        if (bottom >= 0.6) rec.diverged.push("dead-strip-bottom(" + bottom.toFixed(2) + ")");
+      }
+    } catch { /* getImageData blocked (tainted) — skip bbox axis */ }
+    return rec.diverged.length ? rec : null;
+  }, [W, H]);
+
+  // Permanent SELF-HEALING guard + dev checker. On divergence: log (dev warn) and
+  // schedule ONE corrective draw() via drawRef (guarded by a per-cycle flag so a
+  // persistently-diverging state can't spin an infinite redraw loop). This turns a
+  // silent broken card into a loud, self-correcting event.
+  const fmtFitHealingRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isDev = process.env.NODE_ENV !== "production";
+    let raf = 0, timer = 0;
+    const run = () => {
+      const rec = checkFormatFit();
+      if (rec) {
+        if (isDev) { /* eslint-disable-next-line no-console */ console.warn("[woFormatFit] divergence", rec); }
+        window.__woFormatFitLast = rec;
+        // Bounded divergence ring (dev verification): lets a heavy real-usage session
+        // surface transient mis-fits even when the tab is backgrounded/throttled.
+        if (isDev) { (window.__woFormatFitLog = window.__woFormatFitLog || []).push({ t: Date.now(), ...rec }); if (window.__woFormatFitLog.length > 50) window.__woFormatFitLog.shift(); }
+        // Self-heal: a stale-dims buffer OR an unpainted ivory dead-strip is fixed by
+        // one fresh live redraw (drawRef.current always uses the CURRENT format). A
+        // css-aspect divergence is a layout/CSS issue a redraw can't fix, so we don't
+        // thrash the canvas for that one. Schedule via a frame, but fall back to a timer
+        // so a backgrounded/throttled tab (where rAF is paused) still self-corrects.
+        const drawable = rec.diverged.some(d => d.startsWith("buffer") || d.startsWith("dead-strip"));
+        if (drawable && !fmtFitHealingRef.current) {
+          fmtFitHealingRef.current = true;
+          let ran = false;
+          const heal = () => { if (ran) return; ran = true; drawRef.current?.("fmt-fit-heal"); fmtFitHealingRef.current = false; };
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
+          setTimeout(heal, 32);
+        }
+      } else { window.__woFormatFitLast = null; }
+    };
+    // Dev-only steady interval so any regression is caught during real usage flows.
+    if (isDev) timer = setInterval(run, 250);
+    window.__woFmtFitCheck = () => checkFormatFit();
+    return () => { if (raf) cancelAnimationFrame(raf); if (timer) clearInterval(timer); try { delete window.__woFmtFitCheck; } catch {} };
+  }, [checkFormatFit]);
+
+  /* ── FORMAT-FIT REGRESSION GUARD (__woFormatFitGuard) ─────────────────────────
+     Programmatic end-to-end: renders a solid-brand design, switches through ALL
+     formats, then swaps between two "sessions" of DIFFERENT formats, asserting after
+     each settle that buffer dims === state dims AND no ivory dead-strip is stranded on
+     the right/bottom edge (the mis-fit fingerprint). Returns {pass, failures:[...]}.
+     Mirrors the manual repro but automated for CI-style verification. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // Settle after a state change: give React its commit + a couple of paints. rAF is
+    // THROTTLED/PAUSED in a backgrounded tab (headless verification), so race a short
+    // rAF pair against a plain timer — whichever fires first resolves. A trailing
+    // timeout guarantees the redraw + interval checker had a chance to run.
+    const raf2 = () => new Promise(res => {
+      let done = false; const fin = () => { if (!done) { done = true; res(); } };
+      setTimeout(fin, 200);
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(fin));
+    });
+    const settle = async () => { await raf2(); await new Promise(r => setTimeout(r, 120)); };
+    window.__woFormatFitGuard = async () => {
+      const failures = [];
+      const c = canvasRef.current;
+      if (!c) return { pass: false, failures: ["no live canvas"] };
+      const prevDim = dimensionId;
+      const assertFit = (label) => {
+        const stateW = DIMENSIONS.find(d => d.id === dimensionIdRef.current)?.w;
+        const stateH = DIMENSIONS.find(d => d.id === dimensionIdRef.current)?.h;
+        if (c.width !== stateW || c.height !== stateH)
+          failures.push(`${label}: buffer ${c.width}x${c.height} ≠ state ${stateW}x${stateH}`);
+        // The seeded design is a solid-brand text_post — its bgColor fills the WHOLE
+        // frame in every format. A mis-fit would strand the canvas's default ivory on
+        // the right/bottom edge; assert those edges are painted (not ivory dead-strip).
+        // Dead-strip check reads only BUFFER pixels (not the possibly-stale W/H
+        // closure inside checkFormatFit), so it's valid mid-sweep.
+        const rec = checkFormatFit();
+        if (rec && rec.diverged.some(d => d.startsWith("dead-strip")))
+          failures.push(`${label}: ${rec.diverged.filter(d=>d.startsWith("dead-strip")).join(",")} (buf ${c.width}x${c.height}, src ${c.dataset.lastDrawSource})`);
+      };
+      try {
+        // 1) Seed a solid-brand design (fills the whole frame in every format).
+        setArchetypeId(null); setPostType("text_post");
+        setHeadline("Format Fit Guard"); setSubtext("automated invariant check");
+        await settle();
+        // 2) Walk every format.
+        for (const d of DIMENSIONS) { setDimensionId(d.id); await settle(); assertFit("format:" + d.id); }
+        // 3) Two-session swap across different formats via the real dimension setter
+        //    (session restore commits dimensionId + layouts in one batch — same path).
+        setDimensionId("ig_square"); await settle(); assertFit("sessionA:ig_square");
+        setDimensionId("story"); await settle(); assertFit("sessionB:story");
+        setDimensionId("ig_square"); await settle(); assertFit("sessionA-return:ig_square");
+      } finally { setDimensionId(prevDim); await settle(); }
+      const report = { pass: failures.length === 0, checks: DIMENSIONS.length + 3, failures };
+      /* eslint-disable-next-line no-console */ console.log("[woFormatFitGuard]", JSON.stringify(report));
+      return report;
+    };
+    return () => { try { delete window.__woFormatFitGuard; } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkFormatFit]);
+
   /* ── CLIENT-REPRO HARNESS (Commit 4 verification, dev-only) ──────────────────
      window.__woReproStep(step, arg?) drives ONE step of the client's exact repro
      through the REAL state handlers (the same ones the UI buttons call), so the
@@ -6429,9 +6618,9 @@ export default function App() {
   useEffect(() => {
     if (!videoObj) return;
     let raf = 0;
-    const loop = () => { draw(); raf = requestAnimationFrame(loop); };
+    const loop = () => { draw("video-loop"); raf = requestAnimationFrame(loop); };
     if (videoPlaying) raf = requestAnimationFrame(loop);
-    else draw();   // single frame when paused
+    else draw("video-loop");   // single frame when paused
     return () => { if (raf) cancelAnimationFrame(raf); };
   }, [videoObj, videoPlaying, draw]);
 
@@ -6469,7 +6658,7 @@ export default function App() {
     const slugify = str => str.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30);
     const slug = headline ? slugify(headline) : activeTemplateName ? slugify(activeTemplateName) : postType;
     // Editor chrome lives in a separate DOM layer, so the export canvas is clean.
-    draw();
+    draw("download");
     const isJpg = exportFormat === "jpeg";
     let src = c;
     if (isJpg) {
@@ -6826,7 +7015,15 @@ export default function App() {
   });
   const templateThumb = () => {
     const c = canvasRef.current; if (!c) return null;
-    draw();
+    // (FMT-FIT ROOT FIX) Route through drawRef, NOT the closed-over `draw`. This runs
+    // from the DEBOUNCED session autosave (doSaveSession), whose useCallback deps omit
+    // draw/W/H/dimensionId — so its `draw` closure is STALE after a format switch. A
+    // stale draw here repaints the live canvas with the PREVIOUS format's (w,h): a
+    // 1080² square layout stranded in a 1500×500 banner buffer, leaving ivory to the
+    // right + clipping the bottom (the client's mis-fit signatures 1–3), 2.5s after the
+    // switch, and it persists until the next state-driven redraw. drawRef.current is
+    // always the CURRENT-format draw (same guarantee the async image loaders rely on).
+    (drawRef.current || draw)("template-thumb");
     const t = document.createElement("canvas");
     t.width = 160; t.height = 160;
     const x = t.getContext("2d");
