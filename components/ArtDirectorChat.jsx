@@ -146,7 +146,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
   // paint; reshuffled to a fresh mix after mount (see effect below).
@@ -583,6 +583,14 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       setLoading(false);
     }
   }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth]);
+
+  // (findings actions-model law) Expose an imperative send so a finding's "Shorten it
+  // for me" ai-fix action can route a targeted prompt through the SAME assistant +
+  // patch + honesty pipeline (undoable), exactly as if the user typed it.
+  useEffect(() => {
+    if (sendRef) sendRef.current = (text, meta) => send(text, meta);
+    return () => { if (sendRef) sendRef.current = null; };
+  }, [sendRef, send]);
 
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }

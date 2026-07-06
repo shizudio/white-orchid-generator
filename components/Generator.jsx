@@ -5532,7 +5532,7 @@ export default function App() {
         const _readyBoxes=textRoles.map(_norm).filter(Boolean);
         const _readyLogo=_norm(logoBx);
         auditRef.current={
-          dimensionId:dimId,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
+          dimensionId:dimId,postType,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
@@ -5894,6 +5894,7 @@ export default function App() {
       const _readyLogoL=_normL(auditLogo.box);
       auditRef.current={
         dimensionId:dimId,
+        postType,                       // for resolveDroppedContent (name the actual dropped words)
         hasMedia:!!mediaObj,
         backdropMode:backdropMode||"auto",
         textColorId,
@@ -6225,6 +6226,77 @@ export default function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [acknowledgeIssue, dimensionId]);
+
+  /* ── FINDING ACTIONS (findings actions-model law) ────────────────────────────
+     Every finding is turned into concrete action buttons — each { label, kind, run }.
+     RULE: any remedy a finding's message implies MUST exist here as a button; nothing
+     dead. kinds: patch (deterministic, undoable) · ai-fix (routes a targeted prompt
+     through the assistant/patch pipeline, undoable) · deep-link (select the element +
+     focus its inspector input) · ack ("keep it"/"leave it off", same ack semantics).
+     Built in Generator because it needs the live handlers (applyReadyFix, the chat send
+     ref, selectElement/focusTextField, acknowledge). Rendered generically by the popover
+     + checklist so both surfaces stay in lockstep. */
+  const chatSendRef = useRef(null);
+  const FIELD_TO_FOCUS_ROLE = { headline: "hero", subtext: "support", attribution: "support", microLabel: "eyebrow", dateText: "date" };
+  const FIELD_HUMAN = { headline: "headline", subtext: "caption", attribution: "supporting line", microLabel: "little label", dateText: "date" };
+  const findingActions = useCallback((issue, onAck) => {
+    if (!issue) return [];
+    const acts = [];
+    const ackAction = (label) => ({ label, kind: "ack", run: () => (onAck ? onAck(issue) : acknowledgeIssue(issue, dimensionId)) });
+
+    // COPY-DROPPED (loss-class): name the real words + offer every remedy as an action.
+    if (issue.id === "copy-dropped" || issue.id === "degradation-drops") {
+      const dropped = Array.isArray(issue.dropped) ? issue.dropped : [];
+      const primary = dropped[0] || null;
+      // [Shorten it for me] — ai-fix: ask the assistant to trim the dropped role to fit.
+      if (primary) {
+        const human = FIELD_HUMAN[primary.field] || "text";
+        acts.push({
+          label: "Shorten it for me", kind: "ai-fix",
+          run: () => {
+            const snippet = String(primary.text || "").slice(0, 120);
+            const prompt = `Shorten the ${human} so it fits this format without being cut off. Keep the meaning; make it about half as long. Current ${human}: "${snippet}"`;
+            if (chatSendRef.current) chatSendRef.current(prompt, { chip: "shorten-to-fit" });
+          },
+        });
+      }
+      // [Switch to {named format}] — deterministic: the smallest format that fits.
+      if (issue.switchTo && issue.switchToLabel) {
+        acts.push({
+          label: `Switch to ${issue.switchToLabel}`, kind: "patch",
+          run: () => { if (issue.switchTo !== dimensionId) setDimensionId(issue.switchTo); },
+        });
+      }
+      // [Edit it myself] — deep-link: select the element + focus its inspector input.
+      if (primary && FIELD_TO_FOCUS_ROLE[primary.field]) {
+        acts.push({
+          label: "Edit it myself", kind: "deep-link",
+          run: () => { setAdvisorDot(null); focusTextField(FIELD_TO_FOCUS_ROLE[primary.field]); },
+        });
+      }
+      // [Leave it off] — the ack, honest loss-class wording.
+      acts.push(ackAction("Leave it off"));
+      return acts;
+    }
+
+    // GENERAL findings. A concrete fix → [Fix]; otherwise a deep-link to edit the copy
+    // when the concern is an editable text role (no more dead "edit the copy" label).
+    if (issue.fix) {
+      acts.push({ label: "Fix", kind: "patch", run: () => applyReadyFix(issue.fix) });
+    } else {
+      // Type-size / copy-length / composition on text → let the user edit the copy.
+      const el = issue.anchor?.element;
+      const editable = el === "headline" || el === "caption" || el === "text" ||
+        issue.category === "type-size" || issue.category === "copy-limit";
+      if (editable) {
+        acts.push({ label: "Edit it myself", kind: "deep-link", run: () => { setAdvisorDot(null); focusTextField("support"); } });
+      }
+    }
+    // The ack — "Leave it off" for loss-class findings, "Keep it this way" otherwise.
+    acts.push(ackAction(issue.lossClass ? "Leave it off" : "Keep it this way"));
+    return acts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acknowledgeIssue, applyReadyFix, dimensionId]);
 
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
@@ -8579,7 +8651,7 @@ export default function App() {
           check={ledgerCheck}
           expanded={readyExpanded}
           setExpanded={setReadyExpanded}
-          onFix={applyReadyFix}
+          actionsOf={(iss)=>findingActions(iss, (i)=>acknowledgeIssue(i, iss.anchor?.dimensionId || dimensionId))}
           onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
           currentDim={dimensionId}
           acks={acks}
@@ -8749,6 +8821,7 @@ export default function App() {
               It can never overlap the canvas in any state. ── */}
         <aside className="wo-chat-col">
           <ArtDirectorChat
+            sendRef={chatSendRef}
             designState={chatDesignState}
             onApplyPatch={(patch) => applyPatch(patch, { harmonize: true })}
             onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
@@ -8860,8 +8933,12 @@ export default function App() {
                 <AdvisorPopover
                   payload={advisorDot}
                   onClose={closeAdvisorPopover}
-                  onFix={(fix)=>{ if(fix) applyReadyFix(fix); closeAdvisorPopover(); }}
-                  onKeep={(iss)=>acknowledgePopoverIssue(iss)}
+                  actionsOf={(iss)=>findingActions(iss, acknowledgePopoverIssue).map(a => ({
+                    ...a,
+                    // Ack keeps the popover managing remaining issues (acknowledgePopoverIssue);
+                    // every other action resolves the issue then closes the popover.
+                    run: a.kind === "ack" ? a.run : () => { a.run(); closeAdvisorPopover(); },
+                  }))}
                 />
               )}
             </div>
@@ -9097,7 +9174,22 @@ function AdvisorDot({ leftPct, topPct, label, onOpen, active, corner }) {
 
 // The anchored popover for the open dot. One plain sentence per issue + two
 // actions (Fix / Keep it this way). A backdrop layer closes it on outside click.
-function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
+// Style a finding action button by kind (findings actions-model law). The primary
+// remedy (patch/ai-fix) leads in filled burnham; deep-link + ack are quiet outlines.
+function actionBtnStyle(kind) {
+  const primary = kind === "patch" || kind === "ai-fix";
+  return {
+    padding: primary ? "6px 16px" : "6px 14px",
+    background: primary ? B.burnham : "transparent",
+    color: primary ? "#fff" : B.burnham,
+    border: primary ? "none" : `1px solid ${B.burnham}55`,
+    borderRadius: 40, fontSize: 10, fontWeight: 600,
+    letterSpacing: primary ? 1 : 0.6, textTransform: "uppercase",
+    fontFamily: FU.subtitle, cursor: "pointer",
+  };
+}
+
+function AdvisorPopover({ payload, onClose, actionsOf }) {
   const issues = payload?.issues || [];
   if (!issues.length) return null;
   const { leftPct = 50, topPct = 50, collapsed } = payload;
@@ -9132,16 +9224,9 @@ function AdvisorPopover({ payload, onClose, onFix, onKeep }) {
               <span style={{fontSize:12.5,color:B.jet,fontFamily:F.body,lineHeight:1.42}}>{iss.message}</span>
               {prov && <span style={{fontSize:9.5,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>{prov}</span>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                {iss.fix ? (
-                  <button type="button" onClick={()=>onFix(iss.fix)}
-                    style={{padding:"6px 16px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
-                      fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Fix</button>
-                ) : (
-                  <span style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.4,textTransform:"uppercase"}}>Edit the copy to resolve</span>
-                )}
-                <button type="button" onClick={()=>onKeep(iss)}
-                  style={{padding:"6px 14px",background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}55`,borderRadius:40,
-                    fontSize:10,fontWeight:600,letterSpacing:0.6,textTransform:"uppercase",fontFamily:FU.subtitle,cursor:"pointer"}}>Keep it this way</button>
+                {(actionsOf ? actionsOf(iss) : []).map((a,ai)=>(
+                  <button key={ai} type="button" onClick={a.run} style={actionBtnStyle(a.kind)}>{a.label}</button>
+                ))}
               </div>
             </div>
           );})}
@@ -9164,7 +9249,7 @@ function issueOkayed(acks, dimensionId, issue) {
   return false;
 }
 
-function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, currentDim, acks, ackedOf }) {
+function ReadyToPost({ check, expanded, setExpanded, actionsOf, onSwitchFormat, currentDim, acks, ackedOf }) {
   const formats = check?.formats || [];
   const loading = !check;
   const need = check?.needCount || 0;
@@ -9228,15 +9313,13 @@ function ReadyToPost({ check, expanded, setExpanded, onFix, onSwitchFormat, curr
                     {open.map((iss,i)=>(
                       <div key={iss.id||i} style={{display:"flex",flexDirection:"column",gap:5}}>
                         <span style={{fontSize:11.5,color:B.jet,fontFamily:F.body,lineHeight:1.4}}>{iss.message}</span>
-                        {iss.fix ? (
-                          <button type="button" onClick={()=>onFix(iss.fix)}
-                            style={{alignSelf:"flex-start",padding:"5px 12px",background:B.burnham,color:"#fff",border:"none",borderRadius:40,
-                              fontSize:10,fontWeight:600,letterSpacing:1,textTransform:"uppercase",fontFamily:F.subtitle,cursor:"pointer"}}>
-                            Fix
-                          </button>
-                        ) : (
-                          <span style={{alignSelf:"flex-start",fontSize:10,color:B.ash,fontFamily:F.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>Edit the copy to resolve</span>
-                        )}
+                        {/* (findings actions-model law) every remedy is a real button —
+                            no dead grey labels; ai-fix/patch lead, deep-link + ack follow. */}
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignSelf:"flex-start"}}>
+                          {(actionsOf ? actionsOf(iss) : []).map((a,ai)=>(
+                            <button key={ai} type="button" onClick={a.run} style={actionBtnStyle(a.kind)}>{a.label}</button>
+                          ))}
+                        </div>
                       </div>
                     ))}
                     {okayed.length>0 && (
