@@ -2659,6 +2659,16 @@ export default function App() {
   const [archetypeId, setArchetypeId] = useState(null);
   const [archVariant, setArchVariant] = useState(0); // sanctioned palette-variant index
   const [bgColor, setBgColor] = useState("burnham");
+  // (B1/B3 render-truth, 2026-07-06) EDITORIAL FIELD OVERRIDE. On a materialized
+  // archetype the visible solid FIELD is driven by the palette VARIANT (mat.palette.bg
+  // → archVariant), NOT by bgColor — so the Background swatch (which set bgColor) had
+  // no visible effect on split/editorial designs (the client's Wisteria-pill bug).
+  // This explicit override, when set to a BG id, wins over the variant field colour in
+  // the editorial render path so the ONE Background control drives WHAT THE USER SEES
+  // on every design class. null = follow the archetype variant. Cleared on a fresh
+  // materialization (the archetype re-seeds its own palette). Applied via the
+  // client-only `fieldColor` patch key so it rides the same pipeline (undo/harmonize).
+  const [fieldColorOverride, setFieldColorOverride] = useState(null);
   const [textColorId, setTextColorId] = useState("auto");
   const [suggestedTextColor, setSuggestedTextColor] = useState("whiteSmoke");
   const [textSurfaceLuminance, setTextSurfaceLuminance] = useState(hexLuminance(B.burnham));
@@ -2675,6 +2685,13 @@ export default function App() {
   // Text backdrop treatment for text-over-photo (spec §5): auto | band | none.
   // (The old "gradient" treatment was removed 2026-07-02.)
   const [backdropMode, setBackdropMode] = useState("auto");
+  // (B3 render-truth, 2026-07-06) INSPECTOR HONESTY NOTES. When an inspector control
+  // applies a patch that produces NO visible change (the canvas pixels the control
+  // claims to drive were identical before/after), we surface a small honest inline
+  // note in that control's panel instead of letting it be silently dead. Keyed by a
+  // control id ("bg" | "bgAlpha" | "backdrop" | "logo" | "text"). Cleared when a later
+  // edit of the same control DOES land. This mirrors the chat's render-truth honesty.
+  const [inspectorNotes, setInspectorNotes] = useState({});
   // ── MATERIALIZED ARCHETYPE VISUALS (Commit 1 — full unification) ──
   // The archetype system is no longer a parallel render path keyed on archetypeId.
   // Applying an archetype MATERIALIZES its visuals into first-class design state
@@ -2805,6 +2822,18 @@ export default function App() {
 
   const curType = POST_TYPES.find(t => t.id === postType);
   const curBg = BG_OPTIONS.find(b => b.id === bgColor);
+  // (B1/B3) The VISIBLE solid field id. On a materialized archetype the field comes
+  // from the palette VARIANT (or the fieldColorOverride when set), NOT bgColor — so
+  // the Background inspector's "selected" swatch + label must reflect what's ACTUALLY
+  // drawn, and its clicks must drive that. Legacy designs → bgColor. This is the ONE
+  // control wired to the visible thing on every design class.
+  const _archForField = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
+  const _isEditorialDesign = !!(_archForField && heroRegister);
+  const _variantFieldId = _archForField ? (archetypeVariant(_archForField, archVariant).bg) : null;
+  const effectiveFieldId = _isEditorialDesign
+    ? (fieldColorOverride || _variantFieldId || bgColor)
+    : bgColor;
+  const effectiveFieldOpt = BG_OPTIONS.find(b => b.id === effectiveFieldId) || curBg;
   const mediaObj = videoObj || imageObj;   // active canvas background (video wins)
   const mediaObjLive = mediaObj;           // (P4) alias for renderScene's per-tile override shadow
   const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
@@ -3025,7 +3054,7 @@ export default function App() {
   const tryAnotherRef = useRef({ n: 0, startId: null });
   const snapshotApplyableState = () => ({
     postType, archetypeId, dimensionId, headline, subtext, attribution, dateText,
-    bgColor, bgAlpha, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
+    bgColor, fieldColorOverride, bgAlpha, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
     // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
     // patch that materializes an archetype reverts cleanly as one action.
     photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
@@ -3139,6 +3168,7 @@ export default function App() {
     // ctx.variant wins (rotation / picker re-click); otherwise reset to the base variant.
     setArchVariant(ctx.variant ?? 0);
     if (mat.bg) setBgColor(mat.bg);
+    setFieldColorOverride(null); // (B1) fresh archetype re-seeds its own field palette
     setTextColorId("auto");
     setBackdropMode("auto");
     setLogoVariantTouched(false);
@@ -3237,7 +3267,10 @@ export default function App() {
     // archetype's authored badge text); null leaves it unchanged.
     if (typeof patch.microLabel === "string" && patch.microLabel !== microLabel) { setMicroLabel(patch.microLabel); applied.push("microLabel"); }
     if (typeof patch.pillText === "string" && patch.pillText !== pillText) { setPillText(patch.pillText); applied.push("pillText"); }
-    if (inList(patch.bgColor, "bgColor") && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
+    // bgColor accepts ANY valid BG field id (BG_ID_SET = the full UI palette, incl.
+    // the pastels beyond the tighter AI-facing enum). The AI's strict schema still
+    // limits IT to the 5 core tokens; the UI Background inspector may pick any pastel.
+    if (typeof patch.bgColor === "string" && BG_ID_SET.has(patch.bgColor) && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
     if (inList(patch.textColorId, "textColorId") && patch.textColorId !== textColorId) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
     if (inList(patch.backdropMode, "backdropMode") && patch.backdropMode !== backdropMode) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
     // Materialized visuals (Commit 1). A direct tweak to the photo tone or frame on an
@@ -3331,6 +3364,14 @@ export default function App() {
     if (typeof patch.bgAlpha === "number" && Number.isFinite(patch.bgAlpha)) {
       const v = Math.max(0, Math.min(1, patch.bgAlpha));
       if (v !== bgAlpha) { setBgAlpha(v); applied.push("bgAlpha"); }
+    }
+    // (B1/B3) fieldColor — the editorial panel/field override. "" or null clears it
+    // (back to the archetype variant field). Any valid BG id sets it. This is what
+    // makes the Background swatch drive the visible field on materialized designs.
+    if (patch.fieldColor !== undefined) {
+      const fc = patch.fieldColor;
+      if (fc === null || fc === "") { if (fieldColorOverride !== null) { setFieldColorOverride(null); applied.push("fieldColor"); } }
+      else if (typeof fc === "string" && BG_ID_SET.has(fc) && fc !== fieldColorOverride) { setFieldColorOverride(fc); applied.push("fieldColor"); }
     }
     if (patch.textLayout && typeof patch.textLayout === "object") {
       const t = {};
@@ -3458,6 +3499,65 @@ export default function App() {
     return tags;
   };
 
+  /* ── INSPECTOR RENDER-TRUTH (B3, the law: no silently-dead controls) ──────────
+     A lightweight before/after pixel check for inspector edits, mirroring the chat's
+     render-truth honesty. canvasSig() hashes a scoped region of the LIVE canvas (the
+     one the user sees). applyInspectorPatch() snapshots that hash, applies the patch,
+     and — after the resulting draw commits — re-hashes: if the pixels the control
+     CLAIMS to drive did not change, it surfaces an honest inline note in that panel
+     AND logs a render-truth event to the capture layer (gold for the learning pass).
+     No renderScene fork: it reads the same canvasRef the app paints, one tick later.
+     `region` (0..1 fractions | null=whole) scopes the hash to what the control drives. */
+  const canvasSig = (region) => {
+    try {
+      const c = canvasRef.current; if (!c) return null;
+      const cw = c.width, ch = c.height; if (!cw || !ch) return null;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      const rx = region ? Math.max(0, Math.floor(region.x * cw)) : 0;
+      const ry = region ? Math.max(0, Math.floor(region.y * ch)) : 0;
+      const rw = region ? Math.max(1, Math.floor(region.w * cw)) : cw;
+      const rh = region ? Math.max(1, Math.floor(region.h * ch)) : ch;
+      const d = ctx.getImageData(rx, ry, Math.min(rw, cw - rx), Math.min(rh, ch - ry)).data;
+      // FNV-1a hash, SUBSAMPLED (every 17th pixel) so the scan stays cheap on a
+      // full-res canvas while still catching a solid-field colour change.
+      let hsh = 0x811c9dc5;
+      for (let i = 0; i < d.length; i += 4 * 17) {
+        hsh ^= d[i]; hsh = Math.imul(hsh, 0x01000193);
+        hsh ^= d[i + 1]; hsh = Math.imul(hsh, 0x01000193);
+        hsh ^= d[i + 2]; hsh = Math.imul(hsh, 0x01000193);
+      }
+      return hsh >>> 0;
+    } catch { return null; }
+  };
+  // Apply an inspector patch WITH a render-truth check. `controlId` keys the note;
+  // `region` scopes the pixel check; `deadNote` is the honest message shown when the
+  // control produced no visible change. The AFTER hash is read on the next two frames
+  // (the draw effect commits after React flushes) and only flags dead if BOTH the
+  // patch applied nothing meaningful AND the pixels didn't move.
+  const applyInspectorPatch = (patch, { controlId, region = null, deadNote } = {}) => {
+    const before = canvasSig(region);
+    const applied = applyPatch(patch, { source: "ui" });
+    const clearNote = () => setInspectorNotes(prev => { if (!(controlId in prev)) return prev; const n = { ...prev }; delete n[controlId]; return n; });
+    if (!deadNote) { clearNote(); return applied; }
+    // Defer to after the commit + draw. Two rAFs: one for React to flush state, one
+    // for the draw effect + paint. Compare the same scoped region.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const after = canvasSig(region);
+      const changed = before == null || after == null ? true : before !== after;
+      if (changed) { clearNote(); return; }
+      setInspectorNotes(prev => ({ ...prev, [controlId]: deadNote }));
+      try {
+        logFeedbackClient({
+          turn_id: newTurnId(), session_id: getCurrentSessionId() || undefined,
+          kind: "inspector-render-truth", control: controlId,
+          patch_keys: Object.keys(patch), archetypeId, dimensionId,
+          verdict: { honest: false, note: deadNote },
+        });
+      } catch { /* never surface */ }
+    }));
+    return applied;
+  };
+
   /* ── NEW POST (WP-V Stage 3) — the chat's "New post" chip. Resets the canvas
      to a fresh default design as ONE undoable action while the conversation
      continues (landing + editor are one continuous conversation; §2.1). ── */
@@ -3467,7 +3567,7 @@ export default function App() {
     restoreSnapshot({
       postType: "photo_logo", archetypeId: null, dimensionId: "ig_square",
       headline: "", subtext: "", attribution: "", dateText: "",
-      bgColor: "burnham", bgAlpha: 1, textColorId: "auto",
+      bgColor: "burnham", fieldColorOverride: null, bgAlpha: 1, textColorId: "auto",
       selectedLogoId: "p3-ivory", logoPosition: "bottom-center", logoSize: "m",
       backdropMode: "auto", photoTreatment: "none", photoFrame: { type: "none" },
       microLabel: "", pillText: "", heroRegister: "",
@@ -3546,6 +3646,7 @@ export default function App() {
     setAttribution(s.attribution);
     setDateText(s.dateText);
     setBgColor(s.bgColor);
+    setFieldColorOverride("fieldColorOverride" in s ? (s.fieldColorOverride ?? null) : null);
     if (typeof s.bgAlpha === "number") setBgAlpha(s.bgAlpha);
     setTextColorId(s.textColorId);
     setBackdropMode(s.backdropMode === "gradient" ? "auto" : s.backdropMode);
@@ -4857,11 +4958,24 @@ export default function App() {
     // measured boxes.
     if(mat.editorial && !hasFrame){
       const pal=mat.palette||{};
-      const fieldColor=(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
+      // (B1/B3) The Background inspector's field override wins over the archetype
+      // VARIANT field colour, so the swatch visibly changes the panel on editorial
+      // designs. Calibration renders (overrideArch) ignore the live override — the
+      // board must show each archetype's authored variant palette. null override →
+      // follow the variant. Any BG id is honoured (incl. the pastels beyond the
+      // 5 AI-facing tokens, since the UI palette is the full BG_OPTIONS set).
+      const fieldOverrideId = (!overrideArch && fieldColorOverride && BG_ID_SET.has(fieldColorOverride)) ? fieldColorOverride : null;
+      const fieldColor=(fieldOverrideId ? BG_OPTIONS.find(b=>b.id===fieldOverrideId)?.color : null)
+        ||(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
       // Ink resolves for contrast against the FIELD (solid) unless the user forced a
       // colour. textColorId!=="auto" is honoured here so the manual text-colour picker
-      // applies on materialized designs (the client's exact bug).
-      let inkColor=(BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke);
+      // applies on materialized designs (the client's exact bug). When the field is
+      // OVERRIDDEN, re-derive ink from the OVERRIDDEN field's luminance (not the stale
+      // variant ink) so text stays legible on the new field — the harmonizer then
+      // refines further if the flip alone isn't enough (pins-are-sacred, B5).
+      let inkColor=(fieldOverrideId
+        ? (hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke)
+        : (BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke));
       if(textColorId&&textColorId!=="auto") inkColor=B[textColorId]||inkColor;
       // (R2a) ACCENT ACTIVATION — resolve the ONE accent ink for this variant. When
       // accentUse names a real colour (softTangerine on suitable pastel/ivory variants,
@@ -6025,7 +6139,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,archVariant,bgColor,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
+  },[postType,archetypeId,archVariant,bgColor,fieldColorOverride,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback((source) => {
@@ -6070,7 +6184,7 @@ export default function App() {
      Defined AFTER renderScene so the useCallback can close over it. */
   const auditSignature = () =>
     JSON.stringify([
-      postType, dimensionId, bgColor, textColorId, backdropMode,
+      postType, dimensionId, bgColor, fieldColorOverride, textColorId, backdropMode,
       headline, subtext, attribution, dateText,
       selectedLogoId, logoPosition, logoSize, userLogoTouched,
       JSON.stringify(fontSizes), JSON.stringify(logoByDim), JSON.stringify(typeLayoutsByDim),
@@ -7722,6 +7836,7 @@ export default function App() {
     setArchVariant(Number.isInteger(s.archVariant) ? s.archVariant : 0);
     setDimensionId(s.dimensionId || "ig_square");
     setBgColor(s.bgColor || "burnham");
+    setFieldColorOverride(BG_ID_SET.has(s.fieldColorOverride) ? s.fieldColorOverride : null);
     setBgAlpha(s.bgAlpha ?? 1);
     setTextColorId(s.textColorId || "auto");
     setExportFormat(s.exportFormat || "png");
@@ -8026,28 +8141,49 @@ export default function App() {
      ───────────────────────────────────────────────────────────────────────── */
 
   // BACKGROUND — swatches + opacity + (Text-backdrop lives in the Text panel).
+  // (B1/B3) The swatch drives the VISIBLE field: it emits bgColor (legacy path) AND
+  // fieldColor (the editorial panel override) in one patch, so it lands on every
+  // design class. Selection + label track effectiveFieldId (what's actually drawn),
+  // not the stale bgColor. applyInspectorPatch runs the render-truth check: if a pick
+  // somehow produces no visible change, an honest note appears instead of a dead pill.
+  // Opacity is honestly gated: on a full-bleed photo archetype the solid field sits
+  // BEHIND the photo, so its alpha changes nothing visible — we disable it with a
+  // reason there rather than let it be a silently-dead slider.
+  const _fullBleedField = !!(mediaObj && _archForField && materializeArchetypeLayout(_archForField, dimensionId, archVariant).fullBleed);
+  const _opacityDead = _fullBleedField;
   const renderBackgroundPanel = () => (
     <>
-      <div style={{display:"flex",gap:10}}>
-        {BG_OPTIONS.map(b=>(
-          <button key={b.id} aria-pressed={bgColor===b.id} onClick={()=>applyPatch({bgColor:b.id},{source:"ui"})} title={b.label} style={{
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {BG_OPTIONS.map(b=>{
+          const sel = effectiveFieldId===b.id;
+          return (
+          <button key={b.id} aria-pressed={sel}
+            onClick={()=>applyInspectorPatch({bgColor:b.id, fieldColor:b.id},{
+              controlId:"bg",
+              deadNote:"This layout doesn't use a background colour — its field comes from the photo or layout.",
+            })}
+            title={b.label} style={{
             width:36,height:36,borderRadius:"50%",cursor:"pointer",transition:"all 0.15s",
-            background:b.color,transform:bgColor===b.id?"scale(1.15)":"scale(1)",
-            border:bgColor===b.id?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
-            boxShadow:bgColor===b.id?"0 0 0 2px #fff inset":"none",
+            background:b.color,transform:sel?"scale(1.15)":"scale(1)",
+            border:sel?`3px solid ${B.burnham}`:`2px solid ${B.ash}66`,
+            boxShadow:sel?"0 0 0 2px #fff inset":"none",
           }} />
-        ))}
+          );
+        })}
       </div>
-      <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{curBg?.label}</div>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
+      <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{effectiveFieldOpt?.label}</div>
+      {inspectorNotes.bg && <div style={{fontSize:10,color:B.tangerine,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>{inspectorNotes.bg}</div>}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,opacity:_opacityDead?0.45:1}}>
         <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
-        <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha}
-          onInput={e=>applyPatch({bgAlpha:parseFloat(e.currentTarget.value)},{source:"ui"})}
-          onChange={e=>applyPatch({bgAlpha:parseFloat(e.target.value)},{source:"ui"})}
-          style={{flex:1,accentColor:B.burnham}} />
+        <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha} disabled={_opacityDead}
+          onInput={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.currentTarget.value)},{source:"ui"})}
+          onChange={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.target.value)},{source:"ui"})}
+          style={{flex:1,accentColor:B.burnham,cursor:_opacityDead?"not-allowed":"pointer"}} />
         <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
       </div>
-      {bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+      {_opacityDead
+        ? <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>The photo fills this layout, so the background sits behind it — opacity has no visible effect here.</div>
+        : bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
     </>
   );
 
