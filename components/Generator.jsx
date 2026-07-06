@@ -9197,7 +9197,9 @@ export default function App() {
     return (
       <div className="wo-feedgal" role="dialog" aria-modal="true" aria-label="Your posts">
         <style>{`
-          .wo-feedgal{position:fixed;inset:0;z-index:70;background:${B.whiteSmoke};overflow-y:auto;-webkit-overflow-scrolling:touch;}
+          /* FULL-CANVAS: above the nav (sticky) + top bar (210) + panels (≤362) —
+             the gallery owns the whole screen; its own header carries ＋ New post + ✕. */
+          .wo-feedgal{position:fixed;inset:0;z-index:380;background:${B.whiteSmoke};overflow-y:auto;-webkit-overflow-scrolling:touch;}
           .wo-feedgal-inner{max-width:920px;margin:0 auto;padding:44px 40px 80px;}
           .wo-feedgal-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px 26px;}
           @media(max-width:640px){
