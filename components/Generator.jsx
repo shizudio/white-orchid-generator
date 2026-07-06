@@ -277,15 +277,9 @@ function imgFrom(d){return new Promise(r=>{const i=new Image();
 // Hex (#RRGGBB) → rgba string with alpha 0..1
 function withAlpha(hex,a){const h=(hex||"#000").replace("#","");const r=parseInt(h.slice(0,2),16)||0,g=parseInt(h.slice(2,4),16)||0,b=parseInt(h.slice(4,6),16)||0;return `rgba(${r},${g},${b},${a==null?1:a})`;}
 
-// Load a <video> element ready for canvas compositing.
-function videoFrom(url){return new Promise(res=>{const v=document.createElement("video");v.muted=true;v.playsInline=true;v.loop=true;v.preload="auto";v.onloadeddata=()=>res(v);v.onerror=()=>res(null);v.src=url;});}
-
-/* ── IndexedDB store for saved videos (blobs are too big for localStorage) ── */
-function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open("wo-media",1);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains("videos"))db.createObjectStore("videos",{keyPath:"id"});};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
-async function idbPut(rec){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readwrite");tx.objectStore("videos").put(rec);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
-async function idbAll(){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readonly");const q=tx.objectStore("videos").getAll();q.onsuccess=()=>res(q.result||[]);q.onerror=()=>rej(q.error);});}
-async function idbGet(id){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readonly");const q=tx.objectStore("videos").get(id);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});}
-async function idbDel(id){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction("videos","readwrite");tx.objectStore("videos").delete(id);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
+// (Declutter §5.3) The video upload/save pipeline (videoFrom + the "wo-media"
+// IndexedDB store) was removed with the dead-end Video controls — video returns
+// as a whole set once MP4 export exists. videoObj compositing support remains.
 
 /* ───────── IMAGE COMPRESSION (browser-side) ───────── */
 function compressImage(dataUrl, maxSize, quality) {
@@ -2661,11 +2655,10 @@ export default function App() {
   const overlayImgs = useRef({});                          // assetId -> Image
   const overlayInputRef = useRef(null);
 
-  // Video (background motion source)
+  // Video (background motion source — compositing only; upload/save controls
+  // removed until MP4 export exists, Declutter §5.3)
   const [videoObj, setVideoObj] = useState(null);          // HTMLVideoElement
   const [videoPlaying, setVideoPlaying] = useState(false);
-  const [savedVideos, setSavedVideos] = useState([]);      // [{id,name,createdAt}]
-  const videoInputRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
@@ -3966,7 +3959,6 @@ export default function App() {
       const tpl = await sGet(SK_TPL);
       const localTpls = tpl || [];
       if (localTpls.length) setDesignTemplates(localTpls);
-      try { const vids = await idbAll(); setSavedVideos(vids.map(v => ({ id:v.id, name:v.name, createdAt:v.createdAt })).sort((a,b)=>b.createdAt-a.createdAt)); } catch(_) {}
       setReady(true);
 
       // ── Cloud sync (no-ops silently when the team library isn't configured) ──
@@ -8306,39 +8298,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimensionId]);
 
-  /* ── Video: upload, play, save (IndexedDB) ── */
-  const uploadVideo = async (file) => {
-    if (!file) return;
-    if (!file.type.startsWith("video/")) { alert("Please choose a video file."); return; }
-    const url = URL.createObjectURL(file);
-    const v = await videoFrom(url);
-    if (!v) { alert("Could not read that video."); return; }
-    v._blob = file; v._name = file.name;
-    setImage(null); setImageObj(null);   // video replaces the still
-    setVideoObj(v); setVideoPlaying(false);
-  };
-  const toggleVideo = () => {
-    if (!videoObj) return;
-    if (videoObj.paused) { videoObj.play(); setVideoPlaying(true); }
-    else { videoObj.pause(); setVideoPlaying(false); }
-  };
-  const restartVideo = () => { if (videoObj) { videoObj.currentTime = 0; videoObj.play(); setVideoPlaying(true); } };
+  /* ── Video (Declutter §5.3) — upload/play/save controls removed until MP4
+     export exists. removeVideo stays: the patch pipeline (removeImage) and the
+     inspector's "Remove video" still need to clear a legacy video object. */
   const removeVideo = () => { if (videoObj) videoObj.pause(); setVideoObj(null); setVideoPlaying(false); };
-  const saveVideo = async () => {
-    if (!videoObj?._blob) return;
-    const id = "vid_" + Date.now().toString(36);
-    const rec = { id, name:videoObj._name||"video", blob:videoObj._blob, createdAt:Date.now() };
-    try { await idbPut(rec); setSavedVideos(prev => [{ id, name:rec.name, createdAt:rec.createdAt }, ...prev]); }
-    catch(e) { alert("Could not save video: " + e.message); }
-  };
-  const loadSavedVideo = async (id) => {
-    const rec = await idbGet(id); if (!rec) return;
-    const v = await videoFrom(URL.createObjectURL(rec.blob)); if (!v) return;
-    v._blob = rec.blob; v._name = rec.name;
-    setImage(null); setImageObj(null);
-    setVideoObj(v); setVideoPlaying(false);
-  };
-  const deleteSavedVideo = async (id) => { await idbDel(id); setSavedVideos(prev => prev.filter(v => v.id !== id)); };
 
   const selectedEditorLayer = overlayLayers.find(l => l.uid === selOverlay);
   const selectedEditorAsset = selectedEditorLayer && overlays.find(o => o.id === selectedEditorLayer.assetId);
@@ -8434,26 +8397,12 @@ export default function App() {
           </>}
         </>
       ):(
-        <>
-          <button onClick={()=>videoInputRef.current?.click()} style={{width:"100%",padding:"9px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:FU.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5,marginBottom:videoObj?8:0}}>＋ Upload video</button>
-          {videoObj&&<>
-            <div style={{display:"flex",gap:6,marginBottom:8}}>
-              <button onClick={toggleVideo} style={vidBtn(B,FU,true)}>{videoPlaying?"⏸ Pause":"▶ Play"}</button>
-              <button onClick={restartVideo} style={vidBtn(B,FU)}>↺ Restart</button>
-              <button onClick={saveVideo} style={vidBtn(B,FU)}>💾 Save</button>
-              <button onClick={removeVideo} style={vidBtn(B,FU)}>✕</button>
-            </div>
-            <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Logo + overlays composite live onto the video. MP4 export is the next phase.</div>
-          </>}
-          {savedVideos.length>0&&<div style={{marginTop:10}}>
-            <div style={{fontSize:10,color:B.ash,marginBottom:5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase"}}>Saved videos</div>
-            <div style={{display:"flex",flexDirection:"column",gap:4}}>{savedVideos.map(v=><div key={v.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,border:`1px solid ${B.ash}33`,background:"#fff"}}>
-              <span style={{flex:1,fontSize:11,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🎬 {v.name}</span>
-              <button onClick={()=>loadSavedVideo(v.id)} style={{fontSize:10,color:B.burnham,background:"none",border:"none",cursor:"pointer",fontFamily:FU.subtitle,fontWeight:600}}>Load</button>
-              <button onClick={()=>deleteSavedVideo(v.id)} style={{fontSize:14,color:B.ash,background:"none",border:"none",cursor:"pointer",padding:0}}>×</button>
-            </div>)}</div>
-          </div>}
-        </>
+        /* (Declutter, ratified §5.3) Video can't be EXPORTED yet, so the upload/
+           save controls were a dead end (real-assets law). One calm, honest line
+           until MP4 export exists — then the set returns as a whole. */
+        <div style={{fontSize:12,color:B.jet,fontFamily:F.body,lineHeight:1.6,padding:"6px 2px"}}>
+          Video is coming soon — you’ll be able to make short clips in the same brand style once video export is ready.
+        </div>
       )}
     </>
   );
@@ -9239,8 +9188,6 @@ export default function App() {
           AND the photo inspector regardless of what is mounted. */}
       <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}}
         onChange={e=>{const f=e.target.files?.[0];if(f)loadFile(f);e.target.value="";}} />
-      <input ref={videoInputRef} type="file" accept="video/*" style={{display:"none"}}
-        onChange={e=>{const f=e.target.files?.[0];if(f)uploadVideo(f);e.target.value="";}} />
       <input ref={overlayInputRef} type="file" accept="image/svg+xml,image/png,image/*" style={{display:"none"}}
         onChange={e=>{const f=e.target.files?.[0];if(f)uploadOverlay(f);e.target.value="";}} />
 
@@ -10048,5 +9995,4 @@ function TemplateCard({template,onClick}){
 function In({mt,...p}){return<input aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,marginTop:mt?8:0}} />;}
 function Area(p){return<textarea aria-label={p["aria-label"]||p.placeholder} {...p} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:FU.body,height:88,resize:"vertical"}} />;}
 function Slider({label,min,max,step=1,value,val,onChange,set,suffix}){const v=value??val;const cb=onChange||set;return<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.subtitle,fontWeight:500,color:B.ash,minWidth:50}}>{label}</span><input aria-label={label} type="range" min={min} max={max} step={step} value={v} onChange={e=>cb(Number(e.target.value))} style={{flex:1,accentColor:B.burnham}} /><span className="generator-field-label" style={{fontSize:12,fontFamily:FU.body,color:B.ash,minWidth:40,textAlign:"right"}}>{suffix??(v+"%")}</span></div>;}
-function vidBtn(B,FU,primary){return{flex:primary?"1 1 auto":"0 0 auto",padding:"7px 10px",borderRadius:7,border:primary?"none":`1.5px solid ${B.ash}44`,background:primary?B.burnham:"#fff",color:primary?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}
 function quickBtn(B,FU){return{padding:"6px 11px",borderRadius:7,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:0.3,whiteSpace:"nowrap"};}
