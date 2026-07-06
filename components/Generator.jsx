@@ -4887,6 +4887,30 @@ export default function App() {
         let y0=Math.max(sm.t,Math.min(1-sm.b-bh2,(b.y??sm.t)));
         return {x:x0*w,y:y0*h,w:bw2*w,h:bh2*h};
       };
+      // (B4 born-clean fix, 2026-07-06) TEXT-SAFE margins that honour the PLATFORM
+      // action zone. A format like Story renders UI chrome over the top/bottom bands
+      // (PLATFORM_SAFE), so a TEXT role must never sit there — the platform buttons
+      // would cover it (this was the born-clean safe-area-text offense: serif_word's
+      // eyebrow at y=0.08, editorial_split/floated_card/schedule_tile hero at
+      // y=0.10–0.12, all inside Story's 0.13 top band). The text-safe top/bottom are
+      // the MAX of the archetype's own text-safe margin and the platform zone, so the
+      // clamp lifts/shrinks a role clear of the band DETERMINISTICALLY — for any
+      // archetype, any copy length (the reflow shrinks-or-lifts, never crosses in).
+      // Photo/card/mask boxes keep the un-tightened `sm` (a photo SHOULD bleed to the
+      // story edge under the chrome); only the drawn TEXT roles use these margins.
+      const _psafe=PLATFORM_SAFE[dimId]||null;
+      const smText=_psafe
+        ? { t:Math.max(sm.t,_psafe.top), b:Math.max(sm.b,_psafe.bottom), l:Math.max(sm.l,_psafe.left||0), r:Math.max(sm.r,_psafe.right||0) }
+        : sm;
+      const clampText=(b)=>{
+        if(!b) return null;
+        const minW=0.05, minH=0.03;
+        let bw2=Math.max(minW,Math.min((b.w??0.8),1-smText.l-smText.r));
+        let bh2=Math.max(minH,Math.min((b.h??0.2),1-smText.t-smText.b));
+        let x0=Math.max(smText.l,Math.min(1-smText.r-bw2,(b.x??smText.l)));
+        let y0=Math.max(smText.t,Math.min(1-smText.b-bh2,(b.y??smText.t)));
+        return {x:x0*w,y:y0*h,w:bw2*w,h:bh2*h};
+      };
       // Bleed-aware box for SIDE/SPLIT photos (§2.2 editorial_split, §2.10
       // portrait_credential): a photo block authored to touch a canvas edge must
       // BLEED to the true edge (0 / 1), not float inside the safe margin — a "true
@@ -5000,9 +5024,9 @@ export default function App() {
       const heroSrc = overrideArch ? mat.roles?.hero
         : { x:layout.x??mat.roles?.hero?.x, y:layout.y??mat.roles?.hero?.y,
             w:layout.width??mat.roles?.hero?.w, h:mat.roles?.hero?.h, align:mat.roles?.hero?.align };
-      let heroBox=clampBox(heroSrc);
-      let supBox=clampBox(mat.roles?.support);
-      let labelBox=clampBox(mat.roles?.microLabel);
+      let heroBox=clampText(heroSrc);
+      let supBox=clampText(mat.roles?.support);
+      let labelBox=clampText(mat.roles?.microLabel);
       const isBigNum=mat.usesDateAsHero;
       const cc=opts.calibrationContent||null;
       const ccHeadline=cc&&cc.headline!=null?cc.headline:headline;
@@ -5030,12 +5054,12 @@ export default function App() {
       const hasIdxCarrier = !mat.roles?.microLabel && (mat.furniture||[]).some(it=>it&&it.type==="index");
       if(supportText && !supBox && heroBox && !provArch?.elements?.support && mat.special!=="scheduleRows"){
         const belowY=(heroBox.y+heroBox.h)/h+0.015;
-        const fitsBelow = belowY <= 1-sm.b-0.055;
-        const synthY = fitsBelow ? belowY : Math.max(sm.t, heroBox.y/h-0.075);
-        supBox=clampBox({x:heroBox.x/w, y:synthY, w:heroBox.w/w, h:0.06});
+        const fitsBelow = belowY <= 1-smText.b-0.055;
+        const synthY = fitsBelow ? belowY : Math.max(smText.t, heroBox.y/h-0.075);
+        supBox=clampText({x:heroBox.x/w, y:synthY, w:heroBox.w/w, h:0.06});
       }
       if(eyebrow && !labelBox && heroBox && !hasIdxCarrier && !provArch?.elements?.microLabel){
-        labelBox=clampBox({x:heroBox.x/w, y:Math.max(sm.t, heroBox.y/h-0.075), w:heroBox.w/w, h:0.05});
+        labelBox=clampText({x:heroBox.x/w, y:Math.max(smText.t, heroBox.y/h-0.075), w:heroBox.w/w, h:0.05});
       }
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
@@ -5047,7 +5071,11 @@ export default function App() {
       // priority elements move below the hero (or shrink to their MIN floor); nothing
       // renders outside the safe margins. Returns adjusted boxes + fitted sizes.
       const reflow = reflowEditorial(ctx, {
-        w, h, S, sm, register, caps: mat.caps||isBigNum,
+        // (B4) reflow clamps ONLY text roles (hero/support/label) — pass the
+        // platform-safe-aware text margins so a de-collision never repositions a
+        // role back into the Story action band (photo/card obstacles are passed
+        // pre-computed in px and are unaffected).
+        w, h, S, sm: smText, register, caps: mat.caps||isBigNum,
         heroBox, supBox, labelBox, cardBox, maskBox,
         photoRegion: (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         heroText: heroFinal, supportText, eyebrow,
@@ -6585,13 +6613,33 @@ export default function App() {
        logo-legibility, and any archetype safe-zone/overlap fail. */
     window.__woBornCleanGuard = () => {
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      // Short copy that fits every format so copy-length findings never fire — we're
-      // testing SYSTEM PLACEMENT, not user copy volume.
-      const cc = { headline: "Open house", subtext: "This Saturday", attribution: "The White Orchid", dateText: "18 July" };
+      // DETERMINISM (B4, 2026-07-06): the guard must pass/fail identically run-to-run.
+      // safe-area-text is a PLACEMENT fail (a text role landing in the Story action
+      // band), and placement is content-DEPENDENT — long copy the reflow lifts/shrinks
+      // can push a role into the band that short copy clears. Earlier the guard used
+      // ONE short fixed string and so passed 0 on a day the live path (long generated
+      // copy) still offended. We now sweep a FIXED set of content profiles spanning the
+      // realistic worst case (short + long-but-bounded), all fixed strings, so the
+      // system-placement assertion is exercised at its stress point yet stays fully
+      // deterministic. Copy-LENGTH findings (copy-dropped / caption-long / thumb) are
+      // still excluded (SYSTEM_FINDING_IDS) — those are honest user-content tradeoffs,
+      // not a system-manufactured problem.
+      const CONTENT_PROFILES = [
+        { headline: "Open house", subtext: "This Saturday", attribution: "The White Orchid", dateText: "18 July" },
+        // Fixed WORST-CASE: long-but-plausible copy in every role. The reflow must keep
+        // every role clear of the action band even at this volume (shrink-or-lift, never
+        // cross in). Kept fixed so the run is deterministic.
+        { headline: "Early Childhood Educators Wanted for Our Growing Community",
+          subtext: "Join our team of dedicated professionals shaping young minds every single day",
+          attribution: "Apply at hello@thewhiteorchid.sg before the month ends",
+          dateText: "18 September" },
+      ];
       const SYSTEM_FINDING_IDS = new Set(["safe-area-text", "safe-area-logo", "logo-legibility", "archetype-margin-crop", "archetype-box-overlap"]);
       const offenders = [];
+      let cells = 0;
       try {
-        for (const id of ARCHETYPE_IDS) for (const d of DIMENSIONS) {
+        for (const cc of CONTENT_PROFILES) for (const id of ARCHETYPE_IDS) for (const d of DIMENSIONS) {
+          cells++;
           try {
             const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
             // A fresh system design: auto logo (userLogoTouched is false in these renders'
@@ -6604,11 +6652,11 @@ export default function App() {
             try { signal = JSON.parse(JSON.stringify(auditRef.current)); } catch { signal = auditRef.current; }
             const verdict = computeReadyChecklist([{ dimensionId: d.id, signal }]).formats[0];
             const sys = (verdict.issues || []).filter(i => i.severity === "fail" && SYSTEM_FINDING_IDS.has(i.id));
-            if (sys.length) offenders.push({ archetype: id, dimId: d.id, findings: sys.map(i => i.id) });
+            if (sys.length) offenders.push({ archetype: id, dimId: d.id, copy: cc.headline.length > 20 ? "long" : "short", findings: sys.map(i => i.id) });
           } catch (e) { offenders.push({ archetype: id, dimId: d.id, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: offenders.length === 0, cells: ARCHETYPE_IDS.length * DIMENSIONS.length, offenders };
+      const report = { pass: offenders.length === 0, cells, offenders };
       // eslint-disable-next-line no-console
       console.log("[woBornCleanGuard]", JSON.stringify(report));
       return report;
