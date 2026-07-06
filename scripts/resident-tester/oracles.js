@@ -85,13 +85,21 @@ async function probe(page) {
 // ── Individual oracle judgments (pure functions over a probe snapshot) ────────
 
 // 1. HONESTY APOLOGY — did the assistant self-correct (i.e. claim ≠ render)?
-function honestyApology(snap) {
+//    The self-correction itself is GOOD behaviour (better an honest "that didn't
+//    do anything" than a silent false claim). What it reveals is a CAPABILITY GAP:
+//    the user asked for something and the studio couldn't act on it. So we flag it
+//    ONLY when the utterance was one a good studio SHOULD have acted on
+//    (expectChange !== false). A question getting "that changed nothing" is fine.
+function honestyApology(snap, { expectChange } = {}) {
   const hit = HONESTY_PATTERNS.find(re => re.test(snap.lastAssistant));
+  const violation = !!hit && expectChange !== false;
   return {
     name: 'honesty-apology',
-    ok: !hit,
-    observed: hit ? snap.lastAssistant.slice(0, 200) : 'no self-correction',
-    expected: 'assistant does not need to walk back a false claim',
+    ok: !violation,
+    observed: hit
+      ? `helper walked back an actionable request: "${snap.lastAssistant.slice(0, 160)}"`
+      : 'no self-correction',
+    expected: 'an actionable request produces a real change, not a "that changed nothing" reply',
     severity: 'high',
   };
 }

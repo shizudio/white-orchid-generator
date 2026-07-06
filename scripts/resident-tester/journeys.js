@@ -153,7 +153,7 @@ async function runJourneys(page, run, cons, baseUrl) {
     snap = await O.probe(page);
     ctx = { journey: 'chat-edit-wisteria', tag: 'j2-chat-edit', console: cons.drain() };
     const j2 = await assertOracles(page, run, ctx, [
-      O.honestyApology(snap),
+      O.honestyApology(snap, { expectChange: true }),
       O.claimVsChanged(snap, { expectChange: true }),
       O.offerWithoutExecution(snap),
       O.noHorizontalOverflow(snap),

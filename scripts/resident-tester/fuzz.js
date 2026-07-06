@@ -34,7 +34,7 @@ async function runFuzz(page, run, cons, { targetSamples, minSamples }) {
     const consoleErrors = cons.drain();
 
     const checks = [
-      O.honestyApology(snap),
+      O.honestyApology(snap, { expectChange: p.expectChange }),
       O.claimVsChanged(snap, { expectChange: p.expectChange }),
       O.offerWithoutExecution(snap),
       O.noHorizontalOverflow(snap),

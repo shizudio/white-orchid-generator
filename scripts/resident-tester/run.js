@@ -44,17 +44,20 @@ function waitForServer(url, timeoutMs = 90000) {
   });
 }
 
-// Ask the running server how many cloud sessions exist (active + archived). Used
-// to VERIFY the run added zero rows to the client's Supabase brand.
-function cloudSessionCount(baseUrl) {
+// Ask the running server which cloud sessions exist (active + archived). We record
+// the SET OF IDS, not just a count — the shared brand's archived list is a top-N
+// view whose membership can shift as unrelated rows are touched, so a length delta
+// is not proof of a leak. Comparing ID sets tells us precisely whether THIS run
+// added any NEW session to the client's Supabase brand.
+function cloudSessionIds(baseUrl) {
   return new Promise((resolve) => {
-    const out = { configured: false, active: 0, archived: 0 };
+    const out = { configured: false, active: [], archived: [] };
     const grab = (qs, key, next) => {
       http.get(`${baseUrl}/api/sessions${qs}`, (res) => {
         let body = '';
         res.on('data', d => body += d);
         res.on('end', () => {
-          try { const j = JSON.parse(body); if (j.configured !== false) { out.configured = true; out[key] = (j.sessions || []).length; } } catch {}
+          try { const j = JSON.parse(body); if (j.configured !== false) { out.configured = true; out[key] = (j.sessions || []).map(s => s.id); } } catch {}
           next();
         });
       }).on('error', () => next());
@@ -89,10 +92,11 @@ async function main() {
     await waitForServer(config.baseUrl + '/', 90000);
     log('server up at', config.baseUrl);
 
-    // ── 2. VERIFY BASELINE — cloud sessions before the run ──────────────────
-    const before = await cloudSessionCount(config.baseUrl);
-    notes.push(`Cloud sessions before run: ${before.configured ? `${before.active} active + ${before.archived} archived` : 'cloud unconfigured (nothing to pollute)'}.`);
-    log('cloud baseline:', JSON.stringify(before));
+    // ── 2. VERIFY BASELINE — cloud session IDS before the run ───────────────
+    const before = await cloudSessionIds(config.baseUrl);
+    const beforeSet = new Set([...before.active, ...before.archived]);
+    notes.push(`Cloud sessions before run: ${before.configured ? `${before.active.length} active + ${before.archived.length} archived` : 'cloud unconfigured (nothing to pollute)'}.`);
+    log('cloud baseline:', before.configured ? `${before.active.length}+${before.archived.length}` : 'unconfigured');
 
     // ── 3. Launch a hardened, headless Chromium ─────────────────────────────
     const { chromium } = require('playwright');
@@ -125,14 +129,16 @@ async function main() {
     }
     log(`fuzz done — ${run.fuzz.length} utterances; ${run.defects().length} total defect(s)`);
 
-    // ── 6. VERIFY — cloud sessions after the run (must be unchanged) ─────────
-    const after = await cloudSessionCount(config.baseUrl);
-    const grew = before.configured && after.configured
-      ? (after.active - before.active) + (after.archived - before.archived) : 0;
-    notes.push(`Cloud sessions after run: ${after.configured ? `${after.active} active + ${after.archived} archived` : 'cloud unconfigured'} → ${grew === 0 ? 'ZERO new rows (verified clean).' : `${grew} NEW ROW(S) — investigate!`}`);
-    notes.push(`Higgsfield calls intercepted: ${run.higgsfieldCalls} (must be 0).`);
+    // ── 6. VERIFY — cloud session IDS after the run (no NEW ids may appear) ──
+    const after = await cloudSessionIds(config.baseUrl);
+    const afterSet = new Set([...after.active, ...after.archived]);
+    // A leak = an id present AFTER that was absent BEFORE. (The archived top-N
+    // membership can shift for unrelated reasons; only genuinely NEW ids matter.)
+    const newIds = [...afterSet].filter(id => !beforeSet.has(id));
+    notes.push(`Cloud sessions after run: ${after.configured ? `${after.active.length} active + ${after.archived.length} archived` : 'cloud unconfigured'} → ${newIds.length === 0 ? 'ZERO new session ids (verified clean — the tester wrote nothing to your account).' : `${newIds.length} NEW SESSION ID(S) appeared — investigate: ${newIds.join(', ')}`}`);
+    notes.push(`Higgsfield (photo-credit) calls intercepted: ${run.higgsfieldCalls} (must be 0).`);
     notes.push(`Cloud write attempts intercepted + discarded: ${run.cloudWriteAttempts}.`);
-    run.recordInfo({ verify: { before, after, newCloudRows: grew, higgsfieldCalls: run.higgsfieldCalls, cloudWriteAttempts: run.cloudWriteAttempts } });
+    run.recordInfo({ verify: { beforeCount: beforeSet.size, afterCount: afterSet.size, newSessionIds: newIds, higgsfieldCalls: run.higgsfieldCalls, cloudWriteAttempts: run.cloudWriteAttempts } });
 
     await context.close();
   } catch (e) {
