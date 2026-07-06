@@ -3803,13 +3803,22 @@ export default function App() {
         design_drafts push is intentionally removed so there is exactly one
         persistence story in the UI. Local overlay persistence (SK_DOC) stays. ── */
 
+  // (fix) Async image loads (overlays, arch assets, logo variants) below call
+  // draw() when their images resolve — but they close over the `draw` from the
+  // render where the load STARTED. If the user switches format while an image is
+  // still loading, that stale draw paints the OLD format's layout into the NEW
+  // canvas buffer seconds later (square content in a portrait buffer + ivory dead
+  // space — the "looks ok for 2s then glitches" bug). Route every late redraw
+  // through drawRef so it always uses the CURRENT format's draw.
+  const drawRef = useRef(null);
+
   /* ── Keep overlay Image objects loaded (assetId -> Image) ── */
   useEffect(() => {
     let cancelled = false;
     const need = overlays.filter(o => !overlayImgs.current[o.id]);
     if (!need.length) return;
     Promise.all(need.map(o => imgFrom(o.dataUrl || o.src).then(img => { if (img) overlayImgs.current[o.id] = img; })))
-      .then(() => { if (!cancelled) draw(); });
+      .then(() => { if (!cancelled) drawRef.current?.(); });
     return () => { cancelled = true; };
   }, [overlays]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3831,7 +3840,7 @@ export default function App() {
     Promise.all(need.map(id => {
       const a = DEFAULT_OVERLAYS.find(o=>o.id===id); if (!a) return Promise.resolve();
       return imgFrom(a.src).then(img => { if (img) archAssetImgs.current[id] = img; });
-    })).then(() => { if (!cancelled) draw(); });
+    })).then(() => { if (!cancelled) drawRef.current?.(); });
     return () => { cancelled = true; };
   }, [archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3854,7 +3863,7 @@ export default function App() {
     let cancelled = false;
     Promise.all(LOGO_VARIANTS.filter(v => !logoVariantImgs.current[v.id]).map(v =>
       imgFrom(v.src).then(img => { if (img) logoVariantImgs.current[v.id] = img; })
-    )).then(() => { if (!cancelled && archetypeId) draw(); });
+    )).then(() => { if (!cancelled && archetypeId) drawRef.current?.(); });
     return () => { cancelled = true; };
   }, [selectedLogoId, selectedLogoVariant, archetypeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const _logoInkLum = (color) => color === "ivory" ? getLuminance(245, 240, 232) : getLuminance(43, 80, 64);
@@ -5770,6 +5779,9 @@ export default function App() {
     const c=canvasRef.current; if(!c) return;
     renderScene(c.getContext("2d"),W,H,{dimensionId,live:true});
   },[renderScene,W,H,dimensionId]);
+  // Keep the latest draw reachable from async image-load callbacks that resolve
+  // after a format switch, so they never repaint a stale format (see drawRef note).
+  drawRef.current = draw;
 
   useEffect(()=>{
     if(!fontsLoaded)return;
