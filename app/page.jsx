@@ -1,16 +1,49 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Nav from '@/components/Nav';
 
-const EXAMPLES = [
-  'An open house invite for 18 July',
-  'Quote of the week post',
-  "We're hiring educators",
-  'A warm welcome-back-to-school post',
-];
+// (D1 item 7) First-run suggestions ROTATE and vary in KIND so the empty state
+// teaches the RANGE of what you can say — whole posts AND small changes. On each
+// load we show a fresh mix (some of each kind) so no two visits look identical
+// and the blank-prompt freeze is broken.
+const EXAMPLE_POOL = {
+  // Whole-post outcomes.
+  posts: [
+    'An open house invite for 18 July',
+    'A quote of the week post',
+    "We're hiring educators",
+    'A warm welcome-back-to-school post',
+    'A holiday closure notice for the parents',
+    'A photo post celebrating our art week',
+    'A gentle reminder that fees are due Friday',
+    'A thank-you post for our volunteers',
+  ],
+  // Small-change asks (teach that you can nudge, not just start over).
+  tweaks: [
+    'Make it warmer',
+    'Change the photo to children painting',
+    'Try another layout',
+    'Make the background wisteria',
+    'Add a date line',
+    'Make the title bigger',
+  ],
+};
+// Pick `n` random items from an array without repeats.
+function sample(arr, n) {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; }
+  return copy.slice(0, n);
+}
+// A rotating mix: three whole-post ideas + one small change, reshuffled per load.
+function rotatingExamples() {
+  return [...sample(EXAMPLE_POOL.posts, 3), ...sample(EXAMPLE_POOL.tweaks, 1)];
+}
+// A STABLE default (no randomness) for the server render + first client paint, so
+// there's no hydration mismatch; the client reshuffles after mount (see effect).
+const DEFAULT_EXAMPLES = [...EXAMPLE_POOL.posts.slice(0, 3), EXAMPLE_POOL.tweaks[0]];
 
 // Handoff key consumed by Generator on mount to seed the floating chat + apply
 // the starting design. Keep in sync with components/Generator.jsx.
@@ -34,6 +67,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 export default function Home() {
   const router = useRouter();
   const [message, setMessage] = useState('');
+  // (D1 item 7) Rotating suggestion mix. SSR + first client paint use a stable
+  // default (no hydration mismatch); after mount we swap in a fresh random mix,
+  // computed once so it doesn't reshuffle mid-typing.
+  const [examples, setExamples] = useState(DEFAULT_EXAMPLES);
+  useEffect(() => { setExamples(rotatingExamples()); }, []);
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState('');        // staged progress line during photo gen
   const [note, setNote] = useState('');
@@ -230,7 +268,7 @@ export default function Home() {
 
           {/* Example chips */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 20 }}>
-            {EXAMPLES.map(text => (
+            {examples.map(text => (
               <button key={text} type="button" onClick={() => useExample(text)} disabled={loading}
                 style={{
                   fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg)',

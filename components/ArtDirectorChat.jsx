@@ -48,11 +48,36 @@ const HISTORY_KEY = 'wo-editor-chat';
 
 // (WP-X §3) Empty-state example prompts, rendered as TAPPABLE chips (they send on
 // tap) — not prose the user mistakes for an inert label.
-const EMPTY_EXAMPLES = [
-  'An open house invite for 18 July',
-  'make the background wisteria',
-  'add small text at the bottom that says pickup is at 3pm',
-];
+// (D1 item 7) They ROTATE and vary in KIND — a whole post AND small changes — so
+// the empty state teaches the RANGE of what you can say, consistent with the
+// landing suggestions. Reshuffled per mount.
+const EMPTY_POOL = {
+  posts: [
+    'An open house invite for 18 July',
+    "We're hiring educators",
+    'A warm welcome-back-to-school post',
+    'A thank-you post for our volunteers',
+  ],
+  tweaks: [
+    'make the background wisteria',
+    'add small text at the bottom that says pickup is at 3pm',
+    'make it warmer',
+    'try another layout',
+    'change the photo to children painting',
+  ],
+};
+function sampleOne(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function sampleN(arr, n) {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; }
+  return copy.slice(0, n);
+}
+function rotatingEmptyExamples() {
+  return [sampleOne(EMPTY_POOL.posts), ...sampleN(EMPTY_POOL.tweaks, 2)];
+}
+// Stable default for SSR + first client paint (no hydration mismatch); the client
+// reshuffles after mount.
+const DEFAULT_EMPTY_EXAMPLES = [EMPTY_POOL.posts[0], EMPTY_POOL.tweaks[0], EMPTY_POOL.tweaks[1]];
 
 /* A few early sessions were titled with the internal Higgsfield photographer
    prompt (the title fix now uses the user's brief). Defensively scrub those
@@ -123,6 +148,9 @@ function compactDiff(before, after) {
 
 export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
+  // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
+  // paint; reshuffled to a fresh mix after mount (see effect below).
+  const [emptyExamples, setEmptyExamples] = useState(DEFAULT_EMPTY_EXAMPLES);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -165,6 +193,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       } catch { /* ignore */ }
     }
     setHydrated(true);
+    setEmptyExamples(rotatingEmptyExamples()); // (D1 item 7) fresh mix after mount
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Session SWAP: opening another post (restoreKey changes) replaces the visible
@@ -610,7 +639,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           <div className="ad-empty">
             <p className="ad-empty-lead">Tell me what to make — or what to change. Tap one to try it:</p>
             <div className="ad-empty-chips">
-              {EMPTY_EXAMPLES.map(ex => (
+              {emptyExamples.map(ex => (
                 <button key={ex} type="button" className="ad-empty-chip" disabled={loading}
                   onClick={() => send(ex)}>
                   {ex}
