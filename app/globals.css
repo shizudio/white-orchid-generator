@@ -1190,6 +1190,22 @@ canvas[role="application"]:focus-visible {
   white-space: nowrap;
   transition: background 140ms ease, border-color 140ms ease;
 }
+/* (D1 item 3) Re-rank: the secondary menu cluster recedes to a calmer weight so
+   Export + Undo lead. Muted ink, lighter — still fully reachable. */
+.wo-topbtn--recede {
+  color: color-mix(in srgb, var(--tw-burnham) 62%, transparent);
+  font-weight: 400;
+}
+.wo-topbtn--recede:hover { color: var(--tw-burnham); }
+.wo-topbtn--recede[aria-expanded="true"] { color: var(--tw-burnham); font-weight: 500; }
+/* Undo leads alongside Export: full-weight ink + a quiet hairline so it reads as
+   a primary control, not a menu label. */
+.wo-topbtn--lead {
+  color: var(--tw-burnham);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--tw-burnham) 22%, transparent);
+}
+.wo-topbtn--lead:disabled { border-color: transparent; }
 .wo-topbtn:hover { background: color-mix(in srgb, var(--tw-celadon) 20%, transparent); }
 .wo-topbtn[aria-expanded="true"] { border-color: color-mix(in srgb, var(--tw-burnham) 30%, transparent); background: color-mix(in srgb, var(--tw-celadon) 24%, transparent); }
 .wo-topbtn:disabled { cursor: default; }

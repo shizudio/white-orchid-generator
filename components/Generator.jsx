@@ -8056,16 +8056,19 @@ export default function App() {
             the contextual inspector. ── */}
       <div className="wo-topbar" role="toolbar" aria-label="Design globals">
         {topBarButtons.map(b=>(
-          <button key={b.id} type="button" className="wo-topbtn" aria-expanded={topMenu===b.id}
+          <button key={b.id} type="button" className="wo-topbtn wo-topbtn--recede" aria-expanded={topMenu===b.id}
             onClick={()=>setTopMenu(prev=>prev===b.id?null:b.id)}>
             {b.label}
             {b.badge && <span aria-hidden="true" style={{display:"inline-block",width:6,height:6,borderRadius:3,background:B.tangerine,marginLeft:6,verticalAlign:"middle"}} />}
           </button>
         ))}
         <span style={{flex:1}} />
-        <button type="button" className="wo-topbtn" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
+        {/* (D1 item 3) Export + Undo LEAD — the finish and the muscle-memory
+            action. Posts/Templates/Format/Type/+Add recede (--recede) so these
+            two carry the top bar. */}
+        <button type="button" className="wo-topbtn wo-topbtn--lead" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
           title={aiUndoStack.length?"Undo the last change (⌘Z · redo ⇧⌘Z)":"Nothing to undo"}
-          style={{opacity:aiUndoStack.length?1:0.35}}>
+          style={{opacity:aiUndoStack.length?1:0.4}}>
           ↶ Undo
         </button>
         <button type="button" className="wo-topbtn wo-topbtn-accent" aria-expanded={topMenu==="export"}
@@ -8108,7 +8111,11 @@ export default function App() {
           />
         </aside>
         {/* ── PREVIEW ── */}
-        <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"22px 28px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
+        {/* (D1 item 2) Canvas is the hero — an intentional, calm centered stage.
+            Generous even margin frames the poster as one deliberate object; the
+            surrounding chrome is quieted (top bar re-rank, inspector as column)
+            so the design dominates the squint test. No new decoration. */}
+        <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"36px 28px 30px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
           <div ref={previewRef} className="generator-preview-frame"
             style={{width:"100%",maxWidth:820,display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef} style={{
