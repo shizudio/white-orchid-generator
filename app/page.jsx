@@ -49,14 +49,16 @@ const DEFAULT_EXAMPLES = [...EXAMPLE_POOL.posts.slice(0, 3), EXAMPLE_POOL.tweaks
 // the starting design. Keep in sync with components/Generator.jsx.
 const HANDOFF_KEY = 'wo-landing-plan';
 
-// Staged progress copy for the photo-generation wait (~20–45s). Advanced on a
-// timer so the wait reads as intentional craft rather than a hang.
-const GEN_STAGES = [
-  'Composing your design…',
-  'Finding the right photo…',
-  'Setting the type and colour…',
-  'Almost there…',
-];
+// (B2) HONEST staged progress — each line is tied to a REAL pipeline phase, not a
+// blind timer: writing the brief → generating the photo (the long one, said so) →
+// composing. The photo phase adds a gentle in-phase reassurance line on a slow timer
+// because that single request genuinely runs ~20–45s.
+const GEN_PHASE = {
+  brief:   'Writing your copy…',
+  photo:   'Finding your photo — this takes a few moments',
+  photoWait: 'Still finding the right photo…',
+  compose: 'Composing your design…',
+};
 // Poll budget for the photo generation before we hand off text-only: ~70s of GET
 // polls at a 3s cadence. Higgsfield photo gens run ~20–45s.
 const GEN_POLL_INTERVAL_MS = 3_000;
@@ -119,16 +121,16 @@ export default function Home() {
     return null;
   }
 
-  function startStageTicker() {
-    let i = 0;
-    setStage(GEN_STAGES[0]);
-    stageTimerRef.current = setInterval(() => {
-      i = Math.min(i + 1, GEN_STAGES.length - 1);
-      setStage(GEN_STAGES[i]);
-    }, 9_000);
+  // (B2) The photo phase is one long request (~20–45s); after ~12s in it, soften
+  // the wait with a second reassurance line so it never reads as a hang. Cleared on
+  // any phase change.
+  function enterPhotoPhase() {
+    setStage(GEN_PHASE.photo);
+    if (stageTimerRef.current) clearTimeout(stageTimerRef.current);
+    stageTimerRef.current = setTimeout(() => setStage(GEN_PHASE.photoWait), 12_000);
   }
   function stopStageTicker() {
-    if (stageTimerRef.current) { clearInterval(stageTimerRef.current); stageTimerRef.current = null; }
+    if (stageTimerRef.current) { clearTimeout(stageTimerRef.current); stageTimerRef.current = null; }
     setStage('');
   }
 
@@ -137,7 +139,8 @@ export default function Home() {
     if (!content || loading) return;
     setLoading(true);
     setNote('');
-    startStageTicker();
+    // PHASE 1 — brief/copy. Honest label for the first (fast) request.
+    setStage(GEN_PHASE.brief);
     try {
       // 1. Get the design PLAN (archetype + copy + optional scenePrompt) — our
       //    engine composes the post; the photo (if any) is generated next.
@@ -154,11 +157,16 @@ export default function Home() {
       }
       // 2. If photo-led, GENERATE the background photo (Higgsfield). Fall back to any
       //    Library photo the plan attached, else stay text-only (solid field).
+      // PHASE 2 — photo generation (the longest step; the copy says so).
       let imageUrl = data.imageUrl || null;
       if (data.scenePrompt) {
+        enterPhotoPhase();
         const photo = await generateScenePhoto(data.scenePrompt);
         if (photo) imageUrl = photo;
       }
+      // PHASE 3 — composing + handing off to the editor.
+      stopStageTicker();
+      setStage(GEN_PHASE.compose);
       // 3. Hand off the composed design + photo to the editor.
       try {
         sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
