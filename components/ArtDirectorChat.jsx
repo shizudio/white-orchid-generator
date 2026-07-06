@@ -1241,13 +1241,22 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         ))}
       </div>
 
-      {/* (WP-Z) Slash discoverability — typing "/" alone reveals the one command we
-          have. Airy, on-brand, one line; disappears the moment the input grows. */}
-      {input.trim() === '/' && (
-        <div className="ad-slash-hint" role="status">
-          <button type="button" className="ad-slash-cmd" onClick={() => { setInput('/feedback '); inputRef.current?.focus(); }}>
-            <span className="ad-slash-name">/feedback</span>
-            <span className="ad-slash-desc">report something that isn’t working right</span>
+      {/* (WP-Z) Slash discoverability — shown while the input is any prefix of
+          "/feedback" ("/", "/f", … "/feedback"), so it guides the whole way through
+          typing the command and stays until the text diverges. Styles are INLINE on
+          purpose: the ad-slash-* CSS was stranded uncommitted in another workstream,
+          which shipped this hint unstyled to staging — self-contained now. */}
+      {(() => { const t = input.trim().toLowerCase(); return t.startsWith('/') && '/feedback'.startsWith(t); })() && (
+        <div role="status" style={{ padding: '0 14px 6px' }}>
+          <button type="button" onClick={() => { setInput('/feedback '); inputRef.current?.focus(); }}
+            style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, maxWidth: '100%',
+              padding: '6px 12px', borderRadius: 999, border: '1px solid rgba(37,78,72,0.18)',
+              background: '#FBFBF2', cursor: 'pointer', textAlign: 'left' }}>
+            <span style={{ fontFamily: 'var(--font-syne, sans-serif)', fontSize: 11.5, fontWeight: 700,
+              letterSpacing: 0.4, color: '#254E48', whiteSpace: 'nowrap' }}>/feedback</span>
+            <span aria-hidden="true" style={{ color: 'rgba(37,78,72,0.45)', fontSize: 11.5 }}>—</span>
+            <span style={{ fontFamily: 'var(--font-body, sans-serif)', fontSize: 12, color: 'rgba(40,43,40,0.75)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>report something that isn’t working right</span>
           </button>
         </div>
       )}
