@@ -1271,7 +1271,7 @@ function mixHex(a, b, t){
   const r=Math.round(A.r+(Bc.r-A.r)*k), g=Math.round(A.g+(Bc.g-A.g)*k), bl=Math.round(A.b+(Bc.b-A.b)*k);
   return "#"+[r,g,bl].map(v=>v.toString(16).padStart(2,"0")).join("");
 }
-const SOFT_TANGERINE = mixHex("#F6644E", "#F5F6E7", 0.10); // ≈ #F6705B
+const SOFT_TANGERINE = mixHex(DEFAULT_PALETTE.tangerine, DEFAULT_PALETTE.whiteSmoke, 0.10); // (P1 item g) the codified accent, derived from brand-defaults (≈ #F6705B for White Orchid)
 const ARCHETYPE_COLORS = {
   softTangerine: SOFT_TANGERINE, // the codified accent (spec §3 / §5.2)
   // Curated pastel family — one family per post (spec §3). Single source of truth in
@@ -1298,7 +1298,7 @@ const PASTEL_IDS = ["dustyPink","butter","sky","sage","terracotta","lilac"];
 function applyDuotone(ctx, x, y, w, h, opts={}){
   const s=opts.strength==null?0.5:Math.max(0,Math.min(1,opts.strength));
   const alpha=0.35+(0.45-0.35)*s;
-  const color=opts.color||"#254E48"; // burnham
+  const color=opts.color||DEFAULT_PALETTE.burnham; // brand ink fallback (item g)
   ctx.save();
   ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
   // (§3.5) FIRST reduce the photo's own saturation so the deep-green `color` pass
@@ -1328,7 +1328,7 @@ function applyDuotone(ctx, x, y, w, h, opts={}){
 // the unmistakably-green, high-contrast treatment (≤1-in-8 posts) — the correct fix
 // for the "full-bleed duotone too timid / reads full-colour" client bug.
 function applyStrongDuotone(ctx, x, y, w, h, opts={}){
-  const green=opts.color||"#254E48", ivory=opts.ivory||"#F5F6E7";
+  const green=opts.color||DEFAULT_PALETTE.burnham, ivory=opts.ivory||DEFAULT_PALETTE.whiteSmoke; // brand fallbacks (item g)
   ctx.save();
   ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
   // Full desaturate to a grayscale base.
@@ -1355,7 +1355,7 @@ function applySoftLift(ctx, x, y, w, h, opts={}){
   ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
   ctx.globalCompositeOperation="soft-light";
   ctx.globalAlpha=alpha;
-  ctx.fillStyle=opts.color||"#F5F6E7"; // ivory
+  ctx.fillStyle=opts.color||DEFAULT_PALETTE.whiteSmoke; // ivory (item g)
   ctx.fillRect(x,y,w,h);
   ctx.restore();
 }
@@ -1426,7 +1426,7 @@ function applyWarmGrade(ctx, x, y, w, h, opts={}){
   // 3. gentle highlight lift for the bright/airy feel (screen ivory, very light).
   ctx.globalCompositeOperation="screen";
   ctx.globalAlpha=0.05+0.05*s;
-  ctx.fillStyle="#F5F6E7"; ctx.fillRect(x,y,w,h);
+  ctx.fillStyle=DEFAULT_PALETTE.whiteSmoke; ctx.fillRect(x,y,w,h); // (item g)
   ctx.restore();
   // optional faint grain for the film feel, capped ≤0.06.
   applyFilmGrain(ctx,x,y,w,h,{strength:0.15,desat:0,seed:opts.seed==null?2027:opts.seed});
@@ -2485,7 +2485,7 @@ function drawOutlineLayer(ctx, oc, shapeImg, w, h, t, color, width) {
   for (let i = 0; i < 8; i++) drawOverlayLayer(o, shapeImg, w, h, { ...inner, opacity:1 });
   // fill the ring with the chosen solid colour
   o.globalCompositeOperation = "source-in";
-  o.fillStyle = color || "#F6644E"; o.fillRect(0, 0, w, h);
+  o.fillStyle = color || DEFAULT_PALETTE.tangerine; o.fillRect(0, 0, w, h); // (item g)
   o.globalCompositeOperation = "source-over";
   ctx.save();
   ctx.globalAlpha = t.opacity ?? 1;
