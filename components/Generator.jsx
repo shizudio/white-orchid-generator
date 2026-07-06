@@ -1978,6 +1978,15 @@ function reflowEditorial(ctx, a){
   const supTarget=(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8);
   const supFloor=MIN_FONT_PX.body(h);
   let supStart=Math.max(0.02*h,supTarget,supFloor);
+  // (born-clean 2026-07-06) The caption's RATIO target (heroPx/heroToSupport) was
+  // OVERRIDDEN by the legibility floor — i.e. the archetype wanted a caption smaller
+  // than the body floor, so the system raised it to stay readable. When this happens
+  // the achieved hero:support ratio is FORCED below the archetype's target BY DESIGN,
+  // not by drift: the archetype-hero-ratio advisor must not scold the system for its
+  // own legibility decision (that would put an advisor dot on a fresh, correct design).
+  // Flag it so runArchetypeDrift can suppress the ratio finding (mirrors the existing
+  // multi-word-hero legibility exception).
+  const bodyAtFloor = supTarget < supFloor - 0.5;
   let supMin=minFloor("body",h,supStart,24*S);
   if(supBox){
     // (rev: calibration r1) Normalise the hero↔support rhythm: whenever the support
@@ -2013,7 +2022,7 @@ function reflowEditorial(ctx, a){
     if(supBox.h<supMin*1.3) flooredRoles.push({label:"Body text"});
   }
   return { heroBox, supBox, labelBox, heroStart:Math.max(heroStart,heroMin), heroMin,
-           heroPx, labelSize, supStart, supMin, flooredRoles };
+           heroPx, labelSize, supStart, supMin, flooredRoles, bodyAtFloor };
 }
 
 function sampleOverallLuminance(source){
@@ -2589,6 +2598,12 @@ export default function App() {
   // the inspector's "Not shown in this layout" marking. Refs are written inside
   // renderScene; the draw effect syncs deadRoles into state (guarded, no loops).
   const logoBoxRef = useRef(null);
+  // (B2 photo pan) The photo's ACTUAL drawn WINDOW from the last live render:
+  // { x,y,w,h (export px), kind:"full"|"split"|"card"|"mask", sideBand:bool }.
+  // Full-bleed → whole canvas; split/card/mask → the region rect. onPanStart hit-tests
+  // + places the reframe handles against THIS window (not the full-canvas photoGeom),
+  // so dragging the photo in a side/window layout reframes it. null when no photo drawn.
+  const photoWindowRef = useRef(null);
   const deadRolesRef = useRef([]);
   const [deadRoles, setDeadRoles] = useState([]);
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
@@ -2617,6 +2632,13 @@ export default function App() {
   // Per-dimension manual photo overrides {dimId:{...imgT}} — written only when the
   // user drags/zooms the photo while a non-master dimension is active (spec §4).
   const [imgTByDim, setImgTByDim] = useState({});
+  // (B2 photo pan) USER PHOTO PIN. On editorial/split/card/mask layouts the render
+  // auto-crops the windowed photo toward its focal point (mat.cropDrama), IGNORING
+  // imgT — so a user drag had no effect (the client's "can't shift the photo" bug).
+  // Once the user reframes, their transform is a PIN that wins over the auto crop for
+  // THAT dimension (user is the boss). Keyed by dimId so a square reframe never carries
+  // verbatim onto other formats. Cleared on a fresh photo / archetype (auto again).
+  const [photoTouchedByDim, setPhotoTouchedByDim] = useState({});
   const [photoSel, setPhotoSel] = useState(false);   // photo selected → show transform handles
   const [mediaKind, setMediaKind] = useState("image"); // image | video
   const [markTab, setMarkTab] = useState("primary");   // primary | secondary | overlays
@@ -2875,6 +2897,22 @@ export default function App() {
   // UI photo reframes (drag / handles / keyboard / quick chips) emit patches
   // through THE pipeline — same undo + harmonizer path as everything else.
   const patchPhoto = (t) => applyPatch({ photoTransform: t }, { source: "ui" });
+  // (B2) Pin the CURRENT dimension's photo transform as user-owned so effImgTFor
+  // honours it verbatim over the auto focal crop (user is the boss). Seeds the pin's
+  // base from the transform the window ACTUALLY drew with (`base`, incl. the cropDrama
+  // zoom) so pinning doesn't snap the photo back to imgT's zoom=1 — the reframe
+  // continues from exactly what was on screen. Idempotent within a gesture.
+  const pinPhotoTouched = (base) => {
+    const seed = base && typeof base === "object"
+      ? { zoom: base.zoom ?? 1, cx: base.cx ?? 0.5, cy: base.cy ?? 0.5, rotation: base.rotation ?? 0 }
+      : null;
+    setPhotoTouchedByDim(prev => prev[dimensionId] ? prev : { ...prev, [dimensionId]: true });
+    if (dimensionId === MASTER_DIM) {
+      if (seed) setImgT(prev => ({ ...prev, ...seed }));
+    } else {
+      setImgTByDim(prev => prev[dimensionId] ? prev : { ...prev, [dimensionId]: seed || { ...photoT } });
+    }
+  };
 
   // Effective layout for the CURRENT dimension (spec resolution rule). The ACTIVE
   // ARCHETYPE must travel into the resolution (template-revert fix): without it the
@@ -3071,6 +3109,7 @@ export default function App() {
     // first-class undoable patches.
     image, imgT: JSON.parse(JSON.stringify(imgT)),
     imgTByDim: JSON.parse(JSON.stringify(imgTByDim)),
+    photoTouchedByDim: JSON.parse(JSON.stringify(photoTouchedByDim)),
   });
   const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
 
@@ -3184,6 +3223,8 @@ export default function App() {
     // Fresh materialization on master clears stale per-dim drags so the archetype's
     // own per-dim geometry cascades (resolveTextLayout re-materializes per format).
     setTypeLayoutsByDim({});
+    setPhotoTouchedByDim({});   // (B2) fresh archetype → auto photo crop again
+    setImgTByDim({});
     if (mat.motifLayers) setOverlayLayers(mat.motifLayers);
     else setOverlayLayers(prev => prev.filter(l => !l.motif));
     // (WP-W0) a fresh archetype brings fresh furniture — stale per-piece overrides
@@ -3574,7 +3615,7 @@ export default function App() {
       typeLayouts: freshTypeLayouts(), userLogoTouched: false,
       logoByDim: {}, typeLayoutsByDim: {}, fontSizes: freshFontSizes(),
       overlayLayers: [], furnitureOverrides: {}, markTab: "primary",
-      image: SAMPLE_IMAGES[0].full, imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 }, imgTByDim: {},
+      image: SAMPLE_IMAGES[0].full, imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 }, imgTByDim: {}, photoTouchedByDim: {},
     });
     setGenBrief(null);
     setActiveTemplateName("");
@@ -3678,6 +3719,7 @@ export default function App() {
       if (s.imgT) setImgT(s.imgT);
     }
     if (s.imgTByDim) setImgTByDim(s.imgTByDim);
+    setPhotoTouchedByDim("photoTouchedByDim" in s ? (s.photoTouchedByDim || {}) : {});
     setPhotoSel(false);
   };
 
@@ -4101,7 +4143,7 @@ export default function App() {
   };
 
   /* ── Reset reframe when a new photo/video loads ── */
-  useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setImgTByDim({}); setPhotoSel(false); }, [imageObj, videoObj]);
+  useEffect(() => { setImgT({ zoom:1, cx:0.5, cy:0.5, rotation:0 }); setImgTByDim({}); setPhotoTouchedByDim({}); setPhotoSel(false); }, [imageObj, videoObj]);
 
   // Accessibility director: whenever the image, background, format or template
   // changes, find quiet regions, avoid text/logo collisions, and apply the
@@ -4844,6 +4886,13 @@ export default function App() {
     // even on the master dim so the calibration board reflects the drama.
     const cropDrama=(typeof mat?.cropDrama==="number"&&mat.cropDrama>1)?mat.cropDrama:1;
     const effImgTFor=(pw,ph,isSideBand)=>{
+      // (B2) A USER PIN wins over the auto focal crop for this dimension, regardless of
+      // cropDrama — the user's drag/zoom is honoured verbatim (applied within the window
+      // by drawPhotoFramed's cover-fit). Without this, cropDrama>1 archetypes (split,
+      // card, mask) ignored imgT and a pan did nothing.
+      if(!_calibRender && photoTouchedByDim[dimId]){
+        return dimId===MASTER_DIM ? imgT : (imgTByDim[dimId] || imgT);
+      }
       if(dimId===MASTER_DIM && cropDrama<=1)return imgT;
       if(imgTByDim[dimId] && cropDrama<=1)return imgTByDim[dimId];
       if(!mediaObj)return imgT;
@@ -5043,29 +5092,40 @@ export default function App() {
       };
       const treatOf=id=>PHOTO_TREATMENTS[id]||PHOTO_TREATMENTS.none;
       const frame=mat.photoFrame||{type:"none"};
+      // (B2) record the drawn photo window (live only) for pan hit-testing. `eff` is the
+      // NORMALIZED transform the window actually rendered with (from effImgTFor) — the
+      // pan seeds its cx/cy/zoom from it so the FIRST drag continues from the drawn crop
+      // (no jump) even when the auto focal crop, not imgT, produced the frame.
+      const _recPhotoWin=(rect,kind,sideBand,eff)=>{ if(live && mediaObj) photoWindowRef.current={x:rect.x,y:rect.y,w:rect.w,h:rect.h,kind,sideBand:!!sideBand,eff:eff?{cx:eff.cx,cy:eff.cy,zoom:eff.zoom,rotation:eff.rotation||0}:null}; };
       // 1. Base field or full-bleed photo (photoTreatment materialized as state).
       if(mat.fullBleed && mediaObj){
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
         if(mat.thinBorder){
           const p=clampBox(mat.photoRegion)||{x:0.03*w,y:0.03*h,w:0.94*w,h:0.94*h};
+          const _e=effImgTFor(w,h,false);
           ctx.save(); ctx.beginPath(); ctx.rect(p.x,p.y,p.w,p.h); ctx.clip();
-          drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
+          drawPhotoFramed(ctx,mediaObj,w,h,_e);
           treatOf(mat.photoTreatment)(ctx,p.x,p.y,p.w,p.h);
           ctx.restore();
+          _recPhotoWin(p,"full",false,_e);
         }else{
-          drawPhotoFramed(ctx,mediaObj,w,h,effImgTFor(w,h,false));
+          const _e=effImgTFor(w,h,false);
+          drawPhotoFramed(ctx,mediaObj,w,h,_e);
           treatOf(mat.photoTreatment)(ctx,0,0,w,h);
+          _recPhotoWin({x:0,y:0,w,h},"full",false,_e);
         }
       }else{
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
       }
       const drawSplitPhoto=(box)=>{
         if(!mediaObj||!box) return;
+        const _e=effImgTFor(box.w,box.h,true);
         ctx.save(); ctx.beginPath(); ctx.rect(box.x,box.y,box.w,box.h); ctx.clip();
         ctx.translate(box.x,box.y);
-        drawPhotoFramed(ctx,mediaObj,box.w,box.h,effImgTFor(box.w,box.h,true));
+        drawPhotoFramed(ctx,mediaObj,box.w,box.h,_e);
         ctx.restore();
         treatOf(mat.photoTreatment)(ctx,box.x,box.y,box.w,box.h);
+        _recPhotoWin(box,"split",true,_e);
       };
       // 2. Photo frame (card / petal window) or plain split — keyed on materialized
       //    photoFrame, not archetype. A `cardBox`/`maskBox` is returned so the reflow
@@ -5082,14 +5142,24 @@ export default function App() {
           const bpad=Math.max(2,0.01*Math.min(w,h));
           ctx.fillStyle=(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke); rr(c.x-bpad,c.y-bpad,c.w+bpad*2,c.h+bpad*2,r+bpad); ctx.fill();
           ctx.save(); rr(c.x,c.y,c.w,c.h,r); ctx.clip();
-          if(mediaObj){ ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,effImgTFor(c.w,c.h,true)); ctx.restore();
+          if(mediaObj){ const _e=effImgTFor(c.w,c.h,true); ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,_e); ctx.restore();
             treatOf(mat.photoTreatment)(ctx,c.x,c.y,c.w,c.h);
+            _recPhotoWin(c,"card",true,_e);
           }else{ ctx.fillStyle=withAlpha(B.celadon,1); ctx.fillRect(c.x,c.y,c.w,c.h); }
           ctx.restore();
           ctx.restore();
         }
       }else if(frame.type==="petalMask"){
-        const m=clampBox(frame.box); maskBox=m;
+        const m0=clampBox(frame.box);
+        // (B8 petal coherence) The orchid silhouette is (near-)SQUARE. Drawing it at
+        // Math.max(m.w,m.h) while filling the photo into the full m.w×m.h RECT made the
+        // outline and the photo rect DISAGREE on wide formats (a rectangle floating in a
+        // larger petal outline — the client's Banner bug). Lock the mask to a single
+        // SQUARE window = min(m.w,m.h), centred in the authored box, and draw BOTH the
+        // silhouette AND the photo into that SAME square so outline+photo+window are one
+        // aligned unit on every one of the 6 formats.
+        const m = m0 ? (()=>{ const sq=Math.min(m0.w,m0.h); return {x:m0.x+(m0.w-sq)/2, y:m0.y+(m0.h-sq)/2, w:sq, h:sq}; })() : null;
+        maskBox=m;
         const orchid=archAssetImgs.current["orchid-petal"];
         if(m && mediaObj && orchid){
           const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
@@ -5099,10 +5169,12 @@ export default function App() {
           for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
           octx.globalCompositeOperation="source-in";
           octx.translate(-(m.x+m.w/2),-(m.y+m.h/2));
+          const _eM=effImgTFor(m.w,m.h,true);
           octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
-          drawPhotoFramed(octx,mediaObj,m.w,m.h,effImgTFor(m.w,m.h,true)); octx.restore();
+          drawPhotoFramed(octx,mediaObj,m.w,m.h,_eM); octx.restore();
           octx.globalCompositeOperation="source-over";
           octx.restore();
+          _recPhotoWin(m,"mask",true,_eM);
           // Treat the masked photo (WP-U: the MATERIALIZED treatment — warm grade by
           // default; green duotone only when the design explicitly carries it), then
           // RE-MASK: blend passes paint the whole rect (incl. the transparent area
@@ -5749,6 +5821,9 @@ export default function App() {
           archetypeDrift:{
             heroSupportRatio, heroWords:(stripHeroMarkers(heroFinal||"").trim().split(/\s+/).filter(Boolean).length),
             supportFloor:(mat.heroToSupport||8),
+            // (born-clean) the caption was raised to its legibility floor, forcing the
+            // ratio below target BY DESIGN — suppresses the ratio-drift advisor dot.
+            bodyAtFloor:!!(reflow&&reflow.bodyAtFloor),
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
@@ -6139,7 +6214,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,archVariant,bgColor,fieldColorOverride,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
+  },[postType,archetypeId,archVariant,bgColor,fieldColorOverride,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,photoTouchedByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback((source) => {
@@ -7495,27 +7570,37 @@ export default function App() {
   const dragRef = useRef(null);
   const canPan = !!mediaObj;
   const HANDLE_HIT = 24;   // px radius to grab a corner / rotate handle
+  // (B2) The photo's DRAWN WINDOW (export px). On split/card/mask layouts the photo
+  // fills only a region — the reframe UI (handles + hit-test + pan clamp) must operate
+  // on THAT window, not the whole canvas. Full-bleed → whole canvas. Falls back to the
+  // full canvas when no window was recorded (legacy paths).
+  const photoWindow = () => {
+    const wnd = photoWindowRef.current;
+    if (wnd && wnd.w > 1 && wnd.h > 1) return wnd;
+    return { x: 0, y: 0, w: W, h: H, kind: "full", sideBand: false };
+  };
   // Photo handles in display (screen) px: 4 rotated corners + a rotate knob + center.
+  // Anchored to the drawn WINDOW: the photo cover-fills its window, so the window rect
+  // IS the visible photo. Handles sit at the window's (rotated) corners.
   const photoHandles = (rect) => {
     if (!mediaObj) return null;
-    const g = photoGeom(mediaObj, W, H, photoT);
-    if (!g) return null;
+    const wnd = photoWindow();
     const k = rect.width / W;                            // display px per export px
     const toD = (px,py) => ({ x:rect.left + px*k, y:rect.top + py*k });
-    const a = (g.rot||0)*Math.PI/180, cos=Math.cos(a), sin=Math.sin(a);
-    const rotPt = (lx,ly) => toD(g.cx + lx*cos - ly*sin, g.cy + lx*sin + ly*cos);
-    const hw=g.dw/2, hh=g.dh/2;
-    // Keep handles reachable even when a cover-cropped image extends off-canvas.
+    const a = (photoT.rotation||0)*Math.PI/180, cos=Math.cos(a), sin=Math.sin(a);
+    const cxW = wnd.x + wnd.w/2, cyW = wnd.y + wnd.h/2;
+    const rotPt = (lx,ly) => toD(cxW + lx*cos - ly*sin, cyW + lx*sin + ly*cos);
+    const hw=wnd.w/2, hh=wnd.h/2;
     const keepVisible = p => ({
       x: Math.max(rect.left + 14, Math.min(rect.right - 14, p.x)),
       y: Math.max(rect.top + 14, Math.min(rect.bottom - 14, p.y)),
     });
     const corners = [rotPt(-hw,-hh), rotPt(hw,-hh), rotPt(hw,hh), rotPt(-hw,hh)].map(keepVisible);
     const rotKnob = keepVisible(rotPt(0, -hh - 30/k));   // ~30 display px above top edge
-    const centerD = toD(g.cx, g.cy);
-    return { g, k, cos, sin, hw, hh, corners, rotKnob, centerD };
+    const centerD = toD(cxW, cyW);
+    return { wnd, k, cos, sin, hw, hh, corners, rotKnob, centerD };
   };
-  // Is a display point inside the (rotated) photo box?
+  // Is a display point inside the (rotated) photo WINDOW?
   const pointInPhoto = (hp, X, Y) => {
     const lx = (X - hp.centerD.x)/hp.k, ly = (Y - hp.centerD.y)/hp.k; // → export px, centered
     const rx =  lx*hp.cos + ly*hp.sin, ry = -lx*hp.sin + ly*hp.cos;   // un-rotate
@@ -7586,21 +7671,28 @@ export default function App() {
     if (!hp) { selectElement("bg"); return; }
     const near = (p) => Math.hypot(e.clientX-p.x, e.clientY-p.y) <= HANDLE_HIT;
     // Rotate + resize handles only active once the photo is selected.
+    const _eff = (hp.wnd && hp.wnd.eff) ? hp.wnd.eff : photoT;
     if (photoSel && near(hp.rotKnob)) {
       const a0 = Math.atan2(e.clientY-hp.centerD.y, e.clientX-hp.centerD.x);
-      dragRef.current = { mode:"rotate", a0, startRot:photoT.rotation||0, cD:hp.centerD };
+      dragRef.current = { mode:"rotate", a0, startRot:_eff.rotation||0, cD:hp.centerD, base:_eff };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     if (photoSel && hp.corners.some(near)) {
       const startDist = Math.hypot(e.clientX-hp.centerD.x, e.clientY-hp.centerD.y) || 1;
-      dragRef.current = { mode:"resize", startDist, startZoom:photoT.zoom, cD:hp.centerD };
+      dragRef.current = { mode:"resize", startDist, startZoom:_eff.zoom||1, cD:hp.centerD, base:_eff };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     if (pointInPhoto(hp, e.clientX, e.clientY)) {
       setPhotoSel(true); setSelOverlay(null); setBgSel(false); setLogoSel(false);
       // Canvas convergence: tapping the photo opens the Photo inspector.
       setInspectorEl("photo");
-      dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:photoT.cx, cy:photoT.cy, rect };
+      // (B2) carry the drawn WINDOW so the pan delta is 1:1 within the window (a split
+      // photo occupies part of the canvas — mapping the drag to full-canvas width made
+      // the photo barely move). Seed cx/cy from the window's ACTUAL drawn transform
+      // (hp.wnd.eff) so the first drag continues from the auto crop with no jump. The
+      // pin is set on first movement (onPanMove).
+      const _base = (hp.wnd && hp.wnd.eff) ? hp.wnd.eff : photoT;
+      dragRef.current = { mode:"photomove", x:e.clientX, y:e.clientY, cx:_base.cx, cy:_base.cy, rect, wnd:hp.wnd, k:hp.k, base:_base, moved:false };
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
     }
     // (WP-V §2.2) Dead clicks are impossible: empty canvas IS the background
@@ -7631,6 +7723,7 @@ export default function App() {
       const snap = Math.round(deg/45)*45;
       if (Math.abs(deg - snap) < 6) deg = snap;
       deg = ((deg % 360) + 360) % 360; if (deg > 180) deg -= 360;
+      if (!d.pinned) { d.pinned = true; pinPhotoTouched(d.base); }
       patchPhoto({ rotation:Math.round(deg*10)/10 });
       return;
     }
@@ -7639,15 +7732,22 @@ export default function App() {
       let z = Math.max(0.1, Math.min(6, d.startZoom * (dist / d.startDist)));
       // soft-lock to common sizes
       for (const s of [0.25,0.5,0.75,1,1.5,2]) { if (Math.abs(z-s) < 0.025) { z = s; break; } }
+      if (!d.pinned) { d.pinned = true; pinPhotoTouched(d.base); }
       patchPhoto({ zoom:z });
       return;
     }
     if (d.mode === "photomove") {
-      let cx = d.cx + (e.clientX - d.x) / d.rect.width;
-      let cy = d.cy + (e.clientY - d.y) / d.rect.height;
+      // (B2) 1:1 within the drawn WINDOW: divide the pointer delta by the window's
+      // display size (wnd.w*k display px), not the whole canvas, so the photo tracks
+      // the cursor in a split/card/mask window. Falls back to full canvas.
+      const winDW = (d.wnd && d.k) ? d.wnd.w * d.k : d.rect.width;
+      const winDH = (d.wnd && d.k) ? d.wnd.h * d.k : d.rect.height;
+      let cx = d.cx + (e.clientX - d.x) / winDW;
+      let cy = d.cy + (e.clientY - d.y) / winDH;
       // soft-lock to centered
       if (Math.abs(cx-0.5) < 0.02) cx = 0.5;
       if (Math.abs(cy-0.5) < 0.02) cy = 0.5;
+      if (!d.moved) { d.moved = true; pinPhotoTouched(d.base); }   // first move → pin (user is boss)
       patchPhoto({ cx, cy });
     }
   };
