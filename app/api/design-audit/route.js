@@ -62,11 +62,15 @@ function buildAuditSchema() {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['category', 'severity', 'message', 'fix'],
+          required: ['category', 'severity', 'message', 'element', 'fix'],
           properties: {
             category: { type: 'string', enum: ['hierarchy', 'brand', 'composition', 'polish'] },
             severity: { type: 'string', enum: ['fail', 'warn', 'info'] },
             message: { type: 'string', maxLength: 240 },
+            // (One Advice Ledger, rule 5) The element the observation concerns, so the
+            // finding can be anchored to a canvas dot + deduped/acked against the local
+            // checker. "canvas" = a whole-composition note with no single element.
+            element: { type: 'string', enum: ['headline', 'caption', 'logo', 'photo', 'background', 'canvas'] },
             fix: { anyOf: [fix, { type: 'null' }] },
           },
         },
@@ -101,6 +105,12 @@ export async function POST(request) {
   const dimensionId = PATCH_OPTIONS.dimensionId.includes(body.dimensionId) ? body.dimensionId : (designState.dimensionId || 'ig_square');
   const localFindings = Array.isArray(body.localFindings)
     ? body.localFindings.slice(0, 8).map(s => String(s || '').slice(0, 240)).filter(Boolean)
+    : [];
+  // (One Advice Ledger, rule 5) The audit is told what's already KNOWN (open local
+  // findings, above) and what's DECIDED (the user's "keep it this way" acks) so it
+  // reports only genuinely NEW observations and never re-litigates a settled choice.
+  const ackedNotes = Array.isArray(body.ackedNotes)
+    ? body.ackedNotes.slice(0, 12).map(s => String(s || '').slice(0, 240)).filter(Boolean)
     : [];
 
   let brandKit = null;
@@ -159,10 +169,14 @@ ${rubric}
 The following issues were ALREADY caught by a deterministic checker. Do NOT repeat them — assume they are handled:
 ${localFindings.length ? localFindings.map(f => `- ${f}`).join('\n') : '- (none)'}
 
+The user has already reviewed and DELIBERATELY KEPT these — do NOT flag them again, in any words; they are settled decisions, not problems:
+${ackedNotes.length ? ackedNotes.map(f => `- ${f}`).join('\n') : '- (none)'}
+
 You reply with JSON matching the provided schema: { passes, summary, findings }.
 - passes: true when the design is broadly good (only minor/no issues).
 - summary: 1-2 warm, plain-English sentences on overall quality.
-- findings: at MOST 5, only genuine subjective issues. Each has a category (hierarchy|brand|composition|polish), severity (fail|warn|info), a plain-English message, and a fix.
+- findings: at MOST 5, only genuine subjective issues that are NEW (not in the two lists above). Each has a category (hierarchy|brand|composition|polish), severity (fail|warn|info), a plain-English message, an element, and a fix.
+- element: which part of the design the observation is about — one of headline, caption, logo, photo, background, canvas. Use "canvas" only for a whole-composition note with no single element. This lets us point at the exact spot.
 - fix: a MINIMAL design patch (only the fields to change) drawn ONLY from the allowed non-copy options below, or null when no mechanical tweak applies. NEVER propose copy changes — you cannot rewrite text. NEVER invent ids.
 
 Allowed fix fields + values:
@@ -230,8 +244,10 @@ Current design (compact): ${JSON.stringify({ ...designState, dimensionId })}`;
     // Enforce the category→field coherence map (P2). For each finding, keep only the
     // fix fields its category allows; composition is always advice-only; an incoherent
     // uniform hierarchy resize is stripped. If nothing survives, fix becomes null.
+    const ELEMENTS = ['headline', 'caption', 'logo', 'photo', 'background', 'canvas'];
     const findings = (Array.isArray(parsed?.findings) ? parsed.findings.slice(0, 5) : []).map(f => ({
       ...f,
+      element: ELEMENTS.includes(f?.element) ? f.element : 'canvas',
       fix: coerceFixToCategory(f?.category, f?.fix, designState),
     }));
     return Response.json({ passes, summary, findings });
