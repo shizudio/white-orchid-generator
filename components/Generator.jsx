@@ -7736,6 +7736,69 @@ export default function App() {
   const dragRef = useRef(null);
   const canPan = !!mediaObj;
   const HANDLE_HIT = 24;   // px radius to grab a corner / rotate handle
+
+  /* ── SOFT-SNAP DRAG (feature C) ── Every draggable element (logo, text roles,
+     shapes) shows gentle magnetic SNAP TARGETS while dragging: the brand-standard
+     9-grid anchors (inset by the format's platform-safe zones), alignment lines to
+     other elements' edges/centres, and the element's ORIGINAL spot. Within ~12
+     display-px the drag is magnetically pulled to the nearest target and a thin
+     on-brand guide marks it; dragging firmly past breaks the snap — the user can
+     place ANYWHERE (their placement pins; snaps are suggestions, never constraints,
+     per the pins law). Release on a snap = clean placement at the standard spot.
+     prefers-reduced-motion suppresses the animated pull but STILL snaps on release. */
+  const SNAP_PX = 12;                     // magnetic radius in display px
+  const [snapGuide, setSnapGuide] = useState(null); // {lines:[{x1,y1,x2,y2}], dot:{x,y}} in FRACTIONS, or null
+  const snapGuideRef = useRef(null); snapGuideRef.current = snapGuide;
+  const reducedMotion = typeof window !== "undefined" && window.matchMedia
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false;
+  // The 9-grid anchor CENTRES for an element of size (ew,eh) fractions, inset by the
+  // current format's platform-safe zones (never under the platform action bands).
+  const snapAnchors = (ew, eh) => {
+    const safe = PLATFORM_SAFE[dimensionId] || {};
+    const padX = Math.max(0.05, (safe.left || 0) + 0.015, (safe.right || 0) + 0.015);
+    const padTop = Math.max(0.05, (safe.top || 0) + 0.015);
+    const padBot = Math.max(0.05, (safe.bottom || 0) + 0.015);
+    const xs = { left: padX + ew / 2, center: 0.5, right: 1 - padX - ew / 2 };
+    const ys = { top: padTop + eh / 2, center: 0.5, bottom: 1 - padBot - eh / 2 };
+    const out = [];
+    for (const [ky, cy] of Object.entries(ys)) for (const [kx, cx] of Object.entries(xs))
+      out.push({ id: `${ky}-${kx}`, cx, cy });
+    return out;
+  };
+  // Snap a proposed CENTRE (cx,cy fractions) for an element of size (ew,eh) against
+  // the anchors + other elements' edges/centres + the original spot. Returns the
+  // (possibly pulled) centre plus the guide to render. `rectPx` scales the px radius.
+  const snapCentre = (cx, cy, ew, eh, rectW, rectH, orig) => {
+    const rx = SNAP_PX / (rectW || 1), ry = SNAP_PX / (rectH || 1);
+    // Candidate X + Y snap coordinates (each carries a guide line to draw).
+    const xCands = [], yCands = [];
+    for (const a of snapAnchors(ew, eh)) { xCands.push({ v: a.cx, kind: "anchor" }); yCands.push({ v: a.cy, kind: "anchor" }); }
+    if (orig) { xCands.push({ v: orig.cx, kind: "orig" }); yCands.push({ v: orig.cy, kind: "orig" }); }
+    // Alignment to OTHER elements (roleBounds + logo box, excluding the dragged one):
+    // match centres and near edges. Boxes are export px → fractions.
+    const others = [];
+    const rb = roleBoundsRef.current || {};
+    for (const k of Object.keys(rb)) if (!orig || k !== orig.key) others.push(rb[k]);
+    if (logoBoxRef.current && (!orig || orig.key !== "logo")) others.push(logoBoxRef.current);
+    for (const b of others) {
+      const bx = b.x / W, by = b.y / H, bw = b.w / W, bh = b.h / H;
+      xCands.push({ v: bx + bw / 2, kind: "align" }, { v: bx, kind: "align" }, { v: bx + bw, kind: "align" });
+      yCands.push({ v: by + bh / 2, kind: "align" }, { v: by, kind: "align" }, { v: by + bh, kind: "align" });
+    }
+    let bestX = null, bestY = null;
+    for (const c of xCands) { const d = Math.abs(cx - c.v); if (d <= rx && (!bestX || d < bestX.d)) bestX = { ...c, d }; }
+    for (const c of yCands) { const d = Math.abs(cy - c.v); if (d <= ry && (!bestY || d < bestY.d)) bestY = { ...c, d }; }
+    const nx = bestX ? bestX.v : cx, ny = bestY ? bestY.v : cy;
+    // Guide: a vertical line at the engaged X, a horizontal line at the engaged Y,
+    // + a dot at the engaged intersection. (Fractions; the overlay SVG scales them.)
+    const lines = [];
+    if (bestX) lines.push({ x1: nx, y1: 0, x2: nx, y2: 1 });
+    if (bestY) lines.push({ x1: 0, y1: ny, x2: 1, y2: ny });
+    const dot = (bestX && bestY) ? { x: nx, y: ny } : null;
+    const guide = (bestX || bestY) ? { lines, dot } : null;
+    return { cx: nx, cy: ny, snapped: !!(bestX || bestY), guide };
+  };
+  const clearSnapGuide = () => { if (snapGuideRef.current) setSnapGuide(null); };
   // (B2) The photo's DRAWN WINDOW (export px). On split/card/mask layouts the photo
   // fills only a region — the reframe UI (handles + hit-test + pan clamp) must operate
   // on THAT window, not the whole canvas. Full-bleed → whole canvas. Falls back to the
@@ -7779,7 +7842,15 @@ export default function App() {
     if (selOverlay) {
       const layer = overlayLayers.find(l => l.uid === selOverlay);
       const t = layer ? effectiveT(layer) : null;
-      if (t) { setOverlayChromeVisible(true); setInspectorEl(selOverlay); dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect }; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return; }
+      if (t) {
+        setOverlayChromeVisible(true); setInspectorEl(selOverlay);
+        // (feature C) seed shape size + original centre for soft-snap.
+        const _asset=overlays.find(o=>o.id===layer.assetId);
+        const _esz=(t.scale??0.2), _eratio=_asset?.ratio||1;
+        dragRef.current = { mode:"overlay", x:e.clientX, y:e.clientY, ox:t.x, oy:t.y, rect,
+          esz:_esz, eratio:_eratio, orig:{key:"overlay",cx:t.x,cy:t.y} };
+        try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){} return;
+      }
     }
     const bounds=textBoundsRef.current;
     const px=(e.clientX-rect.left)*W/rect.width,py=(e.clientY-rect.top)*H/rect.height;
@@ -7810,16 +7881,24 @@ export default function App() {
           setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
           setTextRole(role);   // (D1 item 6) title the inspector by the tapped role
           setInspectorEl("text");
-          dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
+          // (feature C) seed the block height + ORIGINAL centre so the drag can snap
+          // to the element's own starting spot and render an accurate guide.
+          const _eh=b.h/H, _ew=textLayout.width||b.w/W;
+          dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
+            eh:_eh, orig:{key:role,cx:textLayout.x+_ew/2,cy:textLayout.y+_eh/2}};
           try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
           return;
         }
       }
     }
     // (WP-W0) the drawn LOGO (lockup or corner mark) is clickable too — selecting
-    // it opens the Logo inspector (previously only reachable from the layer list).
+    // it opens the Logo inspector. (feature C) It is also DRAGGABLE: a tap selects,
+    // a drag repositions it across the 9-grid anchors with soft-snap (onPanMove/End).
     if(logoBoxRef.current&&_inHit(logoBoxRef.current)){
       selectElement("logo");
+      const lb=logoBoxRef.current;
+      dragRef.current={mode:"logo",x:e.clientX,y:e.clientY,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,ew:lb.w/W,eh:lb.h/H};
+      try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
       return;
     }
     if(bounds&&px>=bounds.x&&px<=bounds.x+bounds.w&&py>=bounds.y&&py<=bounds.y+bounds.h){
@@ -7828,7 +7907,9 @@ export default function App() {
       // Canvas convergence: selecting text opens its inspector (tap → focus copy
       // input is handled in onPanEnd via focusPrimaryText).
       setInspectorEl("text");
-      dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false};
+      const _bh=(bounds.h)/H, _bw=textLayout.width||bounds.w/W;
+      dragRef.current={mode:"text",x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
+        eh:_bh, orig:{key:"hero",cx:textLayout.x+_bw/2,cy:textLayout.y+_bh/2}};
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}return;
     }
     setTextSelected(false);
@@ -7872,14 +7953,48 @@ export default function App() {
       // Below the click threshold, treat as a tap-in-progress: don't nudge the text.
       if(!d.moved&&Math.hypot(e.clientX-d.downX,e.clientY-d.downY)<=5)return;
       d.moved=true;
-      const nx=d.ox+(e.clientX-d.x)/d.rect.width,ny=d.oy+(e.clientY-d.y)/d.rect.height;
+      let nx=d.ox+(e.clientX-d.x)/d.rect.width,ny=d.oy+(e.clientY-d.y)/d.rect.height;
+      // (feature C) SOFT-SNAP: pull the block toward the nearest anchor / alignment /
+      // original spot. x/y are the block's top-left; snap its CENTRE, then map back.
+      const ew=textLayout.width||0.6, eh=d.eh||0.14;
+      const s=snapCentre(nx+ew/2, ny+eh/2, ew, eh, d.rect.width, d.rect.height, d.orig);
+      nx=s.cx-ew/2; ny=s.cy-eh/2;
+      setSnapGuide(s.guide);
+      d.snapped=s.snapped;
       updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
       return;
     }
     if (d.mode === "overlay") {
-      const nx = d.ox + (e.clientX - d.x) / d.rect.width;
-      const ny = d.oy + (e.clientY - d.y) / d.rect.height;
+      let nx = d.ox + (e.clientX - d.x) / d.rect.width;
+      let ny = d.oy + (e.clientY - d.y) / d.rect.height;
+      // (feature C) SOFT-SNAP shapes: overlay x/y is the CENTRE already.
+      const es=d.esz||0.2;
+      const s=snapCentre(nx, ny, es, es/(d.eratio||1), d.rect.width, d.rect.height, d.orig);
+      nx=s.cx; ny=s.cy;
+      setSnapGuide(s.guide);
+      d.snapped=s.snapped;
       updateLayerT(selOverlay, { x:Math.max(0,Math.min(1,nx)), y:Math.max(0,Math.min(1,ny)) });
+      return;
+    }
+    if (d.mode === "logo") {
+      // (feature C) LOGO drag — the logo model is 9-grid anchors (each born-clean by
+      // construction). Dragging picks the anchor NEAREST the pointer, with a guide dot
+      // on the engaged anchor; on release that anchor pins (userLogoTouched). This
+      // honours "snaps are always legal positions" without a free-form logo offset.
+      if(!d.moved&&Math.hypot(e.clientX-d.downX,e.clientY-d.downY)<=5)return;
+      d.moved=true;
+      const px=(e.clientX-d.rect.left)/d.rect.width, py=(e.clientY-d.rect.top)/d.rect.height;
+      const anchors=snapAnchors(d.ew||0.14, d.eh||0.14);
+      let best=anchors[0], bd=Infinity;
+      for(const a of anchors){ const dd=Math.hypot(px-a.cx,py-a.cy); if(dd<bd){bd=dd;best=a;} }
+      // Map the winning anchor id (ky-kx) to a LOGO_POSITIONS key.
+      const LOGO_ANCHOR_KEY={
+        "top-left":"top-left","top-center":"top-center","top-right":"top-right",
+        "center-left":"mid-left","center-center":"center","center-right":"mid-right",
+        "bottom-left":"bottom-left","bottom-center":"bottom-center","bottom-right":"bottom-right",
+      };
+      d.snapPos=LOGO_ANCHOR_KEY[best.id]||"bottom-right";
+      setSnapGuide({ lines:[], dot:{ x:best.cx, y:best.cy } });
       return;
     }
     if (d.mode === "rotate") {
@@ -7921,6 +8036,15 @@ export default function App() {
     const d = dragRef.current;
     // A tap (not a drag) inside the text block opens the Content editor.
     if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusTextField(d.role||"hero");
+    // (feature C) LOGO drag release — a real move commits the snapped 9-grid anchor
+    // through THE pipeline (same logoPosition patch a menu pick emits → userLogoTouched
+    // pins it, undo works, one-patch law). A tap (no move) just selects (already done).
+    if (d && d.mode==="logo") {
+      if (d.moved && d.snapPos) applyPatch({ logoPosition:d.snapPos }, { source:"ui" });
+      else if (!d.moved && Date.now()-d.downTime<=300) selectElement("logo");
+    }
+    // Clear the magnetic guide the moment the gesture ends (all snap modes).
+    clearSnapGuide();
     dragRef.current = null;
   };
   const setZoom = (z) => patchPhoto({ zoom:z });
@@ -9357,11 +9481,15 @@ export default function App() {
       return { x: b.x / W - halo, y: b.y / H - halo, w: b.w / W + 2 * halo, h: b.h / H + 2 * halo };
     });
     const _overlaps = (g) => {
-      const gw = Math.min(g.w, 0.96 - g.x), gh = Math.max(g.h || 0, g.minH || 0.04);
-      const a = { x: g.box.x, y: g.box.y, w: gw, h: gh };
+      // The ghost's ACTUAL rendered rect (same width/height clamp the JSX applies).
+      const a = {
+        x: g.box.x, y: g.box.y,
+        w: Math.min(g.box.w, 0.96 - g.box.x),
+        h: Math.max(g.box.h || 0, g.minH || 0.04),
+      };
       return _liveBoxes.some(b => !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
     };
-    return out.filter(g => { const gg = { ...g, box: g.box }; return !_overlaps({ box: gg.box, w: gg.box.w, h: gg.box.h, minH: gg.minH }); });
+    return out.filter(g => !_overlaps(g));
   })();
 
   /* ── ADVISOR DOTS for the CURRENTLY-VIEWED format ──────────────────────────
@@ -9532,6 +9660,24 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
+              {/* ── SOFT-SNAP GUIDE (feature C) ── While dragging, a thin on-brand
+                    guide line at the engaged snap coordinate + a dot at the engaged
+                    anchor. pointer-events:none (never blocks the drag). Fractions map
+                    to the 0..1 viewBox. Reduced-motion: no transition on the guide. */}
+              {snapGuide && (
+                <svg aria-hidden="true" viewBox="0 0 1 1" preserveAspectRatio="none"
+                  style={{position:"absolute",inset:0,width:"100%",height:"100%",overflow:"visible",pointerEvents:"none",zIndex:11}}>
+                  {(snapGuide.lines||[]).map((ln,i)=>(
+                    <line key={i} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2}
+                      stroke={B.tangerine} strokeWidth={0.004} strokeDasharray="0.012 0.008" vectorEffect="non-scaling-stroke"
+                      style={{opacity:0.9}} />
+                  ))}
+                  {snapGuide.dot && (
+                    <circle cx={snapGuide.dot.x} cy={snapGuide.dot.y} r={0.011}
+                      fill={B.tangerine} stroke="#fff" strokeWidth={0.003} vectorEffect="non-scaling-stroke" />
+                  )}
+                </svg>
+              )}
               {/* (canvas-chrome §3) The Refresh-photo, Undo/Redo, and export nudge
                   affordances were moved OUT of the canvas shell into the control
                   strip + toast BELOW the canvas — nothing persistent may obscure the
