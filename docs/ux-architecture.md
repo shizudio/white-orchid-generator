@@ -84,7 +84,7 @@ home. Nothing silently lost. (Grepped section-by-section before deletion.)
 | Archetypes grid (12 layouts + none, variant cycling) | Top bar → Templates popover → "Layouts" section; also chat ("try another layout") |
 | Format grid (6 dimensions) + drop-hint note | Top bar → **Format** popover (+ live format strip under the canvas) |
 | Post type chips | Top bar → **Post type** popover |
-| Media: sample photos / Library / Upload | Photo inspector (select the photo); **+ Add → Photo** when no media |
+| Media: sample photos / Library / Upload | Photo inspector (select the photo); ghost slot "＋ add a photo" when no media (see §2.8) |
 | Video: upload / play / restart / save / saved list | Photo inspector → Video tab |
 | Midjourney launcher | Photo inspector |
 | Photo quick transforms (center/50/75/fill/0°) | Photo inspector |
@@ -92,7 +92,7 @@ home. Nothing silently lost. (Grepped section-by-section before deletion.)
 | Typography (font-size steps, scale/width/leading, align, 9-grid) | Text inspector |
 | Text backdrop (auto/band/none) + text colour | Text inspector |
 | Logo variants (primary/secondary), 9-grid placement, size | Logo inspector (click the logo) |
-| Overlays / accessories gallery + upload | **+ Add** gallery ("Decoration"); per-layer editing in the overlay inspector |
+| Overlays / accessories gallery + upload | Background / Overlay inspector "More options" fold → Shapes/Decoration (see §2.8); chat `addOverlay`; per-layer editing in the overlay inspector |
 | Overlay layer controls (mode/colours/size/rotate/opacity) | Overlay inspector (click the shape) |
 | Background swatches + opacity | Background inspector (click empty canvas) |
 | Export format PNG/JPG + Download + Download all formats | Top bar → **Export** popover |
@@ -120,6 +120,44 @@ home. Nothing silently lost. (Grepped section-by-section before deletion.)
 - **Save-as-template is a moment, not a button.** Keep the Templates-popover
   path; add a one-line post-export nudge ("Want to reuse this design? Save it
   as a template.") — the moment of proven success. No persistent button.
+
+### 2.8 THEME 1 — "Decide more for me" (2026-07-07, client-ratified)
+
+Client ruling (verbatim intent): *"Further simplify — still too much liberty in
+the panel. The + Add item is redundant."* Staff should see, per element, ONLY
+its content + 2–3 CURATED choices (the ones the brand allows anyway); everything
+else moves behind ONE quiet "More options" fold (closed by default, airy §7
+styling, open-state remembered per session in-memory only). Adding happens where
+staff already look — ghost slots + chat chips — so the top-bar **+ Add** is
+retired. Less liberty = the brand system doing its job. NOTHING is deleted: the
+fold and the ghost/chip paths preserve every prior capability.
+
+**Curated primary controls (visible by default) per element:**
+
+| Element | Content shown | Curated choices (visible) | Under "More options" fold |
+|---|---|---|---|
+| Text | The copy field(s) for the post type + render-truth "not shown in this layout" note | Size (S/M/L, drives the primary role) · Text colour (curated pair grid) | Editorial auto-fit + reset · Font size by category (XS–XL, all roles) · Scale / Width / Leading sliders · Align (L/C/R) · 9-grid position · Text backdrop (Auto/Band/None) |
+| Background | The selected-swatch label + render-truth note | Brand swatches ONLY | Opacity slider (+ PNG-alpha note) · Shapes (petal marks) · Decoration (accessory shapes) |
+| Photo | Help line ("select the preview to resize…") | Library · Upload | Image/Video toggle · Sample photos strip · Midjourney launcher · Quick position (Center/50/75/Fill/0°) |
+| Logo | Overlap hint (when relevant) | Variant grid (primary/secondary tabs) · Remove / Add-back logo | 9-grid placement · Size steps (position is drag-first on the preview) |
+| Overlay (shape) | Drag hint | Mode (Frame/Outline/Line Art/On top) + its colour/weight sub-controls; or Accessory colour + quick size | Size / Rotate / Opacity sliders · layout reset header |
+
+The fold is a single `<MoreFold id=…>` per panel; `foldOpen` is an in-memory
+React state map (no localStorage), so a fold the user opened stays open across
+element hops within the session and resets calm on reload.
+
+**Retired top-bar "+ Add" — capability mapping (nothing becomes unreachable):**
+
+| Old + Add capability | New home |
+|---|---|
+| Add caption / "small text under the title" | Canvas ghost slot "＋ add text here" + chat chip "+ Add caption" |
+| Add date | Canvas ghost slot "＋ add a date" + chat chip "+ Add date" |
+| Add "little label up top" (eyebrow) | Canvas ghost slot "＋ add a little label" + chat ("add a small label at the top…") |
+| Add Button (pill) | Editable pill field in the Text inspector when the archetype carries a badge; chat ("add a button that says…") |
+| Add Logo | Canvas ghost slot "＋ add logo" (also clears a hidden-logo pin) + Logo inspector "Add logo back" |
+| Add Photo | Canvas ghost slot "＋ add a photo" (opens Library) + Photo inspector Library/Upload |
+| Shapes (petal marks) | Background / Overlay inspector "More options" fold → Shapes; chat ("add a petal / add a shape" → assistant `addOverlay` grammar, DECOR_INTENT-gated) |
+| Decoration (accessory shapes) | Background / Overlay inspector "More options" fold → Decoration; chat (`addOverlay`) |
 
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
