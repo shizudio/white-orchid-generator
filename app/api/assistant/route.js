@@ -228,6 +228,152 @@ function wantsLayoutChange(text) {
   return LAYOUT_INTENT.test(t) || wantsFullImage(t);
 }
 
+// ── EDITOR SIMPLE-REQUEST DETERMINISTIC BELTS (defect-class #1) ───────────────
+// Every nightly run flagged the same failure: a plain, legitimate chat request
+// ("the headline shud say Open House not open day", "change the colour to mauve",
+// "make it warmer") produced an EMPTY patch, so the client's honesty pipeline
+// fired "Honestly — that didn't change anything visible". The model (gpt-4o-mini)
+// is unreliable at mapping colloquial, typo-laden asks to the right patch field.
+// These belts guarantee the correct field lands for the highest-frequency simple
+// patterns — the same "user is the boss, make it Just Work" discipline as the
+// existing full-image / logo-placement / shape-swap belts below. When a belt
+// injects a change it ALSO rewrites `reply` to honestly narrate exactly what
+// changed, so the reply and the render agree (no false claim, no apology).
+
+// COLOUR VOCABULARY → nearest brand bg token. Values are BG_OPTIONS ids (the full
+// palette; Generator validates against BG_ID_SET). Order matters: multi-word keys
+// first so "dusty pink" wins over "pink". "warm"/"cool" handled by the mood belt.
+const COLOUR_WORD_TO_TOKEN = [
+  [/\bdusty\s*pink\b|\bblush\b|\brose\b|\bpink\b/i, 'dustyPink'],
+  [/\bmauve\b|\blilac\b|\bplum\b|\bwisteria\b|\bpurple\b|\bviolet\b/i, 'wisteria'],
+  [/\bterracotta\b|\bterra\s*cotta\b|\brust\b|\bclay\b|\bbrick\b|\bwarm\s*orange\b/i, 'terracotta'],
+  [/\bbutter\b|\bcream\b|\bpale\s*yellow\b|\bbuttery\b|\bprimrose\b/i, 'butter'],
+  [/\bsky\b|\bpowder\s*blue\b|\bbaby\s*blue\b|\bpale\s*blue\b|\bblue\b/i, 'sky'],
+  [/\bsage\b|\bmint\b|\bsoft\s*green\b|\bpale\s*green\b/i, 'sage'],
+  [/\bceladon\b/i, 'celadon'],
+  [/\bforest\b|\bdeep\s*green\b|\bburnham\b|\bemerald\b|\bdark\s*green\b/i, 'burnham'],
+  [/\bivory\b|\bwhite\s*smoke\b|\boff[- ]?white\b|\bcream\s*white\b/i, 'whiteSmoke'],
+  [/\bjet\b|\bcharcoal\b|\bnear[- ]?black\b|\bblack\b|\bink\b/i, 'jet'],
+];
+// A colour ask: the user is talking about background/colour, not a photo or copy.
+const COLOUR_ASK_INTENT = /\b(colou?r|background|bg|backdrop|field|palette|make it|change|swap|turn it|more of a|vibe)\b/i;
+function detectColourToken(text) {
+  const t = String(text || '');
+  for (const [re, token] of COLOUR_WORD_TO_TOKEN) if (re.test(t)) return token;
+  return null;
+}
+
+// MOOD / AESTHETIC RECIPES → a defined, visible patch. Each mood maps a bundle of
+// fields so an ambiguous "make it warmer / softer / cuter" resolves to a real,
+// coherent change rather than nothing. Fields chosen to (a) always differ from a
+// typical starting design so SOMETHING lands, and (b) read as the named mood.
+//   photoTreatment values: warmGrade | cleanGrain | duotone | filmGrain …
+//   bgColor values: the curated pastels above.
+// The belt applies the recipe, then prunes any field already at that value so the
+// remainder is guaranteed to be a real diff (picking an alternate when needed).
+const MOOD_RECIPES = {
+  warmer:  { bgColor: 'butter',     bgAlt: 'terracotta', photoTreatment: 'warmGrade', narrate: 'warmed it up — a soft butter field and a warm photo grade' },
+  softer:  { bgColor: 'dustyPink',  bgAlt: 'lilac',      photoTreatment: 'cleanGrain', narrate: 'softened it — a gentle blush field and a calmer, cleaner photo tone' },
+  cuter:   { bgColor: 'dustyPink',  bgAlt: 'butter',     photoTreatment: 'cleanGrain', narrate: 'made it sweeter — a soft blush field and a friendlier photo tone' },
+  fun:     { bgColor: 'butter',     bgAlt: 'sky',        photoTreatment: 'filmGrain', narrate: 'made it more playful — a brighter field and a livelier photo tone' },
+  pop:     { bgColor: 'terracotta', bgAlt: 'wisteria',   photoTreatment: 'filmGrain', narrate: 'gave it more pop — a bolder field and a punchier photo tone' },
+  bolder:  { bgColor: 'burnham',    bgAlt: 'terracotta', photoTreatment: 'duotone',   narrate: 'made it bolder — a deeper field and a stronger photo treatment' },
+  cooler:  { bgColor: 'sky',        bgAlt: 'sage',       photoTreatment: 'cleanGrain', narrate: 'cooled it down — a soft sky field and a calmer photo tone' },
+  calmer:  { bgColor: 'sage',       bgAlt: 'celadon',    photoTreatment: 'cleanGrain', narrate: 'made it calmer — a muted green field and a quieter photo tone' },
+};
+// Map the user's mood word to a recipe key.
+function detectMood(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\bwarm(er|th)?\b|\bcos(y|ier)\b|\bcozy\b|\binviting\b/.test(t)) return 'warmer';
+  if (/\bsoft(er)?\b|\bgentl\w*\b|\bcalm(er)?\b|\bmuted\b/.test(t)) return /\bcalm/.test(t) ? 'calmer' : 'softer';
+  if (/\bcut(e|er|sy)\b|\bsweet(er)?\b|\bador\w*\b/.test(t)) return 'cuter';
+  if (/\bfun(ner|nier)?\b|\bplayful\b|\blively\b|\bfor the kids\b|\bmore fun\b/.test(t)) return 'fun';
+  if (/\bpop\b|\bboring\b|\bbland\b|\bplain\b|\bdull\b|\bexciting\b|\bmore interesting\b/.test(t)) return 'pop';
+  if (/\bbold(er)?\b|\bstrong(er)?\b|\bpunch\w*\b|\bstriking\b/.test(t)) return 'bolder';
+  if (/\bcool(er)?\b|\bfresh(er)?\b/.test(t)) return 'cooler';
+  return null;
+}
+
+// TEXT SUBSTITUTION — "the headline should say X not Y", "change the title to X",
+// "it should say X". Extracts the intended NEW copy so a plain wording fix lands
+// on the right role instead of dead-ending. Returns { role, value } or null.
+//   role ∈ headline | subtext (best-effort from the noun the user named).
+function detectTextSubstitution(text) {
+  const t = String(text || '').trim();
+  // Which role did they name? Default to headline (the most common "say X" target).
+  const role = /\b(subtext|caption|small text|subtitle|detail|note|line)\b/i.test(t) ? 'subtext'
+    : /\b(headline|title|heading|big text|main (text|words|line)|the top)\b/i.test(t) ? 'headline'
+    : /\bhead(line|er)?\b/i.test(t) ? 'headline'
+    : null;
+  if (!role) return null;
+  // Patterns that carry the NEW value:
+  //   "… should say Open House not open day"  → "Open House"
+  //   "… say 'Open House'"                     → "Open House"
+  //   "change the headline to Open House"      → "Open House"
+  //   "the headline shud say Open House"       → "Open House"
+  let value = null;
+  let m = t.match(/\b(?:says?|shou?ld\s+say|shud\s+say|read|reads?)\s+(.+?)(?:\s+(?:not|instead of|rather than|and not)\s+.+)?$/i);
+  if (m) value = m[1];
+  if (!value) { m = t.match(/\b(?:chang\w*|updat\w*|set|edit|rename|make)\s+(?:the\s+)?(?:headline|title|heading|subtext|caption|subtitle)\s+(?:to|into|so it says|say)\s+(.+)$/i); if (m) value = m[1]; }
+  if (!value) return null;
+  value = value.replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
+  // Guard: a value that's just a design word or empty isn't a real substitution.
+  if (!value || value.length < 2 || value.length > 100) return null;
+  return { role, value };
+}
+
+// ADD CONTACT / NAME — "add my name miss tan at the bottom", "put our phone number
+// at the bottom 9123 4567". These map to a supporting copy role (attribution for a
+// name/sign-off, subtext for a contact detail) but the model kept walking them back.
+// Returns { role, value } or null. NEVER invents facts — it only lifts the literal
+// name/number the user typed.
+function detectContactAdd(text) {
+  const t = String(text || '').trim();
+  const addIntent = /\b(add|put|include|show|write|place|stick)\b/i.test(t)
+    && /\b(name|phone|number|contact|email|handle|call|whatsapp|hp|mobile|tel)\b/i.test(t);
+  if (!addIntent) return null;
+  // Phone / contact number: pull the digit run the user supplied (SG-style spacing ok).
+  const phone = t.match(/(\+?\d[\d\s-]{5,}\d)/);
+  if (phone && /\b(phone|number|contact|call|whatsapp|hp|mobile|tel)\b/i.test(t)) {
+    const digits = phone[1].trim();
+    return { role: 'subtext', value: `Call us: ${digits}` };
+  }
+  // Name / sign-off: "add my name miss tan" → attribution "Miss Tan". Lift the words
+  // AFTER "name" (or after "my name is"), title-cased, no invented content.
+  let m = t.match(/\bname\s+(?:is\s+)?(?:for\s+)?(.+?)(?:\s+(?:at|on|to|in|near)\s+the\s+\w+.*)?$/i);
+  if (m) {
+    let name = m[1].replace(/\b(at|on|to)\s+the\s+(bottom|top|side|corner|footer).*$/i, '').trim();
+    name = name.replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
+    // Title-case a short human name; guard against empty / over-long lifts.
+    if (name && name.length >= 2 && name.length <= 60) {
+      const cased = name.replace(/\b\w/g, c => c.toUpperCase());
+      return { role: 'attribution', value: cased };
+    }
+  }
+  return null;
+}
+
+// TYPOGRAPHY — "make the title/headline bigger/smaller". Bumps the relevant font
+// role one step in FONT_SIZE_STEPS. Returns { role, dir } or null.
+const FONT_STEPS = ['xs', 's', 'm', 'l', 'xl'];
+function detectFontResize(text) {
+  const t = String(text || '').toLowerCase();
+  const bigger = /\b(bigger|larger|grow|increase|blow up|more prominent|stand out more|too small)\b/.test(t);
+  const smaller = /\b(smaller|tinier|shrink|reduce|less prominent|too big|too large)\b/.test(t);
+  if (!bigger && !smaller) return null;
+  if (!/\b(title|headline|heading|text|font|words|copy|type|subtext|caption|subtitle)\b/.test(t)) return null;
+  const role = /\b(subtext|caption|subtitle|detail)\b/.test(t) ? 'content'
+    : /\b(title|headline|heading|big text|main)\b/.test(t) ? 'heading'
+    : 'heading'; // "make the text bigger" → the hero heading by default
+  return { role, dir: bigger ? 'up' : 'down' };
+}
+function bumpStep(cur, dir) {
+  const i = FONT_STEPS.indexOf(cur);
+  const base = i < 0 ? FONT_STEPS.indexOf('m') : i;
+  const next = dir === 'up' ? Math.min(FONT_STEPS.length - 1, base + 1) : Math.max(0, base - 1);
+  return FONT_STEPS[next];
+}
+
 // ── LANDING ARCHETYPE SELECTION (Commit 1) ───────────────────────────────────
 // The landing handoff must now pick an EDITORIAL ARCHETYPE (docs/visual-language-
 // spec.md §2) for every plan, chosen by the user's intent. This compact catalog
@@ -873,6 +1019,20 @@ LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACT
 - "change the shape" / "a different petal" / "swap this shape" (a petal/shape overlay is already placed — see designState.overlays): set removeOverlays true AND addOverlay with a DIFFERENT petal asset than the one placed (orchid-petal, shape-1, shape-2, shape-3), keeping the same mode. This IS supported — never claim you can't swap a shape.
 - CONSISTENCY RULE: if you set ANY patch field, your reply must describe that change. NEVER say "I can't do that" while also emitting a patch — if something truly isn't possible, leave every patch field null and say so.
 
+SIMPLE EDITS — ALWAYS RESOLVE TO A REAL PATCH (never a "that changed nothing" reply). The user is a fluent PROMPTER, not a designer; these everyday asks must Just Work. Follow these few-shots EXACTLY:
+- TEXT SUBSTITUTION — "the headline shud say Open House not open day" / "change the title to Open House" / "it should say Welcome Week" → set patch.headline = "Open House" (the NEW text; drop the "not …" part). "the caption should say pickup is at 2:30" → patch.subtext. Reply names it: "Updated the headline to 'Open House'."
+- COLOUR WORDS — map any colour the user names to the NEAREST bgColor token and SET IT (never refuse): mauve/lilac/plum/purple → wisteria (or lilac); "that mauve one" → wisteria; blush/rose/pink → dustyPink; cream/butter/pale yellow → butter; blue/sky/powder → sky; sage/mint/soft green → sage or celadon; terracotta/rust/clay → terracotta; ivory/white → whiteSmoke; forest/deep green → burnham; black/charcoal → jet. "make the background wisteria" → bgColor="wisteria". "more of a terracotta vibe" → bgColor="terracotta". Reply: "Changed the background to mauve."
+- MOOD / FEEL asks map to a DEFINED recipe (a real visible change, then say what you did):
+    • "make it warmer" / "cosier" → a warm field (butter or terracotta) + warmGrade photo treatment. Reply: "Warmed it up — a soft butter field and a warm photo grade."
+    • "softer" / "gentler" → a soft field (dustyPink or lilac) + cleanGrain treatment.
+    • "make it cuter / sweeter" → dustyPink field + a friendlier tone.
+    • "make it pop / it looks boring / make it more interesting" → a bolder field (terracotta or wisteria) + a punchier treatment.
+    • "make it more fun for the kids" → a brighter field (butter/sky) + a livelier treatment.
+    • "cooler / fresher" → sky or sage field.
+  Pick a token that DIFFERS from the current background so something actually changes, and describe the change plainly.
+- SIZE — "make the title bigger" → fontSizes.heading one step up (e.g. m → l). "make the title smaller" → one step down. "make the caption bigger" → fontSizes.content up. Reply: "Made the title bigger."
+NEVER answer any of the above with "I can't do that" or a bare apology — there is always a nearest brand token / recipe. Set the field, then honestly narrate exactly what you changed.
+
 VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describe elements by what they LOOK like, not by design terms. Map their words to the right field, and it must Just Work:
 - "small text at the bottom / under the title / a little caption / a note that says …" → subtext
 - "small label at the top / little caps text / the tiny heading above" → microLabel
@@ -1143,6 +1303,104 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // right archetype even when the model reaches for backdrop/logo fields again.
   if (context !== 'landing') {
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+
+    // ── SIMPLE-REQUEST BELTS (defect-class #1) ────────────────────────────────
+    // Track whether a belt authored a definitive change so we can OVERRIDE the
+    // model's reply with an honest, specific narration (keeping reply ⇄ render in
+    // sync — the client's honesty pipeline then sees a truthful claim + real
+    // change and never emits the "that didn't change anything" apology).
+    let beltReply = null;
+    // True when the mood belt deliberately set a photo treatment — exempts it from
+    // the "unsolicited photo-treatment" strip below (the mood ask IS the request).
+    let moodSetTreatment = false;
+    // Is the current design a materialized archetype? Then the VISIBLE solid field
+    // is driven by the palette variant, not bgColor — so a colour change must also
+    // set fieldColor (a client-only key applyDesignPatch honours) to be visible.
+    const onArchetype = !!(designState.archetypeId && designState.archetypeId !== 'none');
+    const setField = (token) => {
+      patch.bgColor = token;                 // legacy / non-materialized path
+      if (onArchetype) patch.fieldColor = token; // render-truth on materialized designs
+    };
+
+    // 1. TEXT SUBSTITUTION — "the headline shud say Open House not open day".
+    //    A plain wording fix must land on the named copy role. Runs first so it
+    //    isn't shadowed by the colour/mood belts on a mixed utterance.
+    {
+      const sub = detectTextSubstitution(lastUserText);
+      if (sub && (patch[sub.role] == null || patch[sub.role] !== sub.value)) {
+        patch[sub.role] = sub.value;
+        const roleLabel = sub.role === 'headline' ? 'headline' : 'text';
+        beltReply = `Updated the ${roleLabel} to “${sub.value}”. Tap it on the canvas anytime to edit.`;
+      }
+    }
+
+    // 1b. ADD CONTACT / NAME — "add my name miss tan", "put our phone number …".
+    //     Lands a name on attribution / a contact detail on subtext (never invents).
+    if (!beltReply) {
+      const add = detectContactAdd(lastUserText);
+      if (add && designState[add.role] !== add.value) {
+        patch[add.role] = add.value;
+        const roleLabel = add.role === 'attribution' ? 'sign-off line' : 'small line at the bottom';
+        beltReply = `Added “${add.value}” as the ${roleLabel}. Tap it on the canvas to edit.`;
+      }
+    }
+
+    // 2. COLOUR VOCABULARY — map a colour word to the nearest brand token.
+    //    Only when the user is clearly talking about colour/background (not a photo
+    //    or a copy edit that merely mentions a colour name inside quoted text).
+    if (!beltReply) {
+      const token = detectColourToken(lastUserText);
+      const photoAsk = /\bphoto|picture|image\b/i.test(lastUserText);
+      if (token && !photoAsk && COLOUR_ASK_INTENT.test(lastUserText)) {
+        // Only act if it's a genuine change vs the current field.
+        const curField = onArchetype ? null : designState.bgColor;
+        if (token !== curField) {
+          setField(token);
+          const nice = { dustyPink: 'dusty pink', whiteSmoke: 'ivory' }[token] || token;
+          beltReply = `Changed the background to ${nice}. Tap the Background swatch to try another.`;
+        }
+      }
+    }
+
+    // 3. MOOD / AESTHETIC RECIPE — "make it warmer / softer / cuter / pop more".
+    //    Resolves an ambiguous mood ask to a defined, coherent, visible change.
+    if (!beltReply) {
+      const mood = detectMood(lastUserText);
+      // Don't fire on a photo/copy/layout ask that merely contains a mood word.
+      const otherIntent = /\bphoto|picture|image|logo|headline|title|layout|bigger|smaller\b/i.test(lastUserText);
+      if (mood && MOOD_RECIPES[mood] && !otherIntent) {
+        const r = MOOD_RECIPES[mood];
+        // Pick a bg token that actually differs from the current field.
+        const curField = onArchetype ? null : designState.bgColor;
+        const token = (r.bgColor !== curField) ? r.bgColor : r.bgAlt;
+        setField(token);
+        // Also nudge the photo treatment when it would change something (a photo
+        // exists and the treatment differs) — belt-and-braces on the mood.
+        if (designState.hasImage && r.photoTreatment) { patch.photoTreatment = r.photoTreatment; moodSetTreatment = true; }
+        beltReply = `I've ${r.narrate}. Tap Undo if it's not the feel you wanted.`;
+      }
+    }
+
+    // 4. TYPOGRAPHY — "make the title bigger / smaller". Bumps the named font role
+    //    one step. Uses the current fontSizes when known, else a sensible baseline.
+    if (!beltReply) {
+      const fr = detectFontResize(lastUserText);
+      if (fr) {
+        const cur = (designState.fontSizes && designState.fontSizes[fr.role]) || 'm';
+        const next = bumpStep(cur, fr.dir);
+        if (next !== cur) {
+          patch.fontSizes = { ...(patch.fontSizes && typeof patch.fontSizes === 'object' ? patch.fontSizes : {}), [fr.role]: next };
+          const what = fr.role === 'heading' ? 'title' : 'text';
+          beltReply = `Made the ${what} ${fr.dir === 'up' ? 'bigger' : 'smaller'}. Tap it on the canvas to fine-tune the size.`;
+        }
+      }
+    }
+
+    // A belt authored a definitive change → the reply MUST describe THAT change,
+    // not whatever the model narrated (which may have been a refusal). Overriding
+    // here keeps the claim honest and prevents the no-op apology downstream.
+    if (beltReply) reply = beltReply;
+
     // Strip UNSOLICITED logo-placement echoes (the model mirrors designState
     // fields into the patch): a placement field PINS the logo client-side
     // (userLogoTouched), which overrides the archetype's logo restraint — only
@@ -1155,7 +1413,7 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     }
     // Strip an UNSOLICITED photo-treatment/frame tweak (the model reaches for
     // these on unrelated asks — e.g. re-toning the photo during a logo move).
-    if ((patch.photoTreatment != null || patch.photoFrameType != null)
+    if ((patch.photoTreatment != null || patch.photoFrameType != null) && !moodSetTreatment
         && !/\b(photo|image|picture|tone|tint\w*|duotone|grain|wash|frame|mask|petal|full[- ]?bleed)\b/i.test(lastUserText)) {
       patch.photoTreatment = null;
       patch.photoFrameType = null;
