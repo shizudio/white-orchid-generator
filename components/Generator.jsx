@@ -3876,8 +3876,14 @@ export default function App() {
   });
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
+  // fieldColorOverride/effectiveFieldId ride along because on a materialized
+  // archetype the VISIBLE field is the override/variant, not bgColor — the
+  // route's colour belts compare against it so a repeat colour ask nudges to a
+  // neighbour instead of emitting a no-op patch.
   const chatDesignState = () => ({
     postType, archetypeId, dimensionId, bgColor, textColorId, backdropMode,
+    fieldColorOverride,
+    effectiveFieldId,
     headline, subtext, attribution, dateText,
     microLabel, pillText,
     selectedLogoId, logoPosition, logoSize,
