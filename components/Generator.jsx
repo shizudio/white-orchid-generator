@@ -9282,6 +9282,20 @@ export default function App() {
     );
   };
 
+  /* ── DEFAULT LOGO SPOT ── The brand-standard corner the auto logo would take
+     (resolvedLogo.position, defaulting bottom-right), inset by the format's
+     platform-safe zones — a legal, born-clean position. Returned as a fractional
+     {x,y,w,h} box for the "＋ add logo" ghost + as a snap target (feature C). */
+  const defaultLogoSpot = () => {
+    const position = resolvedLogo?.position || "bottom-right";
+    const sizeId = resolvedLogo?.sizeId || "m";
+    const pct = (LOGO_SIZES.find(s => s.id === sizeId) || LOGO_SIZES[1]).pct;
+    const lSz = pct * Math.min(W, H);
+    const safe = PLATFORM_SAFE[dimensionId] || null;
+    const [cx, cy] = logoCenter(LOGO_POSITIONS[position] || LOGO_POSITIONS["bottom-right"], W, H, lSz, safe);
+    return { position, box: { x: (cx - lSz / 2) / W, y: (cy - lSz / 2) / H, w: lSz / W, h: lSz / H } };
+  };
+
   /* ── GHOST SLOTS (WP-V Stage 4, §3.2) ── Empty regions where the layout
      engine KNOWS a role could go render a faint dashed "＋ add text here" on
      hover/tap. Clicking adds the role through THE pipeline and focuses it.
@@ -9311,7 +9325,43 @@ export default function App() {
       out.push({ key:"date", box: { x: bx, y: 0.885, w: 0.36, h: 0.05 }, minH: 0.05,
         label:"＋ add a date", patch:{ dateText:"15 January" }, focus:"date" });
     }
-    return out;
+    // (B4 — add "＋ add logo" ghost when the design draws NO logo, at the logo's
+    // default corner spot; adding routes through the pipeline (userLogoTouched pin).
+    // (P2 §3) close the logo-less gap in ghost coverage.
+    if (!logoBoxRef.current) {
+      const dp = defaultLogoSpot();
+      out.push({ key:"logo", box: dp.box, minH: 0.05, notText:true,
+        label:"＋ add logo", patch:{ logoPosition:dp.position }, focus:null });
+    }
+    // (B4 — photo-less designs offer "＋ add a photo". No design patch fires from
+    // the ghost itself: adding a photo is upload/library/sample (a heavier flow),
+    // so the ghost OPENS the add-photo path — handled in onClick (key==="photo").
+    // A conservative centred region; the geometry filter below keeps it off text.
+    if (!mediaObj) {
+      out.push({ key:"photo", box: { x:0.30, y:0.30, w:0.40, h:0.30 }, minH:0.10, notText:true,
+        label:"＋ add a photo", patch:null, focus:null });
+    }
+    // ── DEAD-CLICK ROOT FIX ── A ghost is an add-affordance for TRULY EMPTY space.
+    // Its <button> sits ABOVE the canvas (z-index:7); if its box overlaps a drawn
+    // element's hit box the ghost SWALLOWS the click meant to select that element
+    // (the "logo / non-heading text is un-clickable" regression). roleBounds +
+    // logoBox are the live per-element hit boxes (export px); convert them to
+    // fractions and drop any ghost that overlaps one (same generous ~24px halo the
+    // canvas hit-test uses), so a ghost can NEVER cover a clickable element.
+    const _rb = roleBoundsRef.current || {};
+    const _liveBoxes = [
+      ...Object.values(_rb),
+      ...(logoBoxRef.current ? [logoBoxRef.current] : []),
+    ].map(b => {
+      const halo = Math.max(0.012, 20 / Math.min(W, H)); // ~20px generous halo, as fraction
+      return { x: b.x / W - halo, y: b.y / H - halo, w: b.w / W + 2 * halo, h: b.h / H + 2 * halo };
+    });
+    const _overlaps = (g) => {
+      const gw = Math.min(g.w, 0.96 - g.x), gh = Math.max(g.h || 0, g.minH || 0.04);
+      const a = { x: g.box.x, y: g.box.y, w: gw, h: gh };
+      return _liveBoxes.some(b => !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
+    };
+    return out.filter(g => { const gg = { ...g, box: g.box }; return !_overlaps({ box: gg.box, w: gg.box.w, h: gg.box.h, minH: gg.minH }); });
   })();
 
   /* ── ADVISOR DOTS for the CURRENTLY-VIEWED format ──────────────────────────
@@ -9499,7 +9549,15 @@ export default function App() {
                     width:`${(Math.min(g.box.w,0.96-g.box.x)*100).toFixed(2)}%`,
                     height:`${(Math.max(g.box.h||0,g.minH)*100).toFixed(2)}%`,
                   }}
-                  onClick={()=>{ applyPatch(g.patch, { source:"ui" }); focusTextField(g.focus); }}>
+                  onClick={()=>{
+                    if (g.patch) applyPatch(g.patch, { source:"ui" });
+                    // A text ghost focuses the role's input; the logo ghost opens the
+                    // Logo inspector; the photo ghost opens the add-photo path (the
+                    // top-bar + Add gallery, whose Photo tile uploads/picks/samples).
+                    if (g.focus) focusTextField(g.focus);
+                    else if (g.key === "logo") selectElement("logo");
+                    else if (g.key === "photo") setShowLibPicker(true);
+                  }}>
                   {g.label}
                 </button>
               ))}

@@ -1570,15 +1570,27 @@ canvas[role="application"]:focus-visible {
   letter-spacing: 0.04em;
   cursor: pointer;
   opacity: 0;
+  /* DEAD-CLICK ROOT FIX (part 2): an INVISIBLE ghost must never intercept a click
+     meant for the canvas element beneath it. opacity:0 alone does NOT stop pointer
+     events, so the invisible button silently swallowed clicks on the logo/text it
+     happened to overlap (the reported regression). Gate pointer-events on the SAME
+     condition as visibility: none while hidden, auto only once the ghost is shown
+     (shell hover / focus / touch). The geometry filter in ghostSlots is the belt;
+     this is the braces. */
+  pointer-events: none;
   transition: opacity 160ms ease, background 160ms ease;
 }
-.generator-canvas-shell:hover .wo-ghost { opacity: 0.55; }
+.generator-canvas-shell:hover .wo-ghost { opacity: 0.55; pointer-events: auto; }
 .wo-ghost:hover, .wo-ghost:focus-visible {
   opacity: 1 !important;
+  pointer-events: auto;
   background: color-mix(in srgb, #ffffff 55%, transparent);
 }
 @media (hover: none) {
-  .wo-ghost { opacity: 0.45; }
+  /* Touch has no hover: the ghost is faintly visible AND tappable. It is kept off
+     any real element's hit box by the ghostSlots geometry filter, so it never
+     steals a tap meant for the logo/text. */
+  .wo-ghost { opacity: 0.45; pointer-events: auto; }
 }
 
 /* ── Advisor dots (canvas-anchored readiness pointers) ──────────────────────
