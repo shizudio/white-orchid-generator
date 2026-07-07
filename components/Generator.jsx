@@ -2317,7 +2317,7 @@ const STARTER_TEMPLATES = [
     // Open House → §2.3 Big Number / Date (the date IS the hero).
     id:"st_open_house", name:"Open House", purpose:"Invite families to visit",
     state:{
-      postType:"event", archetypeId:"big_number", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      postType:"event", archetypeId:"big_number", dimensionId:"ig_portrait", bgColor:"whiteSmoke",
       headline:"Open House", dateText:"18 July",
       subtext:"A morning of play & discovery — RSVP at thewhiteorchid.sg",
       selectedLogoId:"p3-green", logoPosition:"bottom-left", logoSize:"s",
@@ -2328,7 +2328,7 @@ const STARTER_TEMPLATES = [
     // Quote of the Week → §2.6 Quote with Generous Margin.
     id:"st_quote", name:"Quote of the Week", purpose:"Share an early-years quote",
     state:{
-      postType:"quote", archetypeId:"quote_margin", dimensionId:"ig_square", bgColor:"burnham",
+      postType:"quote", archetypeId:"quote_margin", dimensionId:"ig_portrait", bgColor:"burnham",
       headline:"Play is the highest form of *research*.", attribution:"Albert Einstein",
       selectedLogoId:"p3-ivory", logoPosition:"bottom-center", logoSize:"s",
       fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
@@ -2338,7 +2338,7 @@ const STARTER_TEMPLATES = [
     // Term Dates → §2.9 Two-Tier Label + Headline (eyebrow → headline).
     id:"st_term_dates", name:"Term Dates", purpose:"Announce a new term",
     state:{
-      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_portrait", bgColor:"whiteSmoke",
       subtext:"Term 3 begins", headline:"Monday 14 *July*",
       attribution:"Doors open 8:30am · The White Orchid",
       selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
@@ -2349,7 +2349,7 @@ const STARTER_TEMPLATES = [
     // We're Hiring → §2.9 Label + Headline (no photo needed → label register).
     id:"st_hiring", name:"We're Hiring", purpose:"Post an open role",
     state:{
-      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      postType:"text_post", archetypeId:"label_headline", dimensionId:"ig_portrait", bgColor:"whiteSmoke",
       subtext:"Join our team", headline:"Early Childhood *Educators*",
       attribution:"Apply at hello@thewhiteorchid.sg",
       selectedLogoId:"p3-green", logoPosition:"bottom-right", logoSize:"s",
@@ -2360,7 +2360,7 @@ const STARTER_TEMPLATES = [
     // Now Enrolling → §2.4 Full-Bleed Duotone + whisper caption over a photo.
     id:"st_enrolling", name:"Now Enrolling", purpose:"Open enrolment shout-out",
     state:{
-      postType:"texture_text", archetypeId:"full_bleed_duotone", dimensionId:"ig_square", bgColor:"burnham",
+      postType:"texture_text", archetypeId:"full_bleed_duotone", dimensionId:"ig_portrait", bgColor:"burnham",
       headline:"Now *Enrolling*", subtext:"Term 3 places open",
       selectedLogoId:"p3-ivory", logoPosition:"top-right", logoSize:"s",
       fontSizes:{ heading:"m", subheading:"m", content:"m", highlight:"xl" },
@@ -2371,7 +2371,7 @@ const STARTER_TEMPLATES = [
     // Photo Moment → §2.8 Documentary Photo Moment (single clean candid).
     id:"st_photo_moment", name:"Photo Moment", purpose:"Share a photo, on-brand",
     state:{
-      postType:"photo_logo", archetypeId:"documentary", dimensionId:"ig_square", bgColor:"burnham",
+      postType:"photo_logo", archetypeId:"documentary", dimensionId:"ig_portrait", bgColor:"burnham",
       selectedLogoId:"p3-ivory", logoPosition:"bottom-right", logoSize:"s",
       imageSrc:SAMPLE_IMAGES[1].full,
     },
@@ -2382,7 +2382,7 @@ const STARTER_TEMPLATES = [
     // overlay layer is needed — the archetype path composes the window itself.
     id:"st_petal_frame", name:"Petal Frame", purpose:"Frame a photo in the orchid",
     state:{
-      postType:"photo_logo", archetypeId:"petal_window", dimensionId:"ig_square", bgColor:"whiteSmoke",
+      postType:"photo_logo", archetypeId:"petal_window", dimensionId:"ig_portrait", bgColor:"whiteSmoke",
       headline:"Feeling *secure*", subtext:"Every child, every day",
       selectedLogoId:"p3-green", logoPosition:"bottom-left", logoSize:"s",
       fontSizes:{ heading:"l", subheading:"m", content:"m", highlight:"m" },
@@ -2597,8 +2597,11 @@ export default function App() {
   const [dropHint, setDropHint] = useState(null);   // surfaced non-blocking hint
   const [logoOverlapHint, setLogoOverlapHint] = useState(false); // surfaced non-blocking logo-overlap notice
 
-  // Canvas dimension (social channel format)
-  const [dimensionId, setDimensionId] = useState("ig_square");
+  // Canvas dimension (social channel format). Default = IG Portrait (4:5, 1080×1350),
+  // Instagram's preferred feed ratio and the client's staff starting point. This is
+  // the default *selected/view* format only — MASTER_DIM (ig_square) still anchors the
+  // per-dimension cascade; portrait renders as a per-dim view off that master.
+  const [dimensionId, setDimensionId] = useState("ig_portrait");
   const dim = DIMENSIONS.find(d => d.id === dimensionId) || DIMENSIONS[0];
   const W = dim.w, H = dim.h;
   // Live mirror of dimensionId for async guards/timers that must read the CURRENT
@@ -3717,7 +3720,7 @@ export default function App() {
     setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
     setRedoStack([]);
     restoreSnapshot({
-      postType: "photo_logo", archetypeId: null, dimensionId: "ig_square",
+      postType: "photo_logo", archetypeId: null, dimensionId: "ig_portrait",
       headline: "", subtext: "", attribution: "", dateText: "",
       bgColor: "burnham", fieldColorOverride: null, bgAlpha: 1, textColorId: "auto",
       selectedLogoId: "p3-ivory", logoPosition: "bottom-center", logoSize: "m",
@@ -8466,7 +8469,7 @@ export default function App() {
     setPostType(s.postType || "photo_logo");
     setArchetypeId(ARCHETYPE_IDS.includes(s.archetypeId) ? s.archetypeId : null);
     setArchVariant(Number.isInteger(s.archVariant) ? s.archVariant : 0);
-    setDimensionId(s.dimensionId || "ig_square");
+    setDimensionId(s.dimensionId || "ig_portrait");
     setBgColor(s.bgColor || "burnham");
     setFieldColorOverride(BG_ID_SET.has(s.fieldColorOverride) ? s.fieldColorOverride : null);
     setBgAlpha(s.bgAlpha ?? 1);
