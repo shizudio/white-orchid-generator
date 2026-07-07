@@ -1377,7 +1377,9 @@ Current design state (compact): ${JSON.stringify(designState)}`;
         // Also nudge the photo treatment when it would change something (a photo
         // exists and the treatment differs) — belt-and-braces on the mood.
         if (designState.hasImage && r.photoTreatment) { patch.photoTreatment = r.photoTreatment; moodSetTreatment = true; }
-        beltReply = `I've ${r.narrate}. Tap Undo if it's not the feel you wanted.`;
+        // narrate starts with a past-tense verb ("warmed it up …") — capitalise it
+        // into a clean sentence (avoids the "I've gave …" agreement slip).
+        beltReply = `${r.narrate.charAt(0).toUpperCase()}${r.narrate.slice(1)}. Tap Undo if it's not the feel you wanted.`;
       }
     }
 
