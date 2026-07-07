@@ -155,13 +155,19 @@ export default function Home() {
         setLoading(false);
         return;
       }
+      // DEFAULT FORMAT — IG Portrait (4:5). The client's staff start here and it's
+      // Instagram's preferred feed ratio. Respect a format the plan explicitly chose
+      // for intent (e.g. a banner/twitter brief); otherwise land the new design in
+      // portrait. This drives both the generated photo's aspect and the editor view.
+      const patch = { ...(data.patch || {}) };
+      if (!patch.dimensionId) patch.dimensionId = 'ig_portrait';
       // 2. If photo-led, GENERATE the background photo (Higgsfield). Fall back to any
       //    Library photo the plan attached, else stay text-only (solid field).
       // PHASE 2 — photo generation (the longest step; the copy says so).
       let imageUrl = data.imageUrl || null;
       if (data.scenePrompt) {
         enterPhotoPhase();
-        const photo = await generateScenePhoto(data.scenePrompt);
+        const photo = await generateScenePhoto(data.scenePrompt, patch.dimensionId);
         if (photo) imageUrl = photo;
       }
       // PHASE 3 — composing + handing off to the editor.
@@ -170,7 +176,7 @@ export default function Home() {
       // 3. Hand off the composed design + photo to the editor.
       try {
         sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
-          patch: data.patch || {},
+          patch,
           reply: data.reply || '',
           originalMessage: content,
           scenePrompt: data.scenePrompt || null,
