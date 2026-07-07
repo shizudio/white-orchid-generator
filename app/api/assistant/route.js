@@ -300,6 +300,19 @@ function detectMood(text) {
 //   role ∈ headline | subtext (best-effort from the noun the user named).
 function detectTextSubstitution(text) {
   const t = String(text || '').trim();
+  // DATE FIRST — "change the date to friday the 18th", "the date should be 18 July".
+  // A date the user explicitly supplied maps to dateText (never invented).
+  if (/\bdate\b/i.test(t) && /\b(chang\w*|updat\w*|set|move|make|should be|shift|to)\b/i.test(t)) {
+    let dm = t.match(/\bdate\s+(?:should\s+be|to|is|:)\s+(.+)$/i) || t.match(/\b(?:chang\w*|updat\w*|set|move|shift)\s+(?:the\s+)?date\s+(?:to|into)\s+(.+)$/i);
+    if (dm) {
+      let dv = dm[1].replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
+      // Tidy "friday the 18th" → "Friday the 18th" (title-case leading words).
+      if (dv && dv.length >= 2 && dv.length <= 60) {
+        dv = dv.replace(/\b(mon|tues|wed(nes)?|thurs?|fri|satur|sun)day\b/gi, s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
+        return { role: 'dateText', value: dv };
+      }
+    }
+  }
   // Which role did they name? Default to headline (the most common "say X" target).
   const role = /\b(subtext|caption|small text|subtitle|detail|note|line)\b/i.test(t) ? 'subtext'
     : /\b(headline|title|heading|big text|main (text|words|line)|the top)\b/i.test(t) ? 'headline'
@@ -888,6 +901,11 @@ function compactDesignState(raw) {
     fontSizes: fontSizes || undefined,
     overlays,
     hasImage: !!raw.hasImage,
+    // On a materialized archetype the VISIBLE solid field is the override (or the
+    // palette variant), NOT bgColor. When the client sends fieldColorOverride the
+    // colour/mood belts compare against IT so a repeat colour ask doesn't no-op
+    // (setting fieldColor to a value it already has). Optional / may be absent.
+    fieldColor: (typeof raw.fieldColorOverride === 'string' && raw.fieldColorOverride) ? raw.fieldColorOverride : null,
   };
 }
 
@@ -1317,9 +1335,21 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // is driven by the palette variant, not bgColor — so a colour change must also
     // set fieldColor (a client-only key applyDesignPatch honours) to be visible.
     const onArchetype = !!(designState.archetypeId && designState.archetypeId !== 'none');
+    // The colour currently VISIBLE: on a materialized archetype that's the field
+    // override (when the client sends it), else bgColor. Belts compare against this
+    // so a repeat colour/mood ask lands a token that actually differs (no no-op).
+    const currentField = onArchetype ? (designState.fieldColor || designState.bgColor || null) : (designState.bgColor || null);
     const setField = (token) => {
       patch.bgColor = token;                 // legacy / non-materialized path
       if (onArchetype) patch.fieldColor = token; // render-truth on materialized designs
+    };
+    // All selectable bg tokens — used to pick a guaranteed-different alternate when a
+    // requested colour already matches the current field.
+    const ALL_BG = ['whiteSmoke', 'wisteria', 'celadon', 'burnham', 'jet', 'dustyPink', 'butter', 'sky', 'sage', 'terracotta', 'lilac'];
+    const differentFrom = (token, avoid, fallbacks = []) => {
+      if (token !== avoid) return token;
+      for (const f of fallbacks) if (f !== avoid) return f;
+      return ALL_BG.find(b => b !== avoid) || token;
     };
 
     // 1. TEXT SUBSTITUTION — "the headline shud say Open House not open day".
@@ -1327,9 +1357,9 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     //    isn't shadowed by the colour/mood belts on a mixed utterance.
     {
       const sub = detectTextSubstitution(lastUserText);
-      if (sub && (patch[sub.role] == null || patch[sub.role] !== sub.value)) {
+      if (sub && designState[sub.role] !== sub.value) {
         patch[sub.role] = sub.value;
-        const roleLabel = sub.role === 'headline' ? 'headline' : 'text';
+        const roleLabel = { headline: 'headline', subtext: 'text', dateText: 'date' }[sub.role] || 'text';
         beltReply = `Updated the ${roleLabel} to “${sub.value}”. Tap it on the canvas anytime to edit.`;
       }
     }
@@ -1349,16 +1379,16 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     //    Only when the user is clearly talking about colour/background (not a photo
     //    or a copy edit that merely mentions a colour name inside quoted text).
     if (!beltReply) {
-      const token = detectColourToken(lastUserText);
+      const rawToken = detectColourToken(lastUserText);
       const photoAsk = /\bphoto|picture|image\b/i.test(lastUserText);
-      if (token && !photoAsk && COLOUR_ASK_INTENT.test(lastUserText)) {
-        // Only act if it's a genuine change vs the current field.
-        const curField = onArchetype ? null : designState.bgColor;
-        if (token !== curField) {
-          setField(token);
-          const nice = { dustyPink: 'dusty pink', whiteSmoke: 'ivory' }[token] || token;
-          beltReply = `Changed the background to ${nice}. Tap the Background swatch to try another.`;
-        }
+      if (rawToken && !photoAsk && COLOUR_ASK_INTENT.test(lastUserText)) {
+        // If the exact colour is already showing, nudge to a near neighbour so the
+        // ask still produces a real, visible change instead of a silent no-op.
+        const NEIGHBOURS = { wisteria: ['lilac', 'dustyPink'], lilac: ['wisteria', 'dustyPink'], terracotta: ['dustyPink', 'butter'], dustyPink: ['lilac', 'terracotta'], butter: ['sky', 'terracotta'], sky: ['sage', 'lilac'], sage: ['celadon', 'sky'], celadon: ['sage', 'sky'], burnham: ['jet', 'sage'], jet: ['burnham'], whiteSmoke: ['butter', 'sky'] };
+        const token = differentFrom(rawToken, currentField, NEIGHBOURS[rawToken] || []);
+        setField(token);
+        const nice = { dustyPink: 'dusty pink', whiteSmoke: 'ivory' }[token] || token;
+        beltReply = `Changed the background to ${nice}. Tap the Background swatch to try another.`;
       }
     }
 
@@ -1370,9 +1400,9 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       const otherIntent = /\bphoto|picture|image|logo|headline|title|layout|bigger|smaller\b/i.test(lastUserText);
       if (mood && MOOD_RECIPES[mood] && !otherIntent) {
         const r = MOOD_RECIPES[mood];
-        // Pick a bg token that actually differs from the current field.
-        const curField = onArchetype ? null : designState.bgColor;
-        const token = (r.bgColor !== curField) ? r.bgColor : r.bgAlt;
+        // Pick a bg token that actually differs from the CURRENT visible field so a
+        // repeated mood ask still lands a real change (r.bgAlt is the fallback).
+        const token = differentFrom(r.bgColor, currentField, [r.bgAlt]);
         setField(token);
         // Also nudge the photo treatment when it would change something (a photo
         // exists and the treatment differs) — belt-and-braces on the mood.
