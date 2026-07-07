@@ -1197,6 +1197,30 @@ canvas[role="application"]:focus-visible {
   .wo-canvas-settle > canvas { animation: none !important; }
 }
 
+/* ── DRAG CHROME (Refinement 3) ── The tangerine drag oval is retired (tangerine is
+   CTA-only ink). While dragging, the element LIFTS (soft shadow + a whisper of scale)
+   and, on snap engage, a thin Burnham hairline + faint dashed landing box fade in.
+   All chrome is on-brand burnham/ivory; nothing tangerine.                          */
+@keyframes wo-drag-lift-in {
+  from { opacity: 0; transform: scale(1); }
+  to   { opacity: 1; transform: scale(1.02); }
+}
+.wo-drag-lift {
+  /* A soft floating card behind the dragged element: gentle ivory wash + burnham-tinted
+     shadow, ~2% scale. The wash is barely-there so it reads as a lift, not a highlight. */
+  background: rgba(250, 249, 245, 0.10);
+  box-shadow: 0 6px 22px rgba(43, 80, 64, 0.20), 0 1px 3px rgba(43, 80, 64, 0.12);
+  transform-origin: center;
+  animation: wo-drag-lift-in 150ms ease-out both;
+}
+@keyframes wo-snap-guide-in { from { opacity: 0; } to { opacity: 1; } }
+.wo-snap-guide { animation: wo-snap-guide-in 140ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  /* Instant + static: the snap still engages, but no animated pull/fade or scale. */
+  .wo-drag-lift { animation: none !important; transform: none !important; }
+  .wo-snap-guide { animation: none !important; }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    WP-V CHROME — top bar (globals) + contextual inspector.
    §7 rulings apply to the chrome itself: airy, thin weights (400–600, never
