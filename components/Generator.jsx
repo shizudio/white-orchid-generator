@@ -1028,16 +1028,20 @@ function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim,arch){
    spec default UNLESS the user has placed the logo while THAT format was active
    (logoByDim[dimId]). This is the single clean rule that stops a square-tuned
    position (e.g. Now Enrolling's top-center) from carrying verbatim onto Banner. */
-function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,globalSizeId){
+function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,globalSizeId,globalFree){
   // `explicit`=true when the placement came from a deliberate user choice for THIS
   // format (a per-dim override, or the master pin on MASTER_DIM). pickLogoPlacement
   // honours explicit bases VERBATIM — the auto focal/contrast guard only reshuffles
   // spec-default / non-explicit bases. The user is the boss (Task 1 fix).
+  // (Refinement 2) `free` = a continuous fractional CENTRE {x,y} the user dragged the
+  // logo to. When present it OVERRIDES the named anchor at draw time (putLogo lands the
+  // mark exactly there); the named `position` is retained as the semantic anchor. A free
+  // pin is by definition explicit — pickLogoPlacement honours it verbatim, never relocates.
   const override=logoByDim?.[dimId];
-  if(override)return{position:override.position,sizeId:override.sizeId,explicit:true};
-  if(userLogoTouched&&dimId===MASTER_DIM)return{position:globalPos,sizeId:globalSizeId,explicit:true};
+  if(override)return{position:override.position,sizeId:override.sizeId,free:override.free||null,explicit:true};
+  if(userLogoTouched&&dimId===MASTER_DIM)return{position:globalPos,sizeId:globalSizeId,free:globalFree||null,explicit:true};
   const fmt=formatLayoutFor(dimId,postType);
-  return{position:fmt.logo.position,sizeId:fmt.logo.sizeId,explicit:false};
+  return{position:fmt.logo.position,sizeId:fmt.logo.sizeId,free:null,explicit:false};
 }
 // Focal-exclusion radius: the logo box must not intersect a band around the
 // smart-crop focal point (fx,fy). 0.22×min(W,H) keeps the mark clear of a face
@@ -1097,7 +1101,13 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
   const basePct=LOGO_SIZES.find(s=>s.id===base.sizeId)?.pct||0.12,baseSz=w*basePct;
   const basePos=LOGO_POSITIONS[base.position];
   if(basePos){
-    const bb=boxFor(basePos,baseSz);
+    // (Refinement 2) When a FREE pin is set the overlap/contrast read must test the box at
+    // the FREE centre (where the mark actually draws), not the named anchor — so the
+    // advisor dot reflects the real dropped spot. The result is only an audit hint; a free
+    // placement is never relocated (explicit path returns verbatim below).
+    const bb=(base.free && Number.isFinite(base.free.x) && Number.isFinite(base.free.y))
+      ? {x:base.free.x*w-baseSz/2,y:base.free.y*h-baseSz/2,w:baseSz,h:baseSz}
+      : boxFor(basePos,baseSz);
     const clearsText=!exclText||!intersects(exclText,bb);
     const clearsFocal=!exclFocal||!intersects(exclFocal,bb);
     const clearsFrame=!exclFrame||!intersects(exclFrame,bb);
@@ -1106,7 +1116,7 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
     // shrink (Task 1 fix). The named position's coordinates are already safe-zone-shifted
     // by boxFor→logoCenter(safeZone), so a NAMED explicit pick ("bottom right") is legal
     // by construction; only a raw pixel-DRAG can land in a band (handled downstream).
-    if(base.explicit)return{position:base.position,sizeId:base.sizeId,overlapsText:!clearsText};
+    if(base.explicit)return{position:base.position,sizeId:base.sizeId,free:base.free||null,overlapsText:!clearsText};
     // (BORN-CLEAN) On a PHOTO, the spec-default base can "read" at the loose 1.8 bar yet
     // still land on a busy region the logo-legibility finding (3:1 worst-case) would flag
     // — the system would then manufacture a dot on its OWN placement. So when a photo is
@@ -1703,10 +1713,17 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
    the caller keys items with `_key` (stable furn_<type>_<i>) or `_role` (a real text
    role, e.g. the index token acting as the micro-label carrier). Items may also
    carry `colorOverride` (hex) from the design's furnitureOverrides. */
-function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
+// (Refinement 1) offsetFor(it) → {dx,dy} fractions | null: a user's free-placement delta
+// for THIS furniture piece (pill / rule / index / counterweight). When present the piece
+// is drawn at it.x+dx / it.y+dy AND the safe-rect + clash guards are bypassed — a role the
+// user dragged is deliberate and can go literally anywhere (governing rule: never blocked,
+// never auto-corrected; consequences surface only as advisor reminders). When null the
+// piece keeps the authored auto-placement + the anti-clutter guards.
+function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offsetFor){
   if(!Array.isArray(items)||!items.length) return;
   const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
   const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009)); // 0.5–1px @ common sizes
+  const offOf=(it)=>{ const o=offsetFor?offsetFor(it):null; return (o&&(o.dx||o.dy))?{dx:o.dx||0,dy:o.dy||0}:null; };
   const boxOf=(it)=>{
     const px=(fx)=>fx*w, py=(fy)=>fy*h;
     if(it.type==="rule"||it.type==="underline"){
@@ -1729,12 +1746,18 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn){
   const intersects=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
   const clash=(bx)=> (avoid||[]).some(a=>intersects(bx,a));
   ctx.save();
-  for(const it of items){
-    if(!it) continue;
+  for(const it0 of items){
+    if(!it0) continue;
+    // (Refinement 1) apply the user's free-placement delta (if any) to this piece's
+    // position, then relax the anti-clutter guards for it (deliberate placement wins).
+    const _off=offOf(it0);
+    const it=_off?{...it0,x:it0.x+_off.dx,y:it0.y+_off.dy}:it0;
+    const _freePlaced=!!_off;
     const bx=boxOf(it);
-    // Keep everything inside the safe rect and off the text/photo it would clutter.
-    if(bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2) continue;
-    if(clash(bx)) continue;
+    // Keep AUTO furniture inside the safe rect and off the text/photo it would clutter.
+    // A user-dragged piece bypasses both (it may sit literally anywhere).
+    if(!_freePlaced && (bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2)) continue;
+    if(!_freePlaced && clash(bx)) continue;
     if(it.type==="rule"||it.type==="underline"){
       ctx.globalAlpha=it.alpha==null?(it.type==="underline"?0.55:0.32):it.alpha;
       ctx.fillStyle=it.colorOverride||ink;
@@ -2710,6 +2733,15 @@ export default function App() {
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
   // the user adjusts layout while a non-master dimension is active (spec §1 user-edit model).
   const [typeLayoutsByDim, setTypeLayoutsByDim] = useState({});
+  // (Refinement 1) PER-ROLE FREE-PLACEMENT OFFSETS. Every rendered text role
+  // (eyebrow/date/support/pill/furniture — hero keeps its own textLayout anchor) can be
+  // dragged anywhere: we store a fractional CENTRE-DELTA {dx,dy} per role, scoped by
+  // dimension + postType (mirrors typeLayoutsByDim), applied to the archetype's rendered
+  // role box at draw time. A delta (not an absolute box) stays valid as the archetype box
+  // reflows and travels cleanly through the one-patch pipeline (undoable, per-dim). Shape:
+  // { [dimId]: { [postType]: { [role]: {dx,dy} } } }. MASTER_DIM writes the master row.
+  const [roleOffsetsByDim, setRoleOffsetsByDim] = useState({});
+  const roleOffsetsByDimRef = useRef(roleOffsetsByDim); roleOffsetsByDimRef.current = roleOffsetsByDim;
   // True once the user explicitly changes logo placement/size (template & AI applies count).
   // While false, renderScene uses the per-format spec logo default.
   const [userLogoTouched, setUserLogoTouched] = useState(false);
@@ -2718,6 +2750,18 @@ export default function App() {
   // imgTByDim/typeLayoutsByDim so a square pin never carries verbatim onto other
   // formats (spec §1 user-edit model / Failure 2 fix).
   const [logoByDim, setLogoByDim] = useState({});
+  // (Refinement 2) LOGO FREE PLACEMENT — a continuous fractional CENTRE {x,y} that
+  // coexists with the named 9-grid enum (logoPosition, kept for chat/inspector
+  // semantics). When set for the active format, the logo pins EXACTLY there (the user
+  // dragged it free); when null, the named anchor governs. Master free pin lives here;
+  // per-dim free pins ride on logoByDim[dim].free (mirrors position/sizeId). AUTO
+  // placement never sets a free pin — it stays anchor-only (born-clean).
+  const [logoFreePos, setLogoFreePos] = useState(null); // {x,y} fractions | null
+  // (Scope addendum) LOGO REMOVAL — the user can take the logo off entirely. `logoHidden`
+  // is a PIN: while true the render draws NO mark and NO lockup (logoBoxRef stays null, so
+  // the "＋ add logo" ghost re-appears), and the auto-placement / harmonizer may never
+  // re-add it (pins law). Round-trips sessions + undo. Cleared by "add the logo back".
+  const [logoHidden, setLogoHidden] = useState(false);
   const [fontSizes, setFontSizes] = useState(freshFontSizes);   // per-category size steps
   const setFontSize = (role, id) => applyPatch({ fontSizes: { [role]: id } }, { source: "ui" });
   const [textSelected, setTextSelected] = useState(false);
@@ -2919,6 +2963,22 @@ export default function App() {
   // UI text-geometry edits (canvas drag / slider / grid / keyboard nudge) emit a
   // patch through THE pipeline — same grammar, same undo, same harmonizer (WP-V).
   const updateTextLayout = patch => applyPatch({ textLayout: patch }, { source: "ui" });
+  // (Refinement 1) RAW writer for a per-role free-placement offset. Scoped by the
+  // ACTIVE dim + postType (MASTER_DIM writes the master row, mirroring writeTextLayout).
+  // {dx,dy} are the role's centre delta in fractions. Only the patch pipeline calls this.
+  const writeRoleOffset = (role, dx, dy) => {
+    if(!role) return;
+    const off = { dx:+(dx||0), dy:+(dy||0) };
+    setRoleOffsetsByDim(prev=>{
+      const dim = prev[dimensionId]||{};
+      const pt = dim[postType]||{};
+      return {...prev, [dimensionId]:{...dim, [postType]:{...pt, [role]:off}}};
+    });
+  };
+  // Pipeline wrapper — a canvas role-drag emits ONE patch grammar through applyPatch so
+  // the whole gesture folds into a single undo burst + runs the manual harmonizer, exactly
+  // like updateTextLayout for the hero.
+  const updateRoleOffset = (role, dx, dy) => applyPatch({ roleOffset: { role, dx, dy } }, { source: "ui" });
   const resetTextLayout = () => {
     noteManualEdit("text");   // undoable + harmonized like any other manual edit
     if(dimensionId===MASTER_DIM){
@@ -3080,7 +3140,10 @@ export default function App() {
     photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
     typeLayouts: JSON.parse(JSON.stringify(typeLayouts)),
     userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
+    logoFreePos: logoFreePos ? { ...logoFreePos } : null,   // (Refinement 2) free-logo master pin
+    logoHidden,   // (Scope addendum) logo-removal pin
     typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
+    roleOffsetsByDim: JSON.parse(JSON.stringify(roleOffsetsByDim)),   // (Refinement 1) per-role offsets
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: JSON.parse(JSON.stringify(overlayLayers)),
     furnitureOverrides: JSON.parse(JSON.stringify(furnitureOverrides)),
@@ -3206,6 +3269,9 @@ export default function App() {
     // Fresh materialization on master clears stale per-dim drags so the archetype's
     // own per-dim geometry cascades (resolveTextLayout re-materializes per format).
     setTypeLayoutsByDim({});
+    // (Refinement 1) a fresh archetype brings fresh role boxes — stale per-role free
+    // offsets would land nonsensically, so clear them (mirrors typeLayoutsByDim above).
+    setRoleOffsetsByDim({});
     setPhotoTouchedByDim({});   // (B2) fresh archetype → auto photo crop again
     setImgTByDim({});
     setPinnedProps({});         // (item 2) a fresh archetype has no user contrast pins yet
@@ -3341,6 +3407,44 @@ export default function App() {
       if (posChanged) applied.push("logoPosition");
       if (sizeChanged) applied.push("logoSize");
     }
+    // (Refinement 2) logoFree — a continuous fractional CENTRE {x,y} pin (or null to
+    // clear back to the named anchor). Behaves like a logoPosition patch: it pins the
+    // logo (userLogoTouched) and writes the master free pin on MASTER_DIM or a per-dim
+    // free pin on logoByDim[dim].free elsewhere. The named enum (logoPosition) is left
+    // as the last semantic anchor for chat/inspector; the free pin overrides it at draw.
+    // Client-only (CLIENT_PATCH_KEYS) — the AI grammar cannot produce it.
+    if ("logoFree" in patch) {
+      const lf = patch.logoFree;
+      const valid = lf === null || (lf && typeof lf === "object" && Number.isFinite(lf.x) && Number.isFinite(lf.y));
+      if (valid) {
+        const clamp = v => Math.max(0, Math.min(1, v));
+        const free = lf === null ? null : { x: clamp(lf.x), y: clamp(lf.y) };
+        setUserLogoTouched(true);
+        if (dimensionId === MASTER_DIM) {
+          setLogoFreePos(free);
+        } else {
+          setLogoByDim(prev => {
+            const cur = prev[dimensionId] || { position: logoPosition, sizeId: logoSize };
+            const next = { ...cur };
+            if (free) next.free = free; else delete next.free;
+            return { ...prev, [dimensionId]: next };
+          });
+        }
+        applied.push("logoFree");
+      }
+    }
+    // (Scope addendum) hideLogo — REMOVE the logo (true) or ADD IT BACK (false). Both the
+    // inspector "Remove logo" button and chat "remove the logo" / "add the logo back" emit
+    // this. Removal is a PIN: the render draws no logo and the auto-placement / harmonizer
+    // may never re-add it. Adding it back clears the pin AND marks the logo user-placed so
+    // it surfaces on any archetype (even restraint tiles). Round-trips sessions + undo.
+    if (typeof patch.hideLogo === "boolean" && patch.hideLogo !== logoHidden) {
+      setLogoHidden(patch.hideLogo);
+      // Re-adding pins the logo visible (userLogoTouched) so restraint archetypes
+      // (logoUse:"none"/"url") still show it — mirrors the "＋ add logo" ghost's patch.
+      if (patch.hideLogo === false) setUserLogoTouched(true);
+      applied.push("hideLogo");
+    }
 
     if (patch.fontSizes && typeof patch.fontSizes === "object") {
       const clean = {};
@@ -3392,6 +3496,13 @@ export default function App() {
       for (const k of ["x", "y", "width", "lineHeight", "scale"]) if (typeof patch.textLayout[k] === "number" && Number.isFinite(patch.textLayout[k])) t[k] = patch.textLayout[k];
       if (["left", "center", "right"].includes(patch.textLayout.align)) t.align = patch.textLayout.align;
       if (Object.keys(t).length) { writeTextLayout(t); applied.push("textLayout"); }
+    }
+    // (Refinement 1) roleOffset — a single text/furniture role's free-placement
+    // centre-delta ({role, dx, dy}), scoped to the active dim + postType. Client-only
+    // (CLIENT_PATCH_KEYS); the AI grammar cannot produce it.
+    if (patch.roleOffset && typeof patch.roleOffset === "object" && typeof patch.roleOffset.role === "string") {
+      const { role, dx, dy } = patch.roleOffset;
+      if (Number.isFinite(dx) && Number.isFinite(dy)) { writeRoleOffset(role, dx, dy); applied.push("roleOffset"); }
     }
     if (patch.photoTransform && typeof patch.photoTransform === "object") {
       const t = {};
@@ -3482,7 +3593,7 @@ export default function App() {
     // active — skip the settle for both. CSS-only + prefers-reduced-motion aware
     // (see .wo-canvas-settle). Format-switch redraws don't route through applyPatch,
     // so they're unaffected.
-    const isDragPatch = "textLayout" in patch || "photoTransform" in patch;
+    const isDragPatch = "textLayout" in patch || "photoTransform" in patch || "roleOffset" in patch || "logoFree" in patch;
     if (!isDragPatch && !dragRef.current) pulseCanvasSettle();
     if ((opts.source || "ai") === "ui") {
       noteManualEdit(uiTagsForPatch(patch));
@@ -3521,9 +3632,9 @@ export default function App() {
   // geometry restraint (it never relocates what the user just placed).
   const uiTagsForPatch = (patch) => {
     const tags = [];
-    if (patch.logoId || patch.logoPosition || patch.logoSize) tags.push("logo");
+    if (patch.logoId || patch.logoPosition || patch.logoSize || "logoFree" in patch || "hideLogo" in patch) tags.push("logo");
     if (patch.bgColor || patch.textColorId || patch.backdropMode || typeof patch.bgAlpha === "number") tags.push("colour");
-    if (patch.textLayout || patch.fontSizes || typeof patch.headline === "string" || typeof patch.subtext === "string" ||
+    if (patch.textLayout || patch.roleOffset || patch.fontSizes || typeof patch.headline === "string" || typeof patch.subtext === "string" ||
         typeof patch.attribution === "string" || typeof patch.dateText === "string" ||
         typeof patch.microLabel === "string" || typeof patch.pillText === "string") tags.push("text");
     if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays || patch.furnitureUpdate) tags.push("overlay");
@@ -3604,7 +3715,7 @@ export default function App() {
       backdropMode: "auto", photoTreatment: "none", photoFrame: { type: "none" },
       microLabel: "", pillText: "", heroRegister: "",
       typeLayouts: freshTypeLayouts(), userLogoTouched: false,
-      logoByDim: {}, typeLayoutsByDim: {}, fontSizes: freshFontSizes(),
+      logoByDim: {}, logoFreePos: null, logoHidden: false, roleOffsetsByDim: {}, typeLayoutsByDim: {}, fontSizes: freshFontSizes(),
       overlayLayers: [], furnitureOverrides: {}, markTab: "primary",
       image: SAMPLE_IMAGES[0].full, imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 }, imgTByDim: {}, photoTouchedByDim: {},
     });
@@ -3695,7 +3806,10 @@ export default function App() {
     setLogoSize(s.logoSize);
     setUserLogoTouched(s.userLogoTouched);
     setLogoByDim(s.logoByDim || {});
+    setLogoFreePos(s.logoFreePos || null);   // (Refinement 2)
+    setLogoHidden(!!s.logoHidden);           // (Scope addendum) logo-removal pin
     setTypeLayoutsByDim(s.typeLayoutsByDim || {});
+    setRoleOffsetsByDim(s.roleOffsetsByDim || {});   // (Refinement 1)
     setFontSizes(s.fontSizes || freshFontSizes());
     const layers = (s.overlayLayers || []).map(l => ({ ...l, uid: "ol_" + Math.random().toString(36).slice(2) }));
     setOverlayLayers(layers);
@@ -4491,6 +4605,17 @@ export default function App() {
     // Offscreen renders (the legacy duplicate-draw guard) may force a specific
     // postType via opts.postTypeOverride; live renders always use the real state.
     const postType = (!live && opts.postTypeOverride) ? opts.postTypeOverride : postTypeLive;
+    // (Refinement 1) PER-ROLE FREE-PLACEMENT OFFSET resolver. Reads the user's stored
+    // centre-delta {dx,dy} (fractions) for a role in THIS dim + postType and returns it in
+    // export px, or {dx:0,dy:0}. Calibration/offscreen guard renders never apply offsets
+    // (they render the archetype verbatim). Applied to each rendered role's box top-left
+    // so a dragged eyebrow/date/support/pill sits exactly where the user dropped it.
+    const _roleOffSrc = (opts.calibrationContent||opts.legacyForce) ? null
+      : (roleOffsetsByDimRef.current?.[dimId]?.[postType] || null);
+    const roleOff = (role) => {
+      const o = _roleOffSrc && _roleOffSrc[role];
+      return o ? { dx:(o.dx||0)*w, dy:(o.dy||0)*h } : { dx:0, dy:0 };
+    };
     // The legacy duplicate-draw guard must exercise the LEGACY stacked painters, not
     // whatever editorial layout the live design happens to carry. Setting the postType
     // override alone was insufficient: `editorial` is keyed on heroRegister + role
@@ -4561,7 +4686,9 @@ export default function App() {
     const _calibRender=!!opts.archOverride;
     const effUserLogoTouched=_calibRender?false:userLogoTouched;
     const effLogoByDim=_calibRender?{}:logoByDim;
-    const logoBase=resolveLogoBase(dimId,postType,effUserLogoTouched,effLogoByDim,logoPosition,logoSize);
+    // (Refinement 2) the master free pin is suppressed on calibration renders (born-clean).
+    const effLogoFree=_calibRender?null:logoFreePos;
+    const logoBase=resolveLogoBase(dimId,postType,effUserLogoTouched,effLogoByDim,logoPosition,logoSize,effLogoFree);
     const logoFocal=mediaObj?estimateFocalPoint(mediaObj):null;
     // The logo's actual ink luminance drives the contrast score (Failure 3): an
     // ivory mark over white clothing scores low and gets relocated; green over the
@@ -4570,6 +4697,10 @@ export default function App() {
     // opts.logoImg / opts.inkLum let the archetype path draw a contrast-swapped logo
     // variant (green on light fields, ivory on dark) without a state round-trip.
     const putLogo=(textBox,logoOpts={})=>{
+      // (Scope addendum) The logo is PINNED OFF — draw nothing (both editorial + legacy
+      // paths route through putLogo). The calibration board keeps the archetype logo, so
+      // the removal only applies to the LIVE design. logoBoxRef stays null → "＋ add logo".
+      if(logoHidden && !_calibRender) return;
       const drawObj=logoOpts.logoImg||logoObj;
       const drawInkLum=logoOpts.inkLum!=null?logoOpts.inkLum:logoInkLum;
       if(!drawObj)return;
@@ -4589,9 +4720,20 @@ export default function App() {
       const _wideCap=["twitter","facebook","banner"].includes(dimId)?0.30*h:Infinity;
       const lSz=Math.min(w*pct,_wideCap);
       const pos=LOGO_POSITIONS[place.position]||LOGO_POSITIONS["bottom-right"];
-      // (BORN-CLEAN) land the named position with format-aware safe padding so top/bottom
-      // rows clear the platform action bands — legal by construction for auto AND explicit.
-      const[lx,ly]=logoCenter(pos,w,h,lSz,platformSafe);
+      // (Refinement 2) A FREE pin ({x,y} fractions) lands the mark EXACTLY there (the user
+      // dragged it), clamped only so the mark box stays on-canvas — never re-inset to the
+      // safe zone (free placement is legal; a warned drop raises an advisor dot, below).
+      // Otherwise the named position lands with format-aware safe padding (born-clean).
+      let lx, ly;
+      if(place.free && Number.isFinite(place.free.x) && Number.isFinite(place.free.y)){
+        const half=lSz/2;
+        lx=Math.max(half,Math.min(w-half, place.free.x*w));
+        ly=Math.max(half,Math.min(h-half, place.free.y*h));
+      } else {
+        // (BORN-CLEAN) land the named position with format-aware safe padding so top/bottom
+        // rows clear the platform action bands — legal by construction for auto AND explicit.
+        [lx,ly]=logoCenter(pos,w,h,lSz,platformSafe);
+      }
       // AUDIT: does the FINAL logo box intersect the focal band (spec §4 subject
       // exclusion)? Only meaningful with a photo + a real explicit placement (the
       // guard already reshuffles non-explicit bases away from the focal band).
@@ -4617,10 +4759,27 @@ export default function App() {
       if(live){
         auditLogo.explicit=!!logoBase.explicit;
         auditLogo.overlapsText=!!place.overlapsText;
+        auditLogo.free=!!place.free;
         if(logoFocal){
           const fr=LOGO_FOCAL_RADIUS*Math.min(w,h),fcx=(logoFocal.fx??0.5)*w,fcy=(logoFocal.fy??0.42)*h;
           const lb=_logoBox;
           auditLogo.inFocalBand=lb.x<fcx+fr&&lb.x+lb.w>fcx-fr&&lb.y<fcy+fr&&lb.y+lb.h>fcy-fr;
+        }
+        // (Refinement 2) A FREELY-dragged logo may be dropped into a platform ACTION BAND
+        // (PLATFORM_SAFE top/bottom/side inset — where the platform's own buttons sit). We
+        // NEVER block or re-inset it; we RAISE AN ADVISOR DOT so the user knows the mark may
+        // be hidden by the platform UI. Named-anchor placements land clear by construction,
+        // so this only fires for a free pin that actually crosses a band.
+        if(place.free){
+          const zn=PLATFORM_SAFE[dimId];
+          const lb=_logoBox;
+          if(zn){
+            const inTop=zn.top&&lb.y<zn.top*h;
+            const inBot=zn.bottom&&lb.y+lb.h>(1-zn.bottom)*h;
+            const inLeft=zn.left&&lb.x<zn.left*w;
+            const inRight=zn.right&&lb.x+lb.w>(1-zn.right)*w;
+            auditLogo.inActionBand=!!(inTop||inBot||inLeft||inRight);
+          }
         }
       }
       // ── (LOGO-ON-PHOTO LEGIBILITY — brand ruling 2026-07-06) ─────────────────
@@ -5353,6 +5512,16 @@ export default function App() {
         motifLayers: overlayLayers.filter(l=>l.motif),
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
+      // (Refinement 1) FREE PLACEMENT wins over reflow. The reflow engine de-collides the
+      // BASE archetype layout; a user who dragged a role has explicitly overruled that, so
+      // AFTER reflow we translate the eyebrow / support box by the stored per-role delta.
+      // (Governing rule: the user can always overwrite our suggestions — placement is never
+      // blocked or auto-corrected; consequences surface only as advisor reminders.) The
+      // date + pill boxes pick up their own offsets at their draw sites below.
+      { const eo=roleOff("eyebrow"); if(labelBox&&(eo.dx||eo.dy)) labelBox={...labelBox,x:labelBox.x+eo.dx,y:labelBox.y+eo.dy}; }
+      const _supOff=roleOff("support");
+      const _supFree=!!(_supOff.dx||_supOff.dy);   // user placed the caption freely → skip auto nudge/lift
+      if(supBox&&_supFree) supBox={...supBox,x:supBox.x+_supOff.dx,y:supBox.y+_supOff.dy};
 
       let usedH=0;
       let _midCut=0;   // (Crops ext) count of any mid-copy cut that reached the canvas
@@ -5500,12 +5669,15 @@ export default function App() {
         const dAlign=(overrideArch?mat.roles?.hero?.align:layout.align)||mat.roles?.hero?.align||"left";
         const dTextW=ctx.measureText(dTxt).width;
         const dX=dAlign==="center"?heroBox.x+(heroBox.w-dTextW)/2:dAlign==="right"?heroBox.x+heroBox.w-dTextW:heroBox.x;
+        // (Refinement 1) the date is its own draggable role — translate its draw + box by
+        // the stored per-role delta (free placement wins over the auto-placed spot).
+        const _dOff=roleOff("date");
         const clearOfObs=(rect)=>!_dObs||!(rect.x<_dObs.x+_dObs.w&&rect.x+rect.w>_dObs.x&&rect.y<_dObs.y+_dObs.h&&rect.y+rect.h>_dObs.y);
         const drawDate=(dy)=>{ beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
-          drawTextLines(ctx,[dTxt],heroBox.x,dy+dSz,heroBox.w,dSz*1.05,dAlign);
+          drawTextLines(ctx,[dTxt],heroBox.x+_dOff.dx,dy+dSz+_dOff.dy,heroBox.w,dSz*1.05,dAlign);
           fontMeta.date=dSz; endText(); };
         const belowTop=heroBox.y+usedH+dGap;
-        const belowRect={x:dX,y:belowTop,w:dTextW,h:dSz*1.28};
+        const belowRect={x:dX+_dOff.dx,y:belowTop+_dOff.dy,w:dTextW,h:dSz*1.28};
         if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
           drawDate(belowTop);
           dateDrawn=belowRect; dateExtH=dH;
@@ -5514,7 +5686,7 @@ export default function App() {
           // Full-bleed whisper tiles keep their caption low — overlay the date ABOVE
           // the hero on the photo instead (the reference "date overlay" treatment).
           drawDate(heroBox.y-dSz*1.6);
-          dateDrawn={x:dX,y:heroBox.y-dSz*1.6,w:dTextW,h:dSz*1.28};
+          dateDrawn={x:dX+_dOff.dx,y:heroBox.y-dSz*1.6+_dOff.dy,w:dTextW,h:dSz*1.28};
         }
       }
       const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
@@ -5525,7 +5697,7 @@ export default function App() {
       // push it down to just clear the hero — clamped so it never crosses the bottom safe
       // margin (the margin-bounded line count then truncates if needed). Never resizes the
       // hero and never touches side-split layouts (caption above/beside the hero).
-      if(!isSchedule && supportText && supBox && heroBox && usedH>0 && supBox.y>=heroBox.y-0.01*h){
+      if(!isSchedule && !_supFree && supportText && supBox && heroBox && usedH>0 && supBox.y>=heroBox.y-0.01*h){
         const _sB=(1-sm.b)*h, _sT=sm.t*h;
         const heroBot=heroBox.y+usedH;
         const clearGap=Math.max(0.012*h, 0.10*(fontMeta.headline||0));
@@ -5575,8 +5747,11 @@ export default function App() {
           // effective floor: the bottom safe margin, OR the top of a photo band sitting
           // below the caption (editorial_split/portrait_credential story), whichever is
           // higher. Min 1 line — a controlled truncation, never a canvas-edge/photo clip.
-          const _safeBot=(1-sm.b)*h;
-          const _bandTop=(mat.photoRegion&&!mat.fullBleed)?(()=>{const bb=bleedBox(mat.photoRegion);return (bb.y>supBox.y)?bb.y:Infinity;})():Infinity;
+          // (Refinement 1) A FREELY-placed caption may sit anywhere on-canvas — its floor
+          // is the canvas edge, not the safe margin, so the user's low placement is honoured
+          // (never lifted or dropped). Consequences surface as advisor reminders, not blocks.
+          const _safeBot=_supFree?h:(1-sm.b)*h;
+          const _bandTop=(!_supFree&&mat.photoRegion&&!mat.fullBleed)?(()=>{const bb=bleedBox(mat.photoRegion);return (bb.y>supBox.y)?bb.y:Infinity;})():Infinity;
           const _floor=Math.min(_safeBot,_bandTop);
           // Max whole lines whose stacked height fits from the box top to the floor. A
           // ~0.28em descender allowance keeps the LAST line's tails inside the margin
@@ -5675,8 +5850,14 @@ export default function App() {
         // badge text; drawFurniture reports each drawn text piece so the pill becomes
         // a click-editable role like hero/support/eyebrow.
         const furnItems = furnitureBase;
+        // (Refinement 1) each furniture piece is a draggable role: the pill reports as
+        // "pill" and hairline/index/counterweight report their _role/_key. The offset
+        // resolver returns the user's stored delta (in fractions) for that same key so a
+        // dragged pill / rule / index sits exactly where it was dropped (free placement).
+        const _furnRoleKey = (it) => (it && (it.type==="badge" ? (it._role||"pill") : (it._role||it._key||`furn_${it.type}`))) || "";
         drawFurniture(ctx, furnItems, w, h, sm, heroInk, avoid, accentInk,
-          _roleB ? (role, box) => { _roleB[role] = box; } : null);
+          _roleB ? (role, box) => { _roleB[role] = box; } : null,
+          (it) => { const o=roleOff(_furnRoleKey(it)); return (o.dx||o.dy)?{dx:o.dx/w,dy:o.dy/h}:null; });
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
@@ -5709,8 +5890,12 @@ export default function App() {
       // mark. Photo tiles stay logo-free (logoUse:"none"). The mark is the orchid-petal
       // glyph tinted to the field's readable ink — small, quiet, corner-anchored.
       const markPos = provArch?.elements?.logo?.position || "bottom-right";
-      const wantMark = logoUse==="mark" && !effUserLogoTouched;
-      const drawLockup = effUserLogoTouched || logoUse==="lockup";
+      // (Scope addendum) LOGO REMOVED — when the user pinned the logo off, draw NEITHER the
+      // mark NOR the lockup on the LIVE design (the calibration board still shows the
+      // archetype's own logo). logoBoxRef stays null → the "＋ add logo" ghost re-appears.
+      const _logoRemoved = logoHidden && !_calibRender;
+      const wantMark = !_logoRemoved && logoUse==="mark" && !effUserLogoTouched;
+      const drawLockup = !_logoRemoved && (effUserLogoTouched || logoUse==="lockup");
       // (Commit 2) DETERMINISTIC ROTATION SEED — stable for a given design, but varies
       // across archetype / palette variant / copy so consecutive designs don't repeat the
       // same lockup. Mirrors the palette rotation ring's determinism.
@@ -5795,7 +5980,8 @@ export default function App() {
       else if(logoUse==="lockup"){ /* archetype lockup w/o user touch handled below */ }
       // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
       // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
-      if(logoUse==="lockup" && !effUserLogoTouched) putLogo(textEnvelope,{...logoOpts});
+      // (Scope addendum) suppressed when the logo is pinned OFF.
+      if(logoUse==="lockup" && !effUserLogoTouched && !_logoRemoved) putLogo(textEnvelope,{...logoOpts});
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
@@ -6338,7 +6524,7 @@ export default function App() {
       }else drawOverlayLayer(ctx,img,w,h,t);
     });
 
-  },[postType,archetypeId,archVariant,bgColor,fieldColorOverride,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,photoTouchedByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
+  },[postType,archetypeId,archVariant,bgColor,fieldColorOverride,bgAlpha,imageObj,videoObj,logoObj,headline,subtext,attribution,dateText,backdropMode,logoPosition,logoSize,userLogoTouched,logoByDim,logoFreePos,logoHidden,curBg,tc,textColorId,textMinContrast,imgT,imgTByDim,photoTouchedByDim,overlayLayers,overlays,selOverlay,mediaObj,photoSel,brandKit,typeLayouts,typeLayoutsByDim,roleOffsetsByDim,fontSizes,microLabel,pillText,photoTreatment,photoFrame,heroRegister,furnitureOverrides]);
 
   // Live preview draws the current dimension into the on-screen canvas.
   const draw = useCallback((source) => {
@@ -6530,7 +6716,7 @@ export default function App() {
      drawn boxes in logical canvas px; we normalize to 0..1 for both the dot anchor
      and the ack geometry fingerprint. Issues without precise geometry return null
      (their dot pins to the canvas top-right; their ack uses the "nogeo" print). */
-  const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "safe-area-logo", "logo-legibility"]);
+  const LOGO_ISSUE_IDS = new Set(["logo-overlap-text", "logo-focal-band", "logo-action-band", "safe-area-logo", "logo-legibility"]);
   // (One Advice Ledger) The live drawn box (normalized 0..1) for a coarse ledger
   // element token — shared by local readiness issues AND AI-audit findings so both
   // anchor + ack against the SAME geometry. "canvas"/background/photo-with-no-box
@@ -7747,8 +7933,16 @@ export default function App() {
      per the pins law). Release on a snap = clean placement at the standard spot.
      prefers-reduced-motion suppresses the animated pull but STILL snaps on release. */
   const SNAP_PX = 12;                     // magnetic radius in display px
-  const [snapGuide, setSnapGuide] = useState(null); // {lines:[{x1,y1,x2,y2}], dot:{x,y}} in FRACTIONS, or null
+  const [snapGuide, setSnapGuide] = useState(null); // {lines:[{x1,y1,x2,y2}], dot:{x,y}, landing:{x,y,w,h}} in FRACTIONS, or null
   const snapGuideRef = useRef(null); snapGuideRef.current = snapGuide;
+  // (Refinement 3) DRAG LIFT — the drag chrome is no longer a tangerine oval (tangerine
+  // is CTA-only ink). While a gesture is live the dragged element LIFTS: a soft shadow +
+  // ~2% scale rendered as a positioned, pointer-events:none box over the element's live
+  // rect (FRACTIONS). On snap engage a thin Burnham hairline + faint dashed landing box
+  // fade in (via snapGuide). Cleared on release (a CSS transition gives the settle).
+  const [dragLift, setDragLift] = useState(null); // {x,y,w,h} fractions | null
+  const dragLiftRef = useRef(null); dragLiftRef.current = dragLift;
+  const clearDragLift = () => { if (dragLiftRef.current) setDragLift(null); };
   const reducedMotion = typeof window !== "undefined" && window.matchMedia
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false;
   // The 9-grid anchor CENTRES for an element of size (ew,eh) fractions, inset by the
@@ -7795,7 +7989,10 @@ export default function App() {
     if (bestX) lines.push({ x1: nx, y1: 0, x2: nx, y2: 1 });
     if (bestY) lines.push({ x1: 0, y1: ny, x2: 1, y2: ny });
     const dot = (bestX && bestY) ? { x: nx, y: ny } : null;
-    const guide = (bestX || bestY) ? { lines, dot } : null;
+    // (Refinement 3) faint dashed LANDING BOX at the snapped rect — a preview of where
+    // the element will settle. Drawn only when a snap is engaged; sized to the element.
+    const landing = (bestX || bestY) ? { x: nx - ew / 2, y: ny - eh / 2, w: ew, h: eh } : null;
+    const guide = (bestX || bestY) ? { lines, dot, landing } : null;
     return { cx: nx, cy: ny, snapped: !!(bestX || bestY), guide };
   };
   const clearSnapGuide = () => { if (snapGuideRef.current) setSnapGuide(null); };
@@ -7868,24 +8065,38 @@ export default function App() {
     const _inHit=(b)=>{const hb=_hitBox(b);return px>=hb.x&&px<=hb.x+hb.w&&py>=hb.y&&py<=hb.y+hb.h;};
     if(rb){
       // Text roles first (small before hero), then FURNITURE pieces (hairline
-      // rules / index tokens / url lines) — every drawn element is selectable
-      // (dead clicks are impossible, ux-architecture §2.2).
+      // rules / index tokens / url lines) — every drawn element is selectable AND
+      // DRAGGABLE (Refinement 1: every rendered role can be placed anywhere with the
+      // same soft-snap + pin semantics). Dead clicks are impossible (ux-architecture §2.2).
       const furnKeys=Object.keys(rb).filter(k=>k.startsWith("furn_"));
       for(const role of ["pill","eyebrow","date","support",...furnKeys,"hero"]){
         const b=rb[role]; if(!b) continue;
         if(_inHit(b)){
-          if(role.startsWith("furn_")){
-            selectElement(role);   // minimal furniture inspector (colour/width/delete)
-            return;
+          const isFurn=role.startsWith("furn_");
+          if(isFurn) selectElement(role);   // minimal furniture inspector (colour/width/delete)
+          else {
+            setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
+            setTextRole(role);   // (D1 item 6) title the inspector by the tapped role
+            setInspectorEl("text");
           }
-          setTextSelected(true);setPhotoSel(false);setSelOverlay(null);setBgSel(false);setLogoSel(false);
-          setTextRole(role);   // (D1 item 6) title the inspector by the tapped role
-          setInspectorEl("text");
-          // (feature C) seed the block height + ORIGINAL centre so the drag can snap
-          // to the element's own starting spot and render an accurate guide.
-          const _eh=b.h/H, _ew=textLayout.width||b.w/W;
-          dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
-            eh:_eh, orig:{key:role,cx:textLayout.x+_ew/2,cy:textLayout.y+_eh/2}};
+          // The HERO drags the whole text block (textLayout). Every OTHER role
+          // (eyebrow/date/support/pill/furniture) is placed FREELY via its own
+          // centre-delta: seed the role's CURRENT drawn centre + its stored offset so
+          // the incremental delta stays exact, and snap against its own box.
+          if(role==="hero"){
+            const _eh=b.h/H, _ew=textLayout.width||b.w/W;
+            dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:textLayout.x,oy:textLayout.y,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
+              eh:_eh, orig:{key:role,cx:textLayout.x+_ew/2,cy:textLayout.y+_eh/2}};
+          } else {
+            const _ew=b.w/W, _eh=b.h/H;
+            const _cx=(b.x+b.w/2)/W, _cy=(b.y+b.h/2)/H;   // current drawn centre (offset already baked in)
+            const _stored=roleOffsetsByDimRef.current?.[dimensionId]?.[postType]?.[role]||null;
+            dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:b.x/W,oy:b.y/H,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
+              ew:_ew, eh:_eh, roleFree:true,
+              baseCx:_cx, baseCy:_cy,               // centre before THIS gesture
+              baseOff:{dx:_stored?.dx||0,dy:_stored?.dy||0}, // stored delta before THIS gesture
+              orig:{key:role,cx:_cx,cy:_cy}};
+          }
           try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
           return;
         }
@@ -7897,7 +8108,14 @@ export default function App() {
     if(logoBoxRef.current&&_inHit(logoBoxRef.current)){
       selectElement("logo");
       const lb=logoBoxRef.current;
-      dragRef.current={mode:"logo",x:e.clientX,y:e.clientY,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,ew:lb.w/W,eh:lb.h/H};
+      // (Refinement 2) FREE logo drag — seed the logo's live centre (fractions) + the
+      // pointer-to-centre offset so it tracks the pointer 1:1, and carry its ORIGINAL
+      // spot so that spot is one of the magnetic snap targets (drag back to it re-anchors).
+      const _cx=(lb.x+lb.w/2)/W, _cy=(lb.y+lb.h/2)/H;
+      const _pcx=(e.clientX-rect.left)/rect.width, _pcy=(e.clientY-rect.top)/rect.height;
+      dragRef.current={mode:"logo",x:e.clientX,y:e.clientY,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
+        ew:lb.w/W,eh:lb.h/H, cx:_cx,cy:_cy, offCx:_cx-_pcx,offCy:_cy-_pcy,
+        orig:{key:"logo",cx:_cx,cy:_cy}};
       try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
       return;
     }
@@ -7956,12 +8174,26 @@ export default function App() {
       let nx=d.ox+(e.clientX-d.x)/d.rect.width,ny=d.oy+(e.clientY-d.y)/d.rect.height;
       // (feature C) SOFT-SNAP: pull the block toward the nearest anchor / alignment /
       // original spot. x/y are the block's top-left; snap its CENTRE, then map back.
-      const ew=textLayout.width||0.6, eh=d.eh||0.14;
+      const ew=(d.roleFree?(d.ew||0.4):(textLayout.width||0.6)), eh=d.eh||0.14;
       const s=snapCentre(nx+ew/2, ny+eh/2, ew, eh, d.rect.width, d.rect.height, d.orig);
       nx=s.cx-ew/2; ny=s.cy-eh/2;
       setSnapGuide(s.guide);
       d.snapped=s.snapped;
-      updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
+      // (Refinement 3) lift the block at its live top-left rect (no clamp — free placement).
+      setDragLift({x:nx,y:ny,w:ew,h:eh});
+      if(d.roleFree){
+        // (Refinement 1) a NON-HERO role placed FREELY: new stored delta = the delta it
+        // had before this gesture + how far its CENTRE has moved this gesture. No safe-zone
+        // clamp — the user may drop it literally anywhere (governing rule); accessibility
+        // consequences surface only as advisor reminders, never as a block/auto-correct.
+        // Routed through THE pipeline (applyPatch → noteManualEdit) so the whole gesture is
+        // ONE undoable burst, exactly like the hero's updateTextLayout.
+        const cx=nx+ew/2, cy=ny+eh/2;
+        updateRoleOffset(d.role, (d.baseOff?.dx||0)+(cx-d.baseCx), (d.baseOff?.dy||0)+(cy-d.baseCy));
+      } else {
+        // The HERO drags the whole text block (textLayout) exactly as before.
+        updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
+      }
       return;
     }
     if (d.mode === "overlay") {
@@ -7977,24 +8209,26 @@ export default function App() {
       return;
     }
     if (d.mode === "logo") {
-      // (feature C) LOGO drag — the logo model is 9-grid anchors (each born-clean by
-      // construction). Dragging picks the anchor NEAREST the pointer, with a guide dot
-      // on the engaged anchor; on release that anchor pins (userLogoTouched). This
-      // honours "snaps are always legal positions" without a free-form logo offset.
+      // (Refinement 2) LOGO drag — the logo now follows the pointer 1:1 as a CONTINUOUS
+      // fractional centre. The 9-grid anchors (PLATFORM_SAFE-inset), alignment lines to
+      // other elements, and the logo's ORIGINAL spot are MAGNETIC (~12px engage); dragging
+      // firmly past breaks the snap so the mark can be dropped literally anywhere. On
+      // release the exact fractional centre pins ({x,y}, per-dim) — free placement is never
+      // blocked or auto-corrected (governing rule). The named-anchor enum stays as the
+      // last chat/inspector semantic; a warned drop raises an advisor dot, never a block.
       if(!d.moved&&Math.hypot(e.clientX-d.downX,e.clientY-d.downY)<=5)return;
       d.moved=true;
       const px=(e.clientX-d.rect.left)/d.rect.width, py=(e.clientY-d.rect.top)/d.rect.height;
-      const anchors=snapAnchors(d.ew||0.14, d.eh||0.14);
-      let best=anchors[0], bd=Infinity;
-      for(const a of anchors){ const dd=Math.hypot(px-a.cx,py-a.cy); if(dd<bd){bd=dd;best=a;} }
-      // Map the winning anchor id (ky-kx) to a LOGO_POSITIONS key.
-      const LOGO_ANCHOR_KEY={
-        "top-left":"top-left","top-center":"top-center","top-right":"top-right",
-        "center-left":"mid-left","center-center":"center","center-right":"mid-right",
-        "bottom-left":"bottom-left","bottom-center":"bottom-center","bottom-right":"bottom-right",
-      };
-      d.snapPos=LOGO_ANCHOR_KEY[best.id]||"bottom-right";
-      setSnapGuide({ lines:[], dot:{ x:best.cx, y:best.cy } });
+      const ew=d.ew||0.14, eh=d.eh||0.14;
+      // Raw pointer-driven centre (1:1), preserving the grab offset so the logo doesn't
+      // jump to the pointer on the first move.
+      let cx=px+d.offCx, cy=py+d.offCy;
+      const s=snapCentre(cx, cy, ew, eh, d.rect.width, d.rect.height, d.orig);
+      cx=s.cx; cy=s.cy;
+      // Clamp only to the canvas (0..1) — NOT to the safe zone (free placement is legal).
+      d.free={ x:Math.max(0,Math.min(1,cx)), y:Math.max(0,Math.min(1,cy)) };
+      setSnapGuide(s.guide);
+      setDragLift({ x:d.free.x-ew/2, y:d.free.y-eh/2, w:ew, h:eh });
       return;
     }
     if (d.mode === "rotate") {
@@ -8034,17 +8268,21 @@ export default function App() {
   };
   const onPanEnd = () => {
     const d = dragRef.current;
-    // A tap (not a drag) inside the text block opens the Content editor.
-    if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300) focusTextField(d.role||"hero");
-    // (feature C) LOGO drag release — a real move commits the snapped 9-grid anchor
-    // through THE pipeline (same logoPosition patch a menu pick emits → userLogoTouched
-    // pins it, undo works, one-patch law). A tap (no move) just selects (already done).
+    // A tap (not a drag) inside a TEXT role opens its Content editor; a furniture role
+    // (furn_*) has no text field — the tap already opened its inspector in onPanStart.
+    if (d && d.mode==="text" && !d.moved && Date.now()-d.downTime<=300 && !(d.role||"").startsWith("furn_")) focusTextField(d.role||"hero");
+    // (Refinement 2) LOGO drag release — a real move commits the FREE fractional centre
+    // through THE pipeline (logoFree patch → userLogoTouched pins it exactly where dropped,
+    // undo works, one-patch law). When the drag ended engaged on an anchor the free pin
+    // lands ON that anchor's centre (a clean placement) but is still stored as {x,y} so the
+    // logo survives reload verbatim. A tap (no move) just selects (already done).
     if (d && d.mode==="logo") {
-      if (d.moved && d.snapPos) applyPatch({ logoPosition:d.snapPos }, { source:"ui" });
+      if (d.moved && d.free) applyPatch({ logoFree:d.free }, { source:"ui" });
       else if (!d.moved && Date.now()-d.downTime<=300) selectElement("logo");
     }
-    // Clear the magnetic guide the moment the gesture ends (all snap modes).
+    // Clear the magnetic guide + drag lift the moment the gesture ends (all snap modes).
     clearSnapGuide();
+    clearDragLift();
     dragRef.current = null;
   };
   const setZoom = (z) => patchPhoto({ zoom:z });
@@ -8164,6 +8402,9 @@ export default function App() {
     photoTreatment, photoFrame:clonePlain(photoFrame), microLabel, pillText, heroRegister,
     headline, subtext, attribution, dateText,
     selectedLogoId, logoPosition, logoSize, userLogoTouched, logoByDim:clonePlain(logoByDim),
+    logoFreePos: logoFreePos ? { ...logoFreePos } : null,   // (Refinement 2) free-logo pin
+    logoHidden,                                              // (Scope addendum) logo-removal pin
+    roleOffsetsByDim: clonePlain(roleOffsetsByDim),           // (Refinement 1) per-role offsets
     imgT:clonePlain(imgT), imgTByDim:clonePlain(imgTByDim), typeLayouts:clonePlain(typeLayouts), typeLayoutsByDim:clonePlain(typeLayoutsByDim), fontSizes:clonePlain(fontSizes),
     overlayLayers:clonePlain(overlayLayers),
     imageSrc:typeof image==="string" && image.length < 900000 ? image : null,
@@ -8247,6 +8488,9 @@ export default function App() {
     // Newer templates also round-trip per-dim logo overrides.
     setUserLogoTouched(s.userLogoTouched ?? true);
     setLogoByDim(s.logoByDim || {});
+    setLogoFreePos(s.logoFreePos || null);        // (Refinement 2) free-logo pin round-trips
+    setLogoHidden(!!s.logoHidden);                 // (Scope addendum) logo-removal pin round-trips
+    setRoleOffsetsByDim(s.roleOffsetsByDim || {}); // (Refinement 1) per-role offsets round-trip
     setImgT(s.imgT || { zoom:1, cx:0.5, cy:0.5, rotation:0 });
     setImgTByDim(s.imgTByDim || {});
     setFontSizes(s.fontSizes || freshFontSizes());
@@ -8831,6 +9075,20 @@ export default function App() {
         {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
           <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
         ))}
+      </div>
+      {/* (Scope addendum) REMOVE / ADD-BACK the logo — one patch, pinned, undoable. */}
+      <div style={{marginTop:12,paddingTop:11,borderTop:`1px solid ${B.ash}22`}}>
+        <button type="button"
+          onClick={()=>applyPatch({hideLogo:!logoHidden},{source:"ui"})}
+          title={logoHidden?"Show the logo on this design again":"Take the logo off this design (you can add it back any time)"}
+          style={{display:"inline-flex",alignItems:"center",gap:7,padding:"8px 13px",borderRadius:999,
+            border:`1px solid ${logoHidden?B.burnham:B.ash+"66"}`,background:logoHidden?B.burnham:"#fff",
+            color:logoHidden?"#fff":B.burnham,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,
+            letterSpacing:0.4,cursor:"pointer"}}>
+          <span aria-hidden="true" style={{fontSize:13,lineHeight:1}}>{logoHidden?"＋":"×"}</span>
+          {logoHidden?"Add logo back":"Remove logo"}
+        </button>
+        {logoHidden&&<div style={{marginTop:8,fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>The logo is off. It won't be added back automatically — tap above (or ask in chat) to restore it.</div>}
       </div>
       {logoOverlapHint&&(
         <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
@@ -9454,8 +9712,10 @@ export default function App() {
     // (P2 §3) close the logo-less gap in ghost coverage.
     if (!logoBoxRef.current) {
       const dp = defaultLogoSpot();
+      // (Scope addendum) when the logo was REMOVED (pinned off), the ghost's patch also
+      // CLEARS that pin (hideLogo:false) so tapping "＋ add logo" restores it cleanly.
       out.push({ key:"logo", box: dp.box, minH: 0.05, notText:true,
-        label:"＋ add logo", patch:{ logoPosition:dp.position }, focus:null });
+        label:"＋ add logo", patch: logoHidden ? { hideLogo:false, logoPosition:dp.position } : { logoPosition:dp.position }, focus:null });
     }
     // (B4 — photo-less designs offer "＋ add a photo". No design patch fires from
     // the ghost itself: adding a photo is upload/library/sample (a heavier flow),
@@ -9660,21 +9920,44 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
-              {/* ── SOFT-SNAP GUIDE (feature C) ── While dragging, a thin on-brand
-                    guide line at the engaged snap coordinate + a dot at the engaged
-                    anchor. pointer-events:none (never blocks the drag). Fractions map
-                    to the 0..1 viewBox. Reduced-motion: no transition on the guide. */}
+              {/* ── DRAG LIFT (Refinement 3) ── While a gesture is live the dragged
+                    element LIFTS: a soft shadow + ~2% scale on a positioned box over its
+                    live rect. NO tangerine anywhere (accent is CTA-only ink). The box is
+                    pointer-events:none so it never intercepts the drag or a hit-test.
+                    The scale/shadow ease in (120–180ms); prefers-reduced-motion pins them
+                    static via the CSS class. Cleared on release for a gentle settle. */}
+              {dragLift && (
+                <div className="wo-drag-lift" aria-hidden="true"
+                  style={{position:"absolute",
+                    left:`${(dragLift.x*100).toFixed(3)}%`, top:`${(dragLift.y*100).toFixed(3)}%`,
+                    width:`${(dragLift.w*100).toFixed(3)}%`, height:`${(dragLift.h*100).toFixed(3)}%`,
+                    pointerEvents:"none", zIndex:10, borderRadius:6}} />
+              )}
+              {/* ── SOFT-SNAP GUIDE (Refinement 3) ── On snap engage, a THIN BURNHAM
+                    HAIRLINE at the engaged coordinate + a small burnham dot at the engaged
+                    anchor + a faint dashed landing-box outline previewing where the element
+                    settles. pointer-events:none (never blocks the drag). Fractions map to
+                    the 0..1 viewBox. The .wo-snap-guide class fades it in (reduced-motion:
+                    instant). NO tangerine — the hairline reads as a quiet brand guide. */}
               {snapGuide && (
                 <svg aria-hidden="true" viewBox="0 0 1 1" preserveAspectRatio="none"
+                  className="wo-snap-guide"
                   style={{position:"absolute",inset:0,width:"100%",height:"100%",overflow:"visible",pointerEvents:"none",zIndex:11}}>
+                  {snapGuide.landing && (
+                    <rect x={snapGuide.landing.x} y={snapGuide.landing.y}
+                      width={Math.max(0,snapGuide.landing.w)} height={Math.max(0,snapGuide.landing.h)}
+                      fill="none" stroke={B.burnham} strokeWidth={1} strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke" rx={0.006} style={{opacity:0.28}} />
+                  )}
                   {(snapGuide.lines||[]).map((ln,i)=>(
                     <line key={i} x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2}
-                      stroke={B.tangerine} strokeWidth={0.004} strokeDasharray="0.012 0.008" vectorEffect="non-scaling-stroke"
-                      style={{opacity:0.9}} />
+                      stroke={B.burnham} strokeWidth={1} vectorEffect="non-scaling-stroke"
+                      style={{opacity:0.55}} />
                   ))}
                   {snapGuide.dot && (
-                    <circle cx={snapGuide.dot.x} cy={snapGuide.dot.y} r={0.011}
-                      fill={B.tangerine} stroke="#fff" strokeWidth={0.003} vectorEffect="non-scaling-stroke" />
+                    <circle cx={snapGuide.dot.x} cy={snapGuide.dot.y} r={0.008}
+                      fill={B.burnham} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke"
+                      style={{opacity:0.85}} />
                   )}
                 </svg>
               )}
