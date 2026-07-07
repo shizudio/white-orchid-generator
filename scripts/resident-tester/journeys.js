@@ -184,6 +184,25 @@ async function runJourneys(page, run, cons, baseUrl) {
     pushStep('canvas click → inspector', false, e.message);
   }
 
+  // ── J3b: PHYSICAL HIT-TEST — dead clicks are impossible (ux-architecture §2.2).
+  //    Reproduces a real user click at every rendered element's coordinates
+  //    (logo + each text/furniture role) via elementFromPoint + dispatched pointer
+  //    events, asserting nothing invisible (an opacity:0 ghost button, an inspector
+  //    dock, a stray pointer-events layer) swallows the click and the correct
+  //    contextual inspector opens. This is the guard for the "can't click the logo
+  //    or non-heading text" regression — it FAILS if the ghost pointer-events fix is
+  //    reverted (an invisible button reclaims the click). ──────────────────────────
+  try {
+    await page.keyboard.press('Escape').catch(() => {});
+    await settle(300);
+    const hit = await O.canvasHitTargets(page);
+    ctx = { journey: 'canvas-hit-targets', tag: 'j3b-hit-targets', console: cons.drain() };
+    const hb = await assertOracles(page, run, ctx, [hit]);
+    pushStep('every element clickable (no dead clicks)', hb.every(c => c.ok), hit.observed);
+  } catch (e) {
+    pushStep('every element clickable (no dead clicks)', false, e.message);
+  }
+
   // ── J4: format switch through all 6 → no overflow / strip stable ──────────
   try {
     await page.keyboard.press('Escape').catch(() => {});

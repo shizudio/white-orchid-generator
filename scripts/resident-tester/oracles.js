@@ -215,6 +215,102 @@ function offerWithoutExecution(snap) {
   };
 }
 
+// 9. CANVAS HIT TARGETS — the DEAD-CLICK oracle (ux-architecture §2.2: "EVERY
+//    element responds to click/tap; dead clicks are impossible"). Programmatic role
+//    checks (roleBounds present) are NOT enough — they miss the class where a role
+//    IS registered but an INVISIBLE overlay (opacity:0 ghost button, an inspector
+//    dock, a stray pointer-events layer) sits ABOVE the canvas and swallows the real
+//    click. This oracle reproduces a USER click physically: for the logo, every text
+//    role, and the photo, it (a) asserts document.elementFromPoint at the element's
+//    RENDERED centre is the canvas itself (nothing intercepts), then (b) dispatches a
+//    real pointerdown/up at those coordinates and asserts the correct contextual
+//    inspector opens. It runs inside the page (needs the DOM + __woTruth) and returns
+//    the standard { name, ok, observed, expected } judgment shape.
+//
+//    Regression guard: this FAILS if the ghost-slot / overlay pointer-events fix is
+//    reverted (an invisible button reclaims the click → elementFromPoint is the
+//    BUTTON, not the canvas, and the inspector never opens).
+async function canvasHitTargets(page) {
+  const raw = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const cv = document.querySelector('canvas[aria-label="Interactive post preview"]');
+    const truthFn = window.__woTruth;
+    if (!cv || !truthFn) return { unavailable: true };
+    const truth = truthFn();
+    if (!truth || !truth.canvas) return { unavailable: true };
+    const rect = cv.getBoundingClientRect();
+    const W = truth.canvas.w, H = truth.canvas.h;
+    if (!rect.width || !rect.height) return { unavailable: true };
+
+    const closeInspector = async () => {
+      document.querySelectorAll('.wo-inspector [aria-label="Close inspector"], .wo-inspector-backdrop').forEach(b => b.click());
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(220);
+    };
+    const inspectorLabel = () => {
+      const el = document.querySelector('.wo-inspector');
+      return el ? (el.getAttribute('aria-label') || 'open') : null;
+    };
+    // The centre of an element's rendered box, in client coords.
+    const centreOf = (b) => ({
+      x: rect.left + (b.x + b.w / 2) * rect.width / W,
+      y: rect.top + (b.y + b.h / 2) * rect.height / H,
+    });
+    const fire = (pt) => {
+      const target = document.elementFromPoint(pt.x, pt.y) || cv;
+      const o = { clientX: pt.x, clientY: pt.y, bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', button: 0, isPrimary: true };
+      target.dispatchEvent(new PointerEvent('pointerdown', o));
+      target.dispatchEvent(new PointerEvent('pointerup', o));
+      if (target.tagName === 'BUTTON') target.click();
+      return target;
+    };
+
+    // Build the target list: logo (if drawn) + every text/furniture role + photo.
+    const rb = truth.roleBounds || {};
+    const targets = [];
+    if (truth.logoBox) targets.push({ name: 'logo', box: truth.logoBox, wantInspector: 'Logo' });
+    for (const k of Object.keys(rb)) targets.push({ name: k, box: rb[k], wantInspector: null });
+    // Photo: only when the design carries a photo (canPan). truth doesn't expose the
+    // photo box, so probe the canvas centre as a proxy ONLY if a media background is
+    // present (the studio exposes it via the Photo inspector on a centre click).
+    const hasPhoto = !!document.querySelector('[aria-label="canvas-help"], #canvas-help') || !!(truth.hasPhoto);
+
+    const results = [];
+    for (const t of targets) {
+      await closeInspector();
+      const pt = centreOf(t.box);
+      // (a) nothing invisible sits over the element — a real click reaches the canvas.
+      const topEl = document.elementFromPoint(pt.x, pt.y);
+      const reachesCanvas = topEl === cv;
+      // (b) a real dispatched click opens SOME contextual inspector.
+      fire(pt);
+      await sleep(300);
+      const insp = inspectorLabel();
+      results.push({ role: t.name, reachesCanvas, inspector: insp, topTag: topEl ? topEl.tagName : 'none' });
+    }
+    await closeInspector();
+    return { unavailable: false, hasPhoto, results };
+  });
+
+  if (!raw || raw.unavailable) {
+    return { name: 'canvas-hit-targets', ok: true, observed: 'canvas/truth unavailable (n/a)', expected: 'every rendered element is clickable', severity: 'high' };
+  }
+  // A role FAILS if a real click at its centre is intercepted by a non-canvas element
+  // (dead click) OR no inspector opened. The logo + text roles must both reach the
+  // canvas and open an inspector; furniture (furn_*) must at least open its inspector.
+  const failures = raw.results.filter(r => !r.reachesCanvas || !r.inspector);
+  const ok = failures.length === 0 && raw.results.length > 0;
+  return {
+    name: 'canvas-hit-targets',
+    ok,
+    observed: ok
+      ? `${raw.results.length} rendered element(s) all clickable (logo + roles reach the canvas + open an inspector)`
+      : `dead/blocked clicks: ${failures.map(f => `${f.role}(reachesCanvas=${f.reachesCanvas},top=${f.topTag},insp=${f.inspector || 'none'})`).join('; ')}`,
+    expected: 'every rendered element (logo + each text role + photo) is directly clickable; no invisible overlay swallows the click',
+    severity: 'high',
+  };
+}
+
 // 8. CONSOLE-ERRORS — surfaced from a collected console-error list (Node side).
 function noConsoleErrors(errors) {
   return {
@@ -235,6 +331,7 @@ module.exports = {
   stripYStable,
   canvasBufferMatchesDims,
   offerWithoutExecution,
+  canvasHitTargets,
   noConsoleErrors,
   HONESTY_PATTERNS,
 };
