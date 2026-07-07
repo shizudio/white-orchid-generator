@@ -2708,6 +2708,15 @@ export default function App() {
   // control id ("bg" | "bgAlpha" | "backdrop" | "logo" | "text"). Cleared when a later
   // edit of the same control DOES land. This mirrors the chat's render-truth honesty.
   const [inspectorNotes, setInspectorNotes] = useState({});
+  // (THEME 1 "Decide more for me", 2026-07-07) MINIMAL-BY-DEFAULT INSPECTOR.
+  // Each panel shows ONLY its content + 2–3 curated brand choices; every other
+  // capability lives under ONE quiet "More options" fold, closed by default.
+  // Open state is remembered PER SESSION only (in-memory — this map, no storage),
+  // so a fold the user opened stays open while they hop between elements, but a
+  // fresh session starts calm again. Keyed by panel id ("text"|"bg"|"photo"|
+  // "logo"|"overlay"). NOTHING is deleted — the fold preserves every control.
+  const [foldOpen, setFoldOpen] = useState({});
+  const toggleFold = (id) => setFoldOpen(prev => ({ ...prev, [id]: !prev[id] }));
   // ── MATERIALIZED ARCHETYPE VISUALS (Commit 1 — full unification) ──
   // The archetype system is no longer a parallel render path keyed on archetypeId.
   // Applying an archetype MATERIALIZES its visuals into first-class design state
@@ -8831,6 +8840,69 @@ export default function App() {
   // reason there rather than let it be a silently-dead slider.
   const _fullBleedField = !!(mediaObj && _archForField && materializeArchetypeLayout(_archForField, dimensionId, archVariant).fullBleed);
   const _opacityDead = _fullBleedField;
+
+  /* ── "MORE OPTIONS" FOLD (THEME 1) ──────────────────────────────────────────
+     ONE quiet collapsed fold per inspector panel. Closed by default; airy §7
+     styling (a lot of whitespace, hairline top rule, muted burnham label, no
+     boxes). Holds every non-curated capability so NOTHING is deleted — the fold
+     preserves the full control surface, just out of the default eyeline. Open
+     state is per-session in-memory (foldOpen). Render FUNCTION children so the
+     inspector subtree never remounts on a keystroke (same focus-steal rule as
+     the layer list). */
+  const MoreFold = ({ id, children, label = "More options" }) => {
+    const open = !!foldOpen[id];
+    return (
+      <div style={{marginTop:18,paddingTop:15,borderTop:`1px solid ${B.ash}22`}}>
+        <button type="button" aria-expanded={open} onClick={()=>toggleFold(id)}
+          style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"4px 0",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
+          <span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.6,textTransform:"uppercase",color:B.burnham}}>{label}</span>
+          <span aria-hidden="true" style={{marginLeft:"auto",fontSize:11,color:B.ash,transform:open?"rotate(180deg)":"none",transition:"transform 0.16s",lineHeight:1}}>⌄</span>
+        </button>
+        {open && <div style={{marginTop:14}}>{children()}</div>}
+      </div>
+    );
+  };
+
+  /* Shapes + Decoration — the signature petal marks + accessory shapes, first
+     class again (§2.7). Retired from the top-bar + Add gallery (THEME 1) and
+     rehomed here, in the Background / Overlay panel's fold. Tapping adds through
+     THE pipeline (toggleOverlay → applyPatch → inspector opens on the placed
+     shape); an already-placed shape jumps to its overlay inspector. */
+  const renderShapesSection = () => {
+    const shapeTile = (o) => {
+      const placedLayer = overlayLayers.find(l => l.assetId === o.id);
+      const placed = !!placedLayer;
+      // Petal marks are ivory assets — a soft celadon backing keeps them visible
+      // on the white tile (accessories stay on white).
+      const tileBg = (o.builtin && o.category === "overlays") ? `${B.celadonDeep}2e` : "#fff";
+      return (
+        <button key={o.id} aria-pressed={placed} onClick={()=>{ if(placedLayer){ selectElement("overlay", placedLayer.uid); } else { toggleOverlay(o); } }} title={`${o.name} — tap to ${placed?"edit":"add"}`}
+          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
+          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
+          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
+        </button>
+      );
+    };
+    const petals = overlays.filter(o => o.builtin && o.category === "overlays");
+    const decorations = overlays.filter(o => !(o.builtin && o.category === "overlays"));
+    return (
+      <>
+        <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"2px 0 6px"}}>Shapes</div>
+        <div style={{fontSize:10,color:B.jet,fontFamily:F.body,lineHeight:1.45,margin:"0 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
+          {petals.map(shapeTile)}
+        </div>
+        {decorations.length>0 && <>
+          <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"2px 0 6px"}}>Decoration</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+            {decorations.map(shapeTile)}
+          </div>
+        </>}
+      </>
+    );
+  };
+
   const renderBackgroundPanel = () => (
     <>
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
@@ -8853,61 +8925,87 @@ export default function App() {
       </div>
       <div style={{fontSize:12,color:B.ash,marginTop:6,fontFamily:F.subtitle}}>{effectiveFieldOpt?.label}</div>
       {inspectorNotes.bg && <div style={{fontSize:10,color:B.tangerine,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>{inspectorNotes.bg}</div>}
-      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,opacity:_opacityDead?0.45:1}}>
-        <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
-        <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha} disabled={_opacityDead}
-          onInput={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.currentTarget.value)},{source:"ui"})}
-          onChange={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.target.value)},{source:"ui"})}
-          style={{flex:1,accentColor:B.burnham,cursor:_opacityDead?"not-allowed":"pointer"}} />
-        <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
-      </div>
-      {_opacityDead
-        ? <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>The photo fills this layout, so the background sits behind it — opacity has no visible effect here.</div>
-        : bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+      {/* (THEME 1) Curated primary = the brand swatches only. Opacity + shapes
+          fold away — the brand system decides the rest. */}
+      <MoreFold id="bg">
+        {() => (
+          <>
+            <div style={{display:"flex",alignItems:"center",gap:8,opacity:_opacityDead?0.45:1}}>
+              <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:54}}>Opacity</span>
+              <input aria-label="Background opacity" type="range" min="0" max="1" step="0.01" value={bgAlpha} disabled={_opacityDead}
+                onInput={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.currentTarget.value)},{source:"ui"})}
+                onChange={e=>!_opacityDead&&applyPatch({bgAlpha:parseFloat(e.target.value)},{source:"ui"})}
+                style={{flex:1,accentColor:B.burnham,cursor:_opacityDead?"not-allowed":"pointer"}} />
+              <span style={{fontSize:10,color:B.ash,fontFamily:F.body,width:34,textAlign:"right"}}>{Math.round(bgAlpha*100)}%</span>
+            </div>
+            {_opacityDead
+              ? <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>The photo fills this layout, so the background sits behind it — opacity has no visible effect here.</div>
+              : bgAlpha<0.999&&<div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.5}}>Transparent background exports as a PNG with alpha (JPEG flattens to white).</div>}
+            <div style={{height:16}} />
+            {renderShapesSection()}
+          </>
+        )}
+      </MoreFold>
     </>
   );
 
-  // PHOTO — media kind toggle + samples/library/upload + quick chips + AI idea.
+  // PHOTO (THEME 1 minimal-by-default) — curated primary = the two ways to
+  // change the photo (Library / Upload). The sample strip, Midjourney, the
+  // image/video toggle and the quick transforms fold under "More options".
   const renderPhotoPanel = () => (
     <>
-      <div style={{display:"flex",gap:6,marginBottom:10}}>
-        <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
-        <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
-      </div>
       {mediaKind==="image"?(
         <>
-          <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:8}}>
-            {SAMPLE_IMAGES.map((s,i)=>(
-              <button key={i} onClick={()=>applyPatch({imageSrc:s.full},{source:"ui"})}
-                style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
-                title={s.label}>
-                <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
-              </button>
-            ))}
-          </div>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>setShowLibPicker(true)} style={{flex:1,padding:"8px 12px",background:"transparent",border:`1.5px solid ${B.burnham}44`,borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:600,color:B.burnham,letterSpacing:0.5,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📂 Library</button>
             <button onClick={()=>imgRef.current?.click()} style={{flex:1,padding:"8px 12px",background:B.burnham,border:"none",borderRadius:8,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:700,color:"#fff",letterSpacing:0.5}}>＋ Upload</button>
           </div>
-          <MidjourneyLauncher />
-          {mediaObj&&<>
-            <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-              <button onClick={()=>{setPhotoSel(true);patchPhoto({cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>⊕ Center</button>
-              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.5});}} style={quickBtn(B,FU)}>50%</button>
-              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.75});}} style={quickBtn(B,FU)}>75%</button>
-              <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:1,cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>Fill</button>
-              <button onClick={()=>{patchPhoto({rotation:0});}} style={quickBtn(B,FU)}>0°</button>
-            </div>
-            <div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>
-          </>}
+          {mediaObj&&<div id="canvas-help" className="generator-help-text" style={{fontSize:11,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>Select the preview to resize, rotate, or move the image. Keyboard: arrows move, +/− zoom, and [ ] rotate.</div>}
+          <MoreFold id="photo">
+            {() => (
+              <>
+                <div style={{display:"flex",gap:6,marginBottom:10}}>
+                  <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
+                  <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
+                </div>
+                <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Sample photos</div>
+                <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,marginBottom:10}}>
+                  {SAMPLE_IMAGES.map((s,i)=>(
+                    <button key={i} onClick={()=>applyPatch({imageSrc:s.full},{source:"ui"})}
+                      style={{flexShrink:0,width:48,height:48,borderRadius:6,border:image===s.full?`2px solid ${B.burnham}`:"2px solid transparent",padding:0,cursor:"pointer",overflow:"hidden",background:"none"}}
+                      title={s.label}>
+                      <img src={s.thumb} alt={s.label} style={{width:"100%",height:"100%",objectFit:"cover",display:"block",borderRadius:4}} />
+                    </button>
+                  ))}
+                </div>
+                <MidjourneyLauncher />
+                {mediaObj&&<>
+                  <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",margin:"12px 0 6px"}}>Quick position</div>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    <button onClick={()=>{setPhotoSel(true);patchPhoto({cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>⊕ Center</button>
+                    <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.5});}} style={quickBtn(B,FU)}>50%</button>
+                    <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:0.75});}} style={quickBtn(B,FU)}>75%</button>
+                    <button onClick={()=>{setPhotoSel(true);patchPhoto({zoom:1,cx:0.5,cy:0.5});}} style={quickBtn(B,FU)}>Fill</button>
+                    <button onClick={()=>{patchPhoto({rotation:0});}} style={quickBtn(B,FU)}>0°</button>
+                  </div>
+                </>}
+              </>
+            )}
+          </MoreFold>
         </>
       ):(
-        /* (Declutter, ratified §5.3) Video can't be EXPORTED yet, so the upload/
-           save controls were a dead end (real-assets law). One calm, honest line
-           until MP4 export exists — then the set returns as a whole. */
-        <div style={{fontSize:12,color:B.jet,fontFamily:F.body,lineHeight:1.6,padding:"6px 2px"}}>
-          Video is coming soon — you’ll be able to make short clips in the same brand style once video export is ready.
-        </div>
+        <>
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
+            <Chip on={mediaKind==="image"} click={()=>setMediaKind("image")} sm>Image</Chip>
+            <Chip on={mediaKind==="video"} click={()=>setMediaKind("video")} sm>Video</Chip>
+          </div>
+          {/* (Declutter, ratified §5.3) Video can't be EXPORTED yet, so the upload/
+             save controls were a dead end (real-assets law). One calm, honest line
+             until MP4 export exists — then the set returns as a whole. */}
+          <div style={{fontSize:12,color:B.jet,fontFamily:F.body,lineHeight:1.6,padding:"6px 2px"}}>
+            Video is coming soon — you’ll be able to make short clips in the same brand style once video export is ready.
+          </div>
+        </>
       )}
     </>
   );
@@ -8970,55 +9068,30 @@ export default function App() {
           </div>
         );
       })()}
-      <EditorSubhead label="Typography" summary="Editorial auto-fit" />
-      <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{fontSize:11,fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>Editorial auto-fit</span>
-          <button onClick={resetTextLayout} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",fontFamily:F.body}}>Reset</button>
-        </div>
-        <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
-      </div>
-
-      {/* Font size per text category */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
-        <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
-      </div>
-      {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
-        const meta=FONT_ROLES.find(r=>r.id===role);
+      {/* ── (THEME 1) CURATED PRIMARY: size (S/M/L) + text colour ───────────────
+          Two brand-safe choices in the default eyeline. Size drives the primary
+          text role only (heading, or highlight for overlay/caption post types)
+          with the three middle steps — the full XS-XL per-category grid, the
+          scale/width/leading sliders, alignment, the 9-grid, the backdrop modes
+          and the editorial auto-fit reset all fold under "More options". */}
+      {(()=>{
+        const primaryRole = ["texture_text","photo_logo"].includes(postType) ? "highlight" : "heading";
+        const cur = fontSizes[primaryRole] || "m";
+        // Map anything outside S/M/L (an XS/XL set in the fold) onto the nearest
+        // simple step so the primary control reflects it honestly.
+        const simple = cur==="xs"||cur==="s" ? "s" : cur==="xl"||cur==="l" ? "l" : "m";
         return (
-          <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
-            <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
-            <div style={{display:"flex",gap:4,flex:1}}>
-              {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
-                <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
-                  style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+            <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Size</span>
+            <div style={{display:"flex",gap:5,flex:1}}>
+              {[{id:"s",label:"S"},{id:"m",label:"M"},{id:"l",label:"L"}].map(step=>{const on=simple===step.id;return (
+                <button key={step.id} onClick={()=>setFontSize(primaryRole,step.id)} aria-pressed={on} title={`Text ${step.label}`}
+                  style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
               );})}
             </div>
           </div>
         );
-      })}
-      <div style={{height:10}} />
-
-      <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
-      <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
-      <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
-      <div style={{display:"flex",gap:6,marginTop:9,marginBottom:10}}>
-        {[{id:"left",label:"Left"},{id:"center",label:"Centre"},{id:"right",label:"Right"}].map(item=><button key={item.id} aria-pressed={textLayout.align===item.id} onClick={()=>updateTextLayout({align:item.id})}
-          style={{flex:1,padding:"7px 8px",borderRadius:8,border:`1.5px solid ${textLayout.align===item.id?B.burnham:B.ash+"44"}`,background:textLayout.align===item.id?B.burnham:"#fff",color:textLayout.align===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700}}>{item.label}</button>)}
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,maxWidth:150}}>
-        {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
-          style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
-      </div>
-      <EditorSubhead label="Text backdrop" summary={{auto:"Auto",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
-      <div style={{display:"flex",gap:6}}>
-        {[{id:"auto",l:"Auto"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
-          <button key={o.id} aria-pressed={on} onClick={()=>applyPatch({backdropMode:o.id},{source:"ui"})} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
-            style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
-        );})}
-      </div>
-      <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto flips the text colour first, then adds a solid brand band only where the photo is too busy.</div>
+      })()}
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
       <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
         {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>applyPatch({textColorId:option.id},{source:"ui"})} title={option.label}
@@ -9030,6 +9103,62 @@ export default function App() {
       </div>
       <div style={{fontSize:10,color:B.burnham,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>{accessibilityNote}</div>
       {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
+
+      <MoreFold id="text">
+        {() => (
+          <>
+            <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",marginBottom:9}}>Typography</div>
+            <div style={{padding:"12px 13px",borderRadius:10,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+                <span style={{fontSize:11,fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>Editorial auto-fit</span>
+                <button onClick={resetTextLayout} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",fontFamily:F.body}}>Reset</button>
+              </div>
+              <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
+            </div>
+
+            {/* Font size per text category (full XS-XL granularity) */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+              <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
+              <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
+            </div>
+            {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
+              const meta=FONT_ROLES.find(r=>r.id===role);
+              return (
+                <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+                  <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
+                  <div style={{display:"flex",gap:4,flex:1}}>
+                    {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
+                      <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
+                        style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+                    );})}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{height:10}} />
+
+            <Slider label="Scale" min={0.8} max={1.3} step={0.01} value={textLayout.scale} suffix={Math.round(textLayout.scale*100)+"%"} onChange={v=>updateTextLayout({scale:v})} />
+            <Slider label="Width" min={0.42} max={0.84} step={0.01} value={textLayout.width} suffix={Math.round(textLayout.width*100)+"%"} onChange={v=>updateTextLayout({width:v,x:Math.min(textLayout.x,0.92-v)})} />
+            <Slider label="Leading" min={1} max={1.45} step={0.01} value={textLayout.lineHeight} suffix={textLayout.lineHeight.toFixed(2)} onChange={v=>updateTextLayout({lineHeight:v})} />
+            <div style={{display:"flex",gap:6,marginTop:9,marginBottom:10}}>
+              {[{id:"left",label:"Left"},{id:"center",label:"Centre"},{id:"right",label:"Right"}].map(item=><button key={item.id} aria-pressed={textLayout.align===item.id} onClick={()=>updateTextLayout({align:item.id})}
+                style={{flex:1,padding:"7px 8px",borderRadius:8,border:`1.5px solid ${textLayout.align===item.id?B.burnham:B.ash+"44"}`,background:textLayout.align===item.id?B.burnham:"#fff",color:textLayout.align===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700}}>{item.label}</button>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5,maxWidth:150}}>
+              {[0,1,2,3,4,5,6,7,8].map(index=>{const col=index%3,row=Math.floor(index/3);return <button key={index} title={`Text position ${row+1}-${col+1}`} onClick={()=>{const x=col===0?0.08:col===1?(1-textLayout.width)/2:0.92-textLayout.width;const y=row===0?0.10:row===1?0.40:0.70;updateTextLayout({x,y});setTextSelected(true);setPhotoSel(false);setSelOverlay(null);}}
+                style={{height:32,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",display:"grid",placeItems:"center"}}><span style={{width:13,height:4,borderRadius:2,background:B.burnham}} /></button>})}
+            </div>
+            <EditorSubhead label="Text backdrop" summary={{auto:"Auto",band:"Brand band",none:"None"}[backdropMode]||"Auto"} />
+            <div style={{display:"flex",gap:6}}>
+              {[{id:"auto",l:"Auto"},{id:"band",l:"Band"},{id:"none",l:"None"}].map(o=>{const on=backdropMode===o.id;return (
+                <button key={o.id} aria-pressed={on} onClick={()=>applyPatch({backdropMode:o.id},{source:"ui"})} title={o.id==="auto"?"Flip text colour, then add a solid brand band only where the photo is too busy":o.id==="band"?"Solid brand strip behind text":"No band — drop shadow only"}
+                  style={{flex:1,padding:"7px 4px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{o.l}</button>
+              );})}
+            </div>
+            <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Legibility treatment behind text on a photo. Auto flips the text colour first, then adds a solid brand band only where the photo is too busy.</div>
+          </>
+        )}
+      </MoreFold>
     </>
   );
 
@@ -9054,30 +9183,9 @@ export default function App() {
           );
         })}
       </div>
-      <EditorSubhead label="Logo placement" summary={`${LOGO_POSITIONS[resolvedLogo.position]?.label||"Position"} · ${resolvedLogo.sizeId.toUpperCase()}`} />
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
-        {[
-          "top-left","top-center","top-right",
-          "mid-left","center","mid-right",
-          "bottom-left","bottom-center","bottom-right"
-        ].map(pos=>{
-          const on=resolvedLogo.position===pos;
-          return(
-            <button key={pos} aria-pressed={on} onClick={()=>placeLogo({position:pos})} title={pos.replace(/-/g," ")}
-              style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
-              <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
-            </button>
-          );
-        })}
-      </div>
-      <div style={{display:"flex",gap:6,alignItems:"center"}}>
-        <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
-        {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
-          <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
-        ))}
-      </div>
-      {/* (Scope addendum) REMOVE / ADD-BACK the logo — one patch, pinned, undoable. */}
-      <div style={{marginTop:12,paddingTop:11,borderTop:`1px solid ${B.ash}22`}}>
+      {/* (THEME 1) CURATED PRIMARY: variant grid (above) + Remove. Position is
+          drag-first now, so the 9-grid placement + size steps fold away. */}
+      <div style={{marginTop:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <button type="button"
           onClick={()=>applyPatch({hideLogo:!logoHidden},{source:"ui"})}
           title={logoHidden?"Show the logo on this design again":"Take the logo off this design (you can add it back any time)"}
@@ -9088,12 +9196,43 @@ export default function App() {
           <span aria-hidden="true" style={{fontSize:13,lineHeight:1}}>{logoHidden?"＋":"×"}</span>
           {logoHidden?"Add logo back":"Remove logo"}
         </button>
-        {logoHidden&&<div style={{marginTop:8,fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>The logo is off. It won't be added back automatically — tap above (or ask in chat) to restore it.</div>}
+        {!logoHidden&&<span style={{fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.4,flex:"1 1 120px",minWidth:120}}>Drag the logo on the preview to place it.</span>}
       </div>
+      {logoHidden&&<div style={{marginTop:8,fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>The logo is off. It won't be added back automatically — tap above (or ask in chat) to restore it.</div>}
       {logoOverlapHint&&(
         <div role="status" style={{marginTop:10,fontSize:11,fontFamily:F.body,color:B.burnham,background:`${B.tangerine}18`,border:`1px solid ${B.tangerine}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.4}}>
           Logo overlaps the text on this format.
         </div>
+      )}
+      {!logoHidden && (
+        <MoreFold id="logo">
+          {() => (
+            <>
+              <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",marginBottom:9}}>Placement · {LOGO_POSITIONS[resolvedLogo.position]?.label||"Position"} · {resolvedLogo.sizeId.toUpperCase()}</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:10,maxWidth:160}}>
+                {[
+                  "top-left","top-center","top-right",
+                  "mid-left","center","mid-right",
+                  "bottom-left","bottom-center","bottom-right"
+                ].map(pos=>{
+                  const on=resolvedLogo.position===pos;
+                  return(
+                    <button key={pos} aria-pressed={on} onClick={()=>placeLogo({position:pos})} title={pos.replace(/-/g," ")}
+                      style={{aspectRatio:"1/1",borderRadius:6,border:"none",cursor:"pointer",background:on?B.burnham:`${B.ash}22`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.12s"}}>
+                      <div style={{width:on?10:5,height:on?10:5,borderRadius:"50%",background:on?B.whiteSmoke:B.ash,transition:"all 0.12s"}} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <span style={{fontSize:11,fontFamily:FU.subtitle,color:B.ash,fontWeight:600,minWidth:32}}>Size</span>
+                {LOGO_SIZES.filter(s=>s.id!=="xl"||logoPosition==="center").map(s=>(
+                  <Chip key={s.id} on={resolvedLogo.sizeId===s.id} click={()=>placeLogo({sizeId:s.id})} sm>{s.label}</Chip>
+                ))}
+              </div>
+            </>
+          )}
+        </MoreFold>
       )}
     </>
   );
@@ -9101,17 +9240,15 @@ export default function App() {
   // OVERLAY LAYER — per-layer editor for the currently selected overlay uid.
   // Renders null when no overlay layer is selected (matches prior inline guard).
   const renderOverlayPanel = () => {
-    const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null; return (
-      <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
-            {dimensionId===MASTER_DIM?"Default layout (Square)":isOverride?"Custom · "+dim.label:"Auto from default"}
-          </span>
-          <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
-            {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
-          </button>
-        </div>
-        {selAsset?.category!=="accessories"&&<>
+    const selLayer=overlayLayers.find(l=>l.uid===selOverlay); const selT=selLayer?effectiveT(selLayer):null; const selAsset=selLayer?overlays.find(o=>o.id===selLayer.assetId):null; if(!selT) return null;
+    const isAccessory = selAsset?.category==="accessories";
+    return (
+      /* (THEME 1) CURATED PRIMARY: mode (shapes) or colour + quick size
+         (accessories). The Size / Rotate / Opacity sliders + the layout-reset
+         header fold under "More options" — placement is drag-first on the
+         preview. Every control is preserved. */
+      <>
+        {!isAccessory&&<>
           <div style={{display:"flex",gap:6,marginBottom:8}}>
             {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"},{m:"overlay",l:"On top"}].map(({m,l})=>{
               const on=(selLayer.mode||"frame")===m;
@@ -9137,7 +9274,7 @@ export default function App() {
             <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Use this for flower marks and patterned artwork: it keeps dark linework, removes pale fill, then recolours the strokes.</div>
           </div>}
         </>}
-        {selAsset?.category==="accessories"&&<>
+        {isAccessory&&<>
           <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Accessory colour</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
             {ACCESSORY_COLOR_OPTIONS.map(option=>{const on=(selT.colorId||"auto")===option.id,color=option.id==="auto"?B.whiteSmoke:B[option.id];return <button key={option.id} aria-label={`Accessory colour ${option.label}`} aria-pressed={on} title={option.label} onClick={()=>updateLayerT(selOverlay,{colorId:option.id})}
@@ -9149,11 +9286,25 @@ export default function App() {
               style={{flex:1,padding:"6px 5px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{p.label}</button>;})}
           </div>
         </>}
-        <Slider label="Size" min={selAsset?.category==="accessories"?0.04:0.05} max={selAsset?.category==="accessories"?0.8:1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
-        <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
-        <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
-        <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.45}}>{selAsset?.category==="accessories"&&((selT.colorId||"auto")==="auto")?"Auto continually selects the strongest accessible brand colour for the area beneath the accessory. ":""}Drag on the preview to move. Use the handles or sliders to resize and rotate.</div>
-      </div>
+        <div style={{fontSize:10,color:B.ash,marginTop:4,fontFamily:F.body,lineHeight:1.45}}>{isAccessory&&((selT.colorId||"auto")==="auto")?"Auto continually selects the strongest accessible brand colour for the area beneath the accessory. ":""}Drag on the preview to move, resize and rotate.</div>
+        <MoreFold id="overlay">
+          {() => (
+            <div style={{padding:"10px 12px",background:`${B.whiteSmoke}88`,borderRadius:8,border:`1px solid ${B.ash}33`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{fontSize:11,color:B.burnham,fontFamily:F.subtitle,fontWeight:700}}>
+                  {dimensionId===MASTER_DIM?"Default layout (Square)":isOverride?"Custom · "+dim.label:"Auto from default"}
+                </span>
+                <button onClick={()=>resetLayer(selOverlay)} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>
+                  {dimensionId===MASTER_DIM?"Reset":"Reset to auto"}
+                </button>
+              </div>
+              <Slider label="Size" min={isAccessory?0.04:0.05} max={isAccessory?0.8:1.6} step={0.01} value={selT.scale} suffix={Math.round(selT.scale*100)+"%"} onChange={v=>updateLayerT(selOverlay,{scale:v})} />
+              <Slider label="Rotate" min={-180} max={180} step={1} value={selT.rotation||0} suffix={Math.round(selT.rotation||0)+"°"} onChange={v=>updateLayerT(selOverlay,{rotation:v})} />
+              <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
+            </div>
+          )}
+        </MoreFold>
+      </>
     );
   };
 
@@ -9270,124 +9421,15 @@ export default function App() {
     return { title:a?.name || "Overlay", body:renderOverlayPanel() };
   })();
 
-  /* ── + ADD GALLERY (WP-V — vocabulary-free adding, §3) ──
-     Recognition over recall: visual tiles with plain-language labels. Adds go
-     through THE pipeline. (Stage 2 ships photo + decoration; Stage 4 adds the
-     text-role tiles with rendered thumbnails.) */
-  // One gallery tile: a tiny rendered PREVIEW of the element (recognition over
-  // recall) + a plain-language label. `has` → tap edits instead of adds.
-  const AddTile = ({label, has, onClick, children}) => (
-    <button onClick={onClick} title={has?`${label} — already on the design, tap to edit`:`Add: ${label}`}
-      style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"8px 6px",borderRadius:10,border:`1px solid ${has?B.burnham+"55":B.ash+"22"}`,background:"#fff",cursor:"pointer"}}>
-      <svg viewBox="0 0 40 40" style={{width:"100%",maxWidth:64,aspectRatio:"1/1",borderRadius:6,display:"block"}} aria-hidden="true">
-        <rect x="0" y="0" width="40" height="40" rx="3" fill={B.whiteSmoke} stroke={`${B.ash}44`} strokeWidth="0.6"/>
-        {children}
-      </svg>
-      <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:500,letterSpacing:0.2,color:B.jet,textAlign:"center",lineHeight:1.25}}>{label}{has?" ·":""}</span>
-    </button>
-  );
-  // Which copy field carries the "small text under the title" (support role)
-  // for the current post type: quotes draw the ATTRIBUTION as support.
-  const captionFieldId = postType === "quote" ? "attribution" : "subtext";
-  const captionValue = postType === "quote" ? attribution : subtext;
-  // Add a text role through THE pipeline with a placeholder the user replaces
-  // immediately (the role's input is focused + selected after the add). The legacy
-  // headline-only layouts (photo_logo / texture_text) now paint a caption line too
-  // (see renderScene), so an added caption renders in place with no layout jump.
-  const addTextRole = (patch, focusRole) => {
-    applyPatch(patch, { source: "ui" });
-    setTopMenu(null);
-    focusTextField(focusRole);
-  };
-  const renderAddGallery = () => {
-    const heroBar = <rect x="6" y="13" width="26" height="6" rx="1.2" fill={B.burnham} opacity="0.85"/>;
-    const editorial = !!heroRegister;
-    return (
-    <>
-      <MenuHead label="Add to this design" sub="Tap what you want to add — no design words needed." />
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:14}}>
-        <AddTile label="Small text under the title" has={!!(captionValue&&captionValue.trim())}
-          onClick={()=> (captionValue&&captionValue.trim()) ? (setTopMenu(null),focusTextField("support")) : addTextRole({ [captionFieldId]:"A small line under the title" }, "support")}>
-          {heroBar}
-          <rect x="6" y="23" width="20" height="3" rx="1" fill={B.tangerine} opacity="0.9"/>
-        </AddTile>
-        <AddTile label="Date" has={!!(dateText&&dateText.trim())}
-          onClick={()=> (dateText&&dateText.trim()) ? (setTopMenu(null),focusTextField("date")) : addTextRole({ dateText:"15 January" }, "date")}>
-          {heroBar}
-          <rect x="6" y="30" width="12" height="3.4" rx="1" fill={B.tangerine} opacity="0.9"/>
-        </AddTile>
-        <AddTile label="Little label up top" has={!!(microLabel&&microLabel.trim())}
-          onClick={()=> (microLabel&&microLabel.trim()) ? (setTopMenu(null),focusTextField("eyebrow")) : addTextRole({ microLabel:"A LITTLE LABEL" }, "eyebrow")}>
-          <rect x="6" y="7" width="10" height="2.4" rx="1" fill={B.tangerine} opacity="0.9"/>
-          {heroBar}
-        </AddTile>
-        {editorial && (
-          <AddTile label="Button" has={!!(pillText&&pillText.trim())}
-            onClick={()=> (pillText&&pillText.trim()) ? (setTopMenu(null),focusTextField("pill")) : addTextRole({ pillText:"BOOK A VISIT" }, "pill")}>
-            {heroBar}
-            <rect x="6" y="28" width="16" height="6" rx="3" fill={SOFT_TANGERINE}/>
-          </AddTile>
-        )}
-        <AddTile label="Logo" has={logoRendered}
-          onClick={()=>{selectElement("logo");setTopMenu(null);}}>
-          {heroBar}
-          <circle cx="20" cy="31" r="3.4" fill={B.burnham} opacity="0.8"/>
-        </AddTile>
-        <AddTile label="Photo" has={!!mediaObj}
-          onClick={()=>{ if(mediaObj){selectElement("photo");setTopMenu(null);} else {setShowLibPicker(true);setTopMenu(null);} }}>
-          <rect x="4" y="4" width="32" height="20" rx="2" fill={B.celadonDeep} opacity="0.8"/>
-          <circle cx="12" cy="11" r="2.6" fill={B.whiteSmoke} opacity="0.9"/>
-          <rect x="6" y="29" width="20" height="4" rx="1" fill={B.burnham} opacity="0.7"/>
-        </AddTile>
-      </div>
-      <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Photo</div>
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
-        <button onClick={()=>{setShowLibPicker(true);setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:"transparent",border:`1px solid ${B.burnham}33`,borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:B.burnham,letterSpacing:0.5}}>📂 From the Library</button>
-        <button onClick={()=>{imgRef.current?.click();setTopMenu(null);}} style={{flex:1,padding:"9px 12px",background:B.burnham,border:"none",borderRadius:10,cursor:"pointer",fontFamily:F.subtitle,fontSize:12,fontWeight:500,color:"#fff",letterSpacing:0.5}}>＋ Upload a photo</button>
-      </div>
-      {/* ── (WP-W0 item 3) SHAPES — the signature petal marks, first-class again.
-            WP-V buried them under generic "Decoration"; the client ruling restores
-            a standalone labelled group (beside Logo, ≤2 clicks from the top bar)
-            with the REAL petal assets as thumbnails. Tapping adds through THE
-            pipeline (applyPatch → inspector opens on the placed shape). ── */}
-      {(()=>{
-        const shapeTile=(o)=>{
-          const placedLayer=overlayLayers.find(l=>l.assetId===o.id);
-          const placed=!!placedLayer;
-          // Petal marks are ivory-coloured assets — a soft celadon backing keeps
-          // them visible on the white tile (accessories stay on white).
-          const tileBg=(o.builtin&&o.category==="overlays")?`${B.celadonDeep}2e`:"#fff";
-          return (
-            <button key={o.id} aria-pressed={placed} onClick={()=>{if(placedLayer){selectElement("overlay",placedLayer.uid);}else{toggleOverlay(o);}setTopMenu(null);}} title={`${o.name} — tap to ${placed?"edit":"add"}`}
-              style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
-              <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
-              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
-              {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
-            </button>
-          );
-        };
-        const petals=overlays.filter(o=>o.builtin&&o.category==="overlays");
-        const decorations=overlays.filter(o=>!(o.builtin&&o.category==="overlays"));
-        return (
-          <>
-            <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Shapes</div>
-            <div style={{fontSize:10,color:B.jet,fontFamily:F.body,lineHeight:1.45,margin:"-4px 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
-              {petals.map(shapeTile)}
-            </div>
-            {/* (Declutter item 7, ratified) The free-form "Add new" SVG/PNG uploader
-                left the editor — decoration enters the brand ONLY via the Brand kit
-                admin page (official assets, served to everyone from /api/brand-assets). */}
-            <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"6px 0 8px"}}>Decoration</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-              {decorations.map(shapeTile)}
-            </div>
-          </>
-        );
-      })()}
-    </>
-    );
-  };
+  /* ── + ADD GALLERY — RETIRED (THEME 1, 2026-07-07) ──
+     The client ruled the top-bar "＋ Add" redundant. Its jobs relocated, none
+     lost (mapping table: docs/ux-architecture.md §2.6 appendix):
+       · role adds (caption/date/eyebrow/pill/logo/photo) → canvas ghost slots
+         (ghostSlots below) + chat quick-chips ("+ Add caption/date"; free chat).
+       · shapes/decoration adds → renderShapesSection(), rehomed into the
+         Background & Overlay inspector "More options" fold + chat ("add a petal /
+         add a shape" via the assistant's addOverlay grammar).
+     The old AddTile/renderAddGallery/addTextRole helpers are gone with it. */
 
   /* ── INSPECTOR LAYER LIST (WP-V Stage 2) ──
      The bubbles rail's ONLY surviving job (§2.3): selecting occluded elements.
@@ -9523,7 +9565,6 @@ export default function App() {
         </div>
       </>
     );
-    if (topMenu === "add") return renderAddGallery();
     if (topMenu === "export") return (
       <>
         <MenuHead label="Export" sub={`${W} × ${H} px · ${dim.label}`} />
@@ -9788,10 +9829,15 @@ export default function App() {
   // every-format strip under the canvas is the ONE format surface, and post type
   // is set by generation/chat ("make this a quote post"). A quiet read-only
   // current-format label keeps orientation without re-adding a menu.
+  // (THEME 1, 2026-07-07) The top-bar "＋ Add" is RETIRED — the client ruled it
+  // redundant. Adding now happens where staff already look: ghost slots on the
+  // canvas ("＋ add text here / a date / a little label / logo / a photo") and the
+  // chat quick-chips ("+ Add caption / + Add date"; "add a petal / add a shape"
+  // via the assistant's addOverlay grammar). Shapes/Decoration rehomed into the
+  // Background & Overlay inspector fold. See docs/ux-architecture.md §2.6 appendix.
   const topBarButtons = [
     { id:"posts", label:"Posts" },
     { id:"templates", label:"Templates", badge:!!newerDraft },
-    { id:"add", label:"＋ Add" },
   ];
 
   /* ───────── UI ───────── */
