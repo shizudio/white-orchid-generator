@@ -10176,23 +10176,10 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
-              {/* ── (Hearts — ratified) CANVAS CORNER HEART (Midjourney pattern) ──
-                    A calm outline heart in the TOP-RIGHT corner of the preview; taps
-                    to fill. Its wrapper is pointer-events:none so it never blocks a
-                    click on a canvas element beneath it — only the small button itself
-                    is interactive (pointer-events:auto). Fills tangerine when liked;
-                    the like stores the design's GENES (toggleLike → logLike). */}
-              {sessionId && (
-                <div className="wo-canvas-heart-wrap" aria-hidden={false}
-                  style={{position:"absolute",top:0,right:0,width:56,height:56,pointerEvents:"none",zIndex:14}}>
-                  <button type="button" className="wo-canvas-heart" aria-pressed={currentLiked}
-                    aria-label={currentLiked ? "Unlike this design" : "Like this design"}
-                    title={currentLiked ? "Liked — the studio learns from designs you love" : "Love this design? Like it and the studio learns your style"}
-                    onClick={()=>toggleLike(sessionId)}>
-                    {currentLiked ? "♥" : "♡"}
-                  </button>
-                </div>
-              )}
+              {/* ── (Hearts — ratified) The like heart moved OFF the artwork into the
+                    below-canvas control strip (see .generator-canvas-controls) so it
+                    never sits over the design. Client ask: "beside the canvas, not
+                    disrupting the design." */}
               {/* ── DRAG LIFT (Refinement 3) ── While a gesture is live the dragged
                     element LIFTS: a soft shadow + ~2% scale on a positioned box over its
                     live rect. NO tangerine anywhere (accent is CTA-only ink). The box is
@@ -10327,6 +10314,22 @@ export default function App() {
               (see .wo-export-pop). */}
           {(
             <div className="generator-canvas-controls" style={{width:"100%",maxWidth:820,marginTop:12,display:"flex",gap:8,justifyContent:"center",alignItems:"center",flexWrap:"wrap"}}>
+              {/* ── (Hearts — ratified) LIKE, relocated here from the canvas corner so
+                    it never sits over the artwork. Leftmost pill in the strip; fills a
+                    rose heart when liked (distinct from the tangerine Export CTA beside
+                    it). toggleLike → logLike stores the design's genes. */}
+              {sessionId && (
+                <button type="button" onClick={()=>toggleLike(sessionId)} aria-pressed={currentLiked}
+                  aria-label={currentLiked ? "Unlike this design" : "Like this design"}
+                  title={currentLiked ? "Liked — the studio learns from designs you love" : "Love this design? Like it and the studio learns your style"}
+                  style={{display:"inline-flex",alignItems:"center",gap:6,
+                    padding:"7px 13px",borderRadius:999,border:`1px solid ${currentLiked ? "#C25E6E" : B.ash+"55"}`,background:currentLiked?"#C25E6E12":"#fff",
+                    color:currentLiked?"#B24F60":B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
+                    cursor:"pointer",transition:"color 120ms ease, background 120ms ease, border-color 120ms ease"}}>
+                  <span aria-hidden="true" style={{fontSize:13,lineHeight:1,color:currentLiked?"#C25E6E":B.burnham}}>{currentLiked ? "♥" : "♡"}</span>
+                  {currentLiked ? "Liked" : "Like"}
+                </button>
+              )}
               {mediaObj && (
                 <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
                   aria-label="Refresh photo"

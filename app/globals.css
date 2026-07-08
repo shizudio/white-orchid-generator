@@ -1287,29 +1287,9 @@ canvas[role="application"]:focus-visible {
    heart in the top-right corner of the preview; fills tangerine when liked. The
    wrapper is pointer-events:none (set inline) so it never blocks a click on a
    canvas element beneath it — only this button is interactive. */
-.wo-canvas-heart {
-  pointer-events: auto;
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: none;
-  display: grid;
-  place-items: center;
-  font-size: 17px;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--tw-burnham);
-  background: color-mix(in srgb, #ffffff 88%, transparent);
-  box-shadow: 0 1px 6px rgba(43, 80, 64, 0.18);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  transition: transform 120ms ease, color 120ms ease, background 120ms ease;
-}
-.wo-canvas-heart:hover { background: #ffffff; transform: scale(1.06); }
-.wo-canvas-heart[aria-pressed="true"] { color: var(--tw-tangerine); }
+/* (Hearts — ratified) The like heart moved OUT of the canvas corner into the
+   below-canvas control strip (styled inline in Generator.jsx) so it never sits
+   over the artwork. The old .wo-canvas-heart overlay rules were removed. */
 
 /* (Export CTA — ratified) The below-canvas Export popover: opens to the RIGHT of
    the button and NEVER over the canvas (the canvas sits above the strip). On
