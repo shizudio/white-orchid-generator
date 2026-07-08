@@ -100,6 +100,18 @@ async function fortifyContext(context, run, opts = {}) {
       return route.abort();
     }
 
+    // 1b. (2.2) MOCK gpt-image-1 (OpenAI images) during the MOCKED phase. The
+    //     assistant's new photo-change belt routes "change the photo to X" to the real
+    //     generation pipeline; Higgsfield is already unset here, but the gpt-image-1
+    //     FALLBACK would still bill OpenAI. Return an imageless 200 so generation
+    //     degrades to the route's honest "couldn't generate" reply and the tester's
+    //     zero-credit guarantee holds. The chat endpoint (/v1/responses) is untouched.
+    //     The real-photo probe (allowHiggsfield) is exempt so it can spend deliberately.
+    if (!allowHiggsfield && /api\.openai\.com\/v1\/images/i.test(url)) {
+      run.recordInfo({ note: 'MOCKED gpt-image-1 photo gen (imageless 200 → honest refusal, zero credits)', url });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{}] }) });
+    }
+
     // 2. Block cloud WRITES (sessions/feedback POST) so synthetic junk never reaches
     //    the client's Supabase brand. We COUNT the attempt then fulfil a fake OK so
     //    the app's fire-and-forget logic is undisturbed.
