@@ -1324,6 +1324,30 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     }
     patch.archetypeId = finalArchetype;
     recordPick(finalArchetype);
+    // (2.5 follow-up — born-clean render geometry) The HEADLINE-LED poster archetypes
+    // that lead every everyday brief cannot carry a long secondary DETAIL line at a
+    // legible size: their support slot is a NARROW side column ≈0.40–0.44 of canvas
+    // width, and once the big serif hero renders (measured 105–175px), the reflow in
+    // Generator.renderScene compresses the support box (editorial_split story: h
+    // 0.14→0.043 ≈83px; floated_card portrait: →86px). A model subtext (measured 26–41
+    // chars) then wraps past what the compressed box holds at the readable-min font and
+    // is DROPPED WHOLE (complete-or-absent) — the source of the live landing born-clean
+    // dot (copy-dropped), and of thumb-legibility on the short/wide formats. A length cap
+    // can't rescue it: the fitted-line floor means the copy would have to be ≤~16 chars to
+    // survive, which is not a detail line — so a contextual subtext essentially never fits
+    // here and drops every time (invisible AND a dot). Clear it: renderScene's supportText
+    // then falls back to the SHORT attribution/signature line (`ccSubtext || ccAttribution`,
+    // Generator.jsx ~5554), which does fit — so the design shows a clean legible support
+    // line instead of a dropped one, and copy-dropped + thumb-legibility clear across every
+    // format for these archetypes, with zero render-geometry change. The full detail line
+    // is not lost relative to today (it was already being dropped); the member can still
+    // add it via chat on a format/spot where it fits.
+    const HEADLINE_LED_LONG_CAPTION_DROPS = new Set([
+      'editorial_split', 'floated_card', 'portrait_credential', 'full_bleed_duotone',
+    ]);
+    if (HEADLINE_LED_LONG_CAPTION_DROPS.has(finalArchetype) && typeof patch.subtext === 'string' && patch.subtext.trim()) {
+      patch.subtext = '';
+    }
     // Measured palette rotation (spec §3): pick a sanctioned variant index for this
     // archetype, enforcing pastel-share (~1-in-3 of light) + dark-share (25–30%)
     // deterministically. The client materializes this exact variant.
