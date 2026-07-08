@@ -417,6 +417,26 @@ function detectPhotoChange(text) {
   return { scene };
 }
 
+// (2.5 born-clean) Fit generated LANDING copy to a conservative per-role budget so
+// the system's OWN over-long copy doesn't shrink the caption below its thumbnail
+// legibility floor (thumb-legibility dot) or drop to fit (copy-dropped dot) — the
+// dominant born-clean advisor dots on live landing generations. Trim on a sentence
+// boundary within budget when possible, else the last whole word (no ellipsis — a
+// fresh design reads cleanest without one). Editor turns are untouched: a user's own
+// copy is verbatim, never trimmed. NOTE: these budgets are conservative and format-
+// agnostic; the EXACT per-format/per-archetype floor is render geometry (Generator
+// .jsx) — a follow-up pins the precise budget from the born-clean finding ids (2.7).
+const LANDING_COPY_MAX = { headline: 48, subtext: 120, attribution: 64, dateText: 48 };
+function fitCopy(s, max) {
+  const t = String(s || '').trim();
+  if (t.length <= max) return t;
+  const window = t.slice(0, max + 1);
+  const sent = window.match(/^[\s\S]*[.!?](\s|$)/); // a sentence end within budget
+  if (sent && sent[0].trim().length >= max * 0.5) return sent[0].trim();
+  const cut = t.slice(0, max).replace(/\s+\S*$/, '').trim(); // last whole word
+  return cut || t.slice(0, max).trim();
+}
+
 // ── LANDING ARCHETYPE SELECTION (Commit 1) ───────────────────────────────────
 // The landing handoff must now pick an EDITORIAL ARCHETYPE (docs/visual-language-
 // spec.md §2) for every plan, chosen by the user's intent. This compact catalog
@@ -1045,6 +1065,7 @@ VARIETY (important — the studio has felt repetitive):
   - A quote / saying → "quote" type. A hiring / announcement / reminder → "text_post" or "event". A dated happening → "event". A photo-led moment → "photo_logo" or "texture_text".
 - OVERLAYS / FRAMES: NEVER add an overlay (addOverlay) unless the user explicitly names the treatment — "frame", "petal", "orchid shape", "cut-out", "overlay". An invite, open house, celebration or festive post is NOT a reason to add one. Default is always NO overlay.
 - AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.
+- COPY LENGTH (important — long copy renders tiny and becomes unreadable as a feed thumbnail): keep the headline to ~6 words or fewer, and any caption/subtext to ONE short line (~14 words / ~110 characters max). Do not write a paragraph. If the request implies more detail, pick the single most important line and leave the rest out.
 
 PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only brief. When the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
   • ONE scene, ONE subject with a concrete action, a setting, and lighting.
@@ -1263,6 +1284,15 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // request still lands its overlay on the cleared canvas.
   if (context === 'landing') {
     patch.removeOverlays = true;
+
+    // (2.5 born-clean) Cap the model's generated copy so it doesn't floor/drop the
+    // caption at render — the source of the ~1 advisor dot on live landing designs.
+    for (const [f, max] of Object.entries(LANDING_COPY_MAX)) {
+      if (typeof patch[f] === 'string' && patch[f].trim()) {
+        const fitted = fitCopy(patch[f], max);
+        if (fitted !== patch[f]) patch[f] = fitted;
+      }
+    }
 
     // ── DETERMINISTIC ARCHETYPE + FREQUENCY CAPS (Commit 1) ──────────────────
     // Every landing plan must carry an archetype. Resolve the model's pick against

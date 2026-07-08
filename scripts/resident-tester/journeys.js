@@ -139,13 +139,23 @@ async function runJourneys(page, run, cons, baseUrl) {
   let snap = await O.probe(page);
   const baselineStripY = snap.stripY;
   let ctx = { journey: 'landing-generate', tag: 'j1-born-clean', console: cons.drain() };
+  // (2.5) The LIVE-landing born-clean guard — distinct from the app's idealized
+  // __woBornCleanGuard (materialized archetypes + fixed content). This checks the
+  // ACTUAL generated design, and (via 2.7) records WHICH finding fires so the P0
+  // can't hide behind a bare dot count again.
+  const bornCleanLive = O.bornClean(snap);
   const j1 = await assertOracles(page, run, ctx, [
-    O.bornClean(snap),
+    bornCleanLive,
     O.noHorizontalOverflow(snap),
     O.canvasBufferMatchesDims(snap),
     O.noConsoleErrors(ctx.console),
   ]);
-  pushStep('born-clean after generate', j1.every(c => c.ok), j1.map(c => `${c.name}:${c.ok ? 'ok' : c.observed}`).join('; '));
+  // Surface the finding ids on the step itself so a born-clean regression names its
+  // culprit in the report, not just a count.
+  const bcDetail = bornCleanLive.ok
+    ? 'born-clean'
+    : `born-clean FIRED [${(bornCleanLive.findingIds || []).join(', ') || 'no finding ids exposed'}]`;
+  pushStep('born-clean after generate', j1.every(c => c.ok), `${bcDetail}; ` + j1.filter(c => c.name !== 'born-clean').map(c => `${c.name}:${c.ok ? 'ok' : c.observed}`).join('; '));
 
   // ── J2: chat edit "make the background wisteria" → changed + no apology ────
   try {
