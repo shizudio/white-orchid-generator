@@ -10146,15 +10146,20 @@ export default function App() {
             surrounding chrome is quieted (top bar re-rank, inspector as column)
             so the design dominates the squint test. No new decoration. */}
         <div className="generator-preview-panel" style={{flex:"1 1 400px",padding:"36px 28px 30px",display:"flex",flexDirection:"column",alignItems:"center",background:B.whiteSmoke,position:"relative"}}>
-          {/* (A3) FIXED-HEIGHT STAGE — the stage reserves the TALLEST format's height
-              (the --generator-preview-height budget) at all times and centers the
-              canvas within it. Switching format changes the canvas size INSIDE the
-              stage, but the stage's own height never moves, so the controls + format
-              strip below keep a constant Y position (no layout shift). The canvas
-              still hugs its own artwork; the stage (page background, not the card)
-              absorbs the difference. */}
+          {/* (R2) CANVAS-HUGGING STAGE — the frame HUGS its canvas (height:auto)
+              rather than holding a constant tall height. The canvas shell sizes
+              itself from --generator-preview-height (its width is height × ratio,
+              capped at maxWidth), so its natural height is min(reserve, 820 ÷ ratio):
+              PORTRAIT/SQUARE/STORY fill the full reserved height, while WIDE/short
+              formats (Twitter/Facebook/Banner) are width-limited and therefore
+              SHORT — with height:auto the frame wraps them tightly, leaving NO dead
+              vertical space (the "gap when scrolled up" regression). Because the
+              reserve (globals.css) is tuned so the tallest frame (portrait) fits
+              100vh, the panel never overflows, so no flex-shrink ever fights the
+              frame — the hug is deterministic. The strip's Y is constant among the
+              tall formats and shifts up modestly for wide formats (accepted). */}
           <div ref={previewRef} className="generator-preview-frame"
-            style={{width:"100%",maxWidth:820,height:"var(--generator-preview-height, 78vh)",display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
+            style={{width:"100%",maxWidth:820,height:"auto",display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef} style={{
               position:"relative", maxWidth:"100%", maxHeight:"100%",
               width:`calc(var(--generator-preview-height, 78vh) * ${W / H})`,

@@ -1440,30 +1440,32 @@ canvas[role="application"]:focus-visible {
   min-width: 0;
 }
 
-/* (R1) VIEWPORT-DRIVEN STAGE — the fixed-height canvas stage (A3) must be sized
-   by the VIEWPORT, not by the tallest format, so the design + controls + the
-   "every format" strip are ALL visible on one screen (client: "always visible on
-   one screen regardless of screen type"). We reserve the chrome ABOVE the stage
-   (nav 64 + top bar 52 + panel top padding 36 ≈ 152px) and the chrome BELOW it
-   (the "REFRESH PHOTO" row + the strip header + one thumbnail row) — MEASURED at
-   ~171px of fixed, viewport-independent chrome, so a ~200px reserve leaves the
-   strip ~29px above the fold at every viewport in the linear regime and the
-   stage takes whatever height remains. (The prior 300px over-reserved by ~130px,
-   leaving the portrait canvas small with dead space below the strip.) Because
-   the below chrome is fixed-height, the strip's clearance below the fold depends
-   ONLY on this reserve, not on 100vh: reserve − 171 ≈ margin, so 200 → ~29px at
-   1440×900 AND 1280×800 alike; the 240px clamp floor keeps short laptops safe.
-   This ~1.3× enlargement (portrait canvas ≈ 295px → ≈ 395px at a ~900px-tall
-   viewport) is the reference sizing. The frame height stays CONSTANT per viewport
-   across all 6 formats, so the strip's Y never moves (A3's point holds); the
-   canvas scales to fit WITHIN the stage (tall formats shrink, wide formats centre
-   vertically) with no dead space inside the card. clamp() keeps the stage usable
-   on short laptops without ever forcing the strip below the fold. Desktop-only
-   (>=768px) so it never overrides the mobile sticky-preview cap (min(27vh,178px))
-   defined in the max-width:767px block. */
+/* (R2) VIEWPORT-DRIVEN STAGE — the canvas stage is sized by the VIEWPORT, not by
+   the tallest format, so the design + controls + the "every format" strip are ALL
+   visible on one screen with NO page scroll (client: "no scroll below the current
+   screen"). The single reserve below is the TOTAL fixed, viewport-independent
+   chrome around the canvas frame, MEASURED live: 133px above the frame (nav 64 +
+   sub-nav 33 + panel top padding 36) + 239px below (Refresh/Undo/Redo/Export row +
+   the strip header + one thumbnail row + panel bottom padding) = 372px. We reserve
+   380px (372 measured + 8px safety) so the PORTRAIT default — the common case, and
+   the tallest frame after the hug fix below — fits exactly within 100vh at every
+   laptop height with a few px to spare: at 1440×900 the portrait canvas ≈ 520px,
+   at 1280×800 ≈ 420px, at 1366×768 ≈ 388px (vs the ~295px legacy baseline, i.e.
+   ~1.3×–1.8× depending on viewport). The prior reserve (352 = 152+200) UNDER-
+   reserved by ~20px (real overhead is 372, not 352) so the page scrolled ~20px on
+   every laptop — that regression is what this fixes. The frame itself now HUGS its
+   canvas (height:auto in the JSX) instead of holding a constant tall height, so
+   wide/short formats (Twitter/Facebook/Banner) leave NO dead vertical space; the
+   trade is that the strip's Y shifts up modestly when switching to a wide format
+   (accepted: the client's explicit ask is no-gap/no-scroll over a perfectly
+   constant strip-Y). Tall formats (Square/Portrait/Story) all render at the full
+   reserved height, so the strip Y is constant among the common formats. clamp()
+   floor 240 keeps very short laptops usable; ceil 720 caps huge external monitors.
+   Desktop-only (>=768px) so it never overrides the mobile sticky-preview cap
+   (min(27vh,178px)) defined in the max-width:767px block. */
 @media (min-width: 768px) {
   .generator-preview-panel {
-    --generator-preview-height: clamp(240px, calc(100vh - 152px - 200px), 720px);
+    --generator-preview-height: clamp(240px, calc(100vh - 380px), 720px);
   }
 }
 .wo-chat {
