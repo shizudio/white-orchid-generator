@@ -143,22 +143,27 @@ function claimVsChanged(snap, { expectChange } = {}) {
 //    the COUNT and flag any non-zero on a freshly composed design as low-sev
 //    (the report ranks by frequency).
 function bornClean(snap) {
-  // (2.7) Surface WHICH finding fires, not just a count. __woReadyCheck() returns a
-  // per-format array of { dimensionId, findings:[{ id, category, ... }] }; the old
-  // oracle threw the ids away and logged only a dot count, forcing every born-clean
-  // investigation to eyeball screenshots to guess the category. Now we record the
-  // distinct finding ids (with per-format tags) so the next pass reads the root
-  // cause straight from the defect event.
-  const ready = Array.isArray(snap.ready) ? snap.ready : null;
-  const findings = ready
-    ? ready.reduce((n, f) => n + ((f.findings && f.findings.length) || 0), 0)
-    : null;
-  // Distinct "id@dimension" tags across every format's findings.
+  // (2.7) Surface WHICH finding fires, not just a count. __woReadyCheck() returns
+  // computeReadyChecklist(): { ready, formats:[{ dimensionId, issues:[{ id, category
+  // }] }], needCount } — so the per-format findings live in `.formats[].issues[]`
+  // (an OBJECT with a formats array, NOT a bare array; the older bare-array-with-
+  // `.findings` shape is still tolerated). The old oracle read the wrong shape and
+  // logged only a dot count, forcing every born-clean investigation to eyeball
+  // screenshots. Now we record the distinct finding ids (per-format tags).
+  const r = snap.ready;
+  const formats = r && Array.isArray(r.formats) ? r.formats
+    : Array.isArray(r) ? r : null;
+  const issuesOf = (f) => Array.isArray(f.issues) ? f.issues
+    : Array.isArray(f.findings) ? f.findings : [];
+  let findings = null;
   const tags = [];
-  if (ready) {
-    for (const f of ready) {
+  if (formats) {
+    findings = 0;
+    for (const f of formats) {
       const dim = f.dimensionId || f.dimension || '?';
-      for (const x of (Array.isArray(f.findings) ? f.findings : [])) {
+      const iss = issuesOf(f);
+      findings += iss.length;
+      for (const x of iss) {
         const id = x && (x.id || x.category) ? `${x.id || x.category}@${dim}` : null;
         if (id && !tags.includes(id)) tags.push(id);
       }
