@@ -7,7 +7,7 @@ import { useBrandKit } from "./BrandProvider";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
-import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
+import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, looksLikeGuardSession, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
@@ -2174,6 +2174,33 @@ const DIMENSIONS = [
   { id:"banner",      label:"Banner",      sub:"3:1",    w:1500, h:500,  purpose:"website/email banner" },
 ];
 
+/* ── (format-flash fix) First-paint format resolution — SYNCHRONOUS ──────────
+   Restoring the last-worked post is by design, but the restore effect (WP-W
+   session init) is async: with the portrait default, a returning visitor's
+   square post painted portrait first, then FLIPPED to square ~500ms in when
+   the restore landed. Resolve the format BEFORE first paint instead: read the
+   current-session pointer + local mirror synchronously (localGetSession is
+   sync localStorage), so the very first frame is already the session's format.
+   Returns null (→ portrait default) when there is genuinely nothing to
+   restore: no pointer, no/empty local mirror, a guard-test design awaiting the
+   async purge, or a pending landing handoff (a brand-new post always starts
+   portrait). The component runs client-only (dynamic ssr:false), so touching
+   storage here is safe. */
+function resolveFirstPaintDimensionId() {
+  if (typeof window === "undefined") return null;
+  try {
+    // A landing handoff mints a NEW portrait post — never seed from the old session.
+    try { if (sessionStorage.getItem("wo-landing-plan")) return null; } catch { /* ignore */ }
+    const id = getCurrentSessionId();
+    if (!id) return null;
+    const rec = localGetSession(id);
+    if (!rec?.state || !Object.keys(rec.state).length) return null;
+    if (looksLikeGuardSession(rec)) return null;  // purge will drop this pointer
+    const dimId = rec.state.dimensionId;
+    return DIMENSIONS.some(d => d.id === dimId) ? dimId : null;
+  } catch { return null; }
+}
+
 // Clamp a normalized focal point (0..1) so a cover-filled image at the given
 // zoom always covers the frame — no empty edges. Returns [fx, fy].
 // Drawable intrinsic dims (works for <img>, <video>, or {width,height})
@@ -2601,7 +2628,11 @@ export default function App() {
   // Instagram's preferred feed ratio and the client's staff starting point. This is
   // the default *selected/view* format only — MASTER_DIM (ig_square) still anchors the
   // per-dimension cascade; portrait renders as a per-dim view off that master.
-  const [dimensionId, setDimensionId] = useState("ig_portrait");
+  // (format-flash fix) When a current session exists on this device, its format is
+  // resolved SYNCHRONOUSLY before first paint (see resolveFirstPaintDimensionId) so
+  // the async session restore never flips the canvas aspect after the first frame.
+  const [firstPaintDim] = useState(resolveFirstPaintDimensionId);
+  const [dimensionId, setDimensionId] = useState(firstPaintDim || "ig_portrait");
   const dim = DIMENSIONS.find(d => d.id === dimensionId) || DIMENSIONS[0];
   const W = dim.w, H = dim.h;
   // Live mirror of dimensionId for async guards/timers that must read the CURRENT
@@ -4213,15 +4244,21 @@ export default function App() {
 
       const existingId = getCurrentSessionId();
       if (existingId && !landingPending) {
-        // Restore the session (cloud first, then local).
-        let rec = null;
-        const localMirror = localGetSession(existingId);
-        const { configured, session } = await cloudGetSession(existingId);
-        if (configured && session) { setSessionCloudCfg(true); rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [],
-          liked: session.liked != null ? session.liked === true : localMirror?.liked === true }; }
-        else if (localMirror) rec = { id: localMirror.id, title: localMirror.title, state: localMirror.state, conversation: localMirror.conversation || [], liked: localMirror.liked === true };
-        if (rec && rec.state && Object.keys(rec.state).length) {
-          applyDesignTemplate({ state: rec.state });
+        // (format-flash fix) Restore LOCAL-FIRST, then let the cloud copy refine.
+        // The format was already resolved synchronously before first paint
+        // (firstPaintDim, from this same local mirror) — every restore below is
+        // PINNED to it, so the canvas aspect never flips after the first frame.
+        // The cloud copy may refine CONTENT (newer edits from another device)
+        // but never the format. Only when the local mirror was absent entirely
+        // (firstPaintDim null — pointer without mirror, e.g. a partial storage
+        // clear) is the cloud state applied verbatim: restoring the real design
+        // beats holding a portrait default that was never this post's format.
+        const pinFormat = (state) =>
+          firstPaintDim && state.dimensionId !== firstPaintDim
+            ? { ...state, dimensionId: firstPaintDim }
+            : state;
+        const applyRec = (rec) => {
+          applyDesignTemplate({ state: pinFormat(rec.state) });
           setSessionId(rec.id);
           setSessionTitle(rec.title || "");
           setSessionConversation(rec.conversation);
@@ -4229,8 +4266,29 @@ export default function App() {
           setSessionRestoreKey(k => k + 1);
           setCurrentLiked(rec.liked === true);   // (Hearts) survive reloads
           refreshPostTiles();
-          return;
+        };
+        const recSig = (rec) => { try { return JSON.stringify([pinFormat(rec.state), rec.conversation, rec.title, rec.liked]); } catch { return null; } };
+        const localMirror = localGetSession(existingId);
+        let appliedSig = null;
+        if (localMirror?.state && Object.keys(localMirror.state).length && !looksLikeGuardSession(localMirror)) {
+          const rec = { id: localMirror.id, title: localMirror.title, state: localMirror.state, conversation: localMirror.conversation || [], liked: localMirror.liked === true };
+          applyRec(rec);                 // immediate — no network wait for the working doc
+          appliedSig = recSig(rec);
         }
+        const { configured, session } = await cloudGetSession(existingId);
+        if (configured && session) {
+          setSessionCloudCfg(true);
+          const rec = { id: session.id, title: session.title, state: session.state, conversation: session.conversation || [],
+            liked: session.liked != null ? session.liked === true : localMirror?.liked === true };
+          if (rec.state && Object.keys(rec.state).length) {
+            const sig = recSig(rec);
+            // Skip the re-apply when cloud === local (the common case) so the
+            // restoreKey chat swap and harmonizer don't run twice for nothing.
+            if (appliedSig == null || sig == null || sig !== appliedSig) applyRec(rec);
+            return;
+          }
+        }
+        if (appliedSig != null) return;  // local restore stands (cloud absent/empty)
       }
       // No restorable session (or a new landing flow) → mint one bound to current state.
       const nid = existingId && !landingPending ? existingId : newSessionId();
