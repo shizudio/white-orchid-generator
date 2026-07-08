@@ -350,7 +350,7 @@ async function canvasHitTargets(page) {
 //     intentionally unset (photos are mocked); in production the keys ARE set.
 // Genuine app console errors (a real runtime throw, a broken same-origin route that
 // SHOULD work) are NOT matched here and still flag.
-const EXPECTED_CONSOLE = /net::ERR_(CONNECTION_REFUSED|CONNECTION_RESET|ABORTED|FAILED|EMPTY_RESPONSE|NETWORK_CHANGED|TIMED_OUT)|higgsfield|\/api\/(feed-photo|images|design-generate|moodboard|logo-variants|overlay-assets|brand-assets|creative-plan)\b/i;
+const EXPECTED_CONSOLE = /(?:net::)?ERR_(CONNECTION_REFUSED|CONNECTION_RESET|ABORTED|FAILED|EMPTY_RESPONSE|NETWORK_CHANGED|TIMED_OUT)|higgsfield|\/api\/(feed-photo|images|design-generate|moodboard|logo-variants|overlay-assets|brand-assets|creative-plan)\b/i;
 
 // 8. CONSOLE-ERRORS — surfaced from a collected console-error list (Node side).
 //    (2.6) Re-scoped: transient/expected sandbox artifacts (see EXPECTED_CONSOLE) are
