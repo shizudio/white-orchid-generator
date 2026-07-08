@@ -387,6 +387,36 @@ function bumpStep(cur, dir) {
   return FONT_STEPS[next];
 }
 
+// PHOTO CHANGE / REPLACE (2.2) — "change the photo to X", "different picture",
+// "swap the image for Y", "the picture doesnt fit our vibe". This was the last-open
+// slice of the honesty cluster: the model claimed a photo change with an EMPTY patch
+// (5× "change the photo to children painting" in the nightly corpus), reproducing the
+// specimen §0 false claim. We route it to the REAL photo pipeline (patch.imagePrompt)
+// and narrate in PRESENT tense — generation is deferred/async (and mocked in the
+// tester), so a past-tense "I've changed the photo" would be false the instant the
+// image hasn't landed. NEVER matches a LAYOUT "fill the whole thing" ask (that has no
+// change-verb near "photo" and no vibe-mismatch word, so it stays with wantsFullImage).
+// Returns { scene } — scene is the named subject, or null when the user asked for a
+// different photo without naming one (then we give an honest, actionable reply, never
+// a fabricated scene).
+const PHOTO_CHANGE_INTENT = /\b(chang\w*|swap\w*|switch\w*|replac\w*|different|new|another|updat\w*|redo|regenerat\w*)\b[^.!?]{0,32}\b(photo|picture|image|pic|bg photo|background photo)\b|\b(photo|picture|image|pic)\b[^.!?]{0,32}\b(doesn'?t|does not|isn'?t|is not|not|wrong|off|fit|fits|match\w*|vibe|feel|suit\w*)\b/i;
+function detectPhotoChange(text) {
+  const t = String(text || '').trim();
+  if (!PHOTO_CHANGE_INTENT.test(t)) return null;
+  // Extract a named subject after "to/of/into/showing/with/featuring": "change the
+  // photo to children painting" → "children painting". Null when they only signalled
+  // dissatisfaction ("different picture", "the picture doesnt fit our vibe").
+  let scene = null;
+  let m = t.match(/\b(?:photo|picture|image|pic)\b[^.!?]*?\b(?:to|of|into|for|showing|with|that shows?|featuring)\s+(.+)$/i)
+       || t.match(/\b(?:to|of|into|for|showing|featuring)\s+(.+)$/i);
+  if (m) {
+    scene = m[1].replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
+    // Guard against lifting a design/layout word or an over-long tail.
+    if (scene.length < 2 || scene.length > 160 || /^(the )?(whole|full|entire|frame|post|canvas|screen)\b/i.test(scene)) scene = null;
+  }
+  return { scene };
+}
+
 // ── LANDING ARCHETYPE SELECTION (Commit 1) ───────────────────────────────────
 // The landing handoff must now pick an EDITORIAL ARCHETYPE (docs/visual-language-
 // spec.md §2) for every plan, chosen by the user's intent. This compact catalog
@@ -1029,6 +1059,7 @@ ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT o
 LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACTLY):
 - "full image post" / "I want the photo to fill the whole post" / "full bleed" / "edge to edge" → set patch.archetypeId = "documentary" (one clean photo filling the whole frame). Use "full_bleed_duotone" instead ONLY when they ask for the tinted / green / duotone / moody look. Do NOT touch headline or backdropMode for this ask.
 - "remove the green solid" / "remove the panel / the green block / the coloured band" on a split layout (editorial_split, portrait_credential): that solid side panel IS the layout itself — no backdrop, overlay or logo field can remove it. The ONLY correct patch is a layout switch: set patch.archetypeId = "documentary" (or "full_bleed_duotone" for the tinted look) so the photo fills the frame. NEVER answer this with backdropMode / removeOverlays / logo changes.
+- "change the photo to X" / "different picture of X" / "swap the image for X" / "the picture doesn't fit our vibe" → set patch.imagePrompt to a concise description of the scene (no brand name, no text-in-image). This GENERATES a new photo — it does not land instantly, so narrate in PRESENT/FUTURE tense ("Generating a new photo of X now…"), NEVER past tense ("I've changed the photo"), because the image arrives a moment later. If the user did NOT name what the new photo should show, do NOT invent a scene — ask them what they'd like it to show and mention they can tap the photo on the canvas to reframe it. This is distinct from "fill the whole thing" (a LAYOUT ask — see above).
 - Never say you changed or switched the layout unless patch.archetypeId is actually set to a NEW value in THIS patch. If you cannot express what was asked, say so plainly ("I can't do that yet") and offer the nearest thing you CAN do.
 - If the user asks to ADD an element the current layout cannot show, say which layout can show it and offer to switch — never claim an add that will not render.
 - NEVER OFFER WHAT YOU CAN'T EXECUTE. Do NOT end a reply with an open offer you can't carry out on your own — no "Want me to switch the layout?", "Shall I…?", "Would you like me to…?". You emit ONE patch per turn; you cannot act on a later "yes" yourself. Either DO the thing now (set the patch and describe it) or, when you genuinely can't, state the concrete action the USER can take in their own words ("Tap the ‘Try another layout’ chip", "Tap the element on the canvas to edit it"). The studio wires its OWN one-tap offers where a deterministic action exists; your job is to never dangle an offer with nothing behind it.
@@ -1376,6 +1407,28 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       }
     }
 
+    // 1c. PHOTO CHANGE (2.2) — "change the photo to X" / "different picture" / "the
+    //     picture doesnt fit our vibe". Route to the real photo-generation pipeline
+    //     (patch.imagePrompt, picked up below) and narrate in PRESENT tense so a
+    //     deferred/mocked generation never reads as a false past-tense claim.
+    if (!beltReply) {
+      const pc = detectPhotoChange(lastUserText);
+      if (pc) {
+        if (pc.scene) {
+          // A named subject → generate it. Present tense: honest whether the image
+          // lands now (sync), later (async), or is declined in a sandbox (the image
+          // block then returns its own honest "couldn't generate" reply, overriding).
+          patch.imagePrompt = sanitizeScenePrompt(pc.scene);
+          beltReply = `Generating a new photo of ${pc.scene} now — it'll appear on the canvas in a moment. Tap Undo if it's not what you pictured.`;
+        } else {
+          // No subject named ("different picture", "doesn't fit our vibe"): we never
+          // invent facts/scenes, so give an HONEST, non-apologetic, actionable reply —
+          // never the generic "that didn't change anything".
+          beltReply = `Tell me what you'd like the photo to show — say something like “a bright classroom with children reading” — and I'll generate it. You can also tap the photo on the canvas to reframe or swap it.`;
+        }
+      }
+    }
+
     // 2. COLOUR VOCABULARY — map a colour word to the nearest brand token.
     //    Only when the user is clearly talking about colour/background (not a photo
     //    or a copy edit that merely mentions a colour name inside quoted text).
@@ -1488,11 +1541,24 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       const tinted = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i.test(lastUserText);
       const target = tinted ? 'full_bleed_duotone' : 'documentary';
       const pick = patch.archetypeId;
-      if (pick !== 'documentary' && pick !== 'full_bleed_duotone' && designState.archetypeId !== target) {
+      const alreadyFull = pick === 'documentary' || pick === 'full_bleed_duotone'
+        || designState.archetypeId === 'documentary' || designState.archetypeId === 'full_bleed_duotone';
+      if (!alreadyFull && designState.archetypeId !== target) {
         patch.archetypeId = target;
         // Any backdrop fiddling the model emitted alongside is superseded by the
         // layout switch — drop it so the patch reads as ONE decisive change.
         if (patch.backdropMode != null) patch.backdropMode = null;
+        // (2.2) OVERRIDE the reply so it narrates the LAYOUT switch, not whatever the
+        // model claimed (the specimen "I've made the headline larger" on a "fill the
+        // whole thing" ask). This is a real, applied change → an honest past-tense line.
+        reply = tinted
+          ? 'Switched to a full-frame photo layout with the green duotone wash — the photo now fills the whole post, no solid panel. Tap Undo to go back.'
+          : 'Switched to a full-frame photo layout — the photo now fills the whole post, no solid panel. Tap Undo to go back.';
+      } else {
+        // Already a full-frame photo layout: there is no layout to switch. Be honest
+        // and actionable instead of letting the model claim an unrelated change (the
+        // §0 specimen mismatch — it once reported a headline-size change here).
+        reply = 'The photo is already filling the whole frame on this layout. To make it larger or reposition it, tap the photo on the canvas to pan and zoom.';
       }
     }
   }
