@@ -274,6 +274,24 @@ alter table design_sessions add column if not exists exported_at  timestamptz;
 -- app/api/brand-assets/route.js) — no table needed. Metadata rides in the
 -- object name: brand-assets/<ts>__<kind>__<ratio*1000>__<name>.<svg|png>
 
+-- Moodboard (Feed folder — ratified "small win"): EXTERNAL inspiration images the
+-- owner uploads (reference imagery, NOT designs the studio made). The Moodboard
+-- folder in the Posts gallery reads from here; each item ALSO logs to the capture
+-- pipe (kind:'moodboard') so the taste-learning pass can read the owner's
+-- inspiration alongside their favourites (likes). Same trust model + graceful
+-- degradation as design_sessions: no auth, single shared space keyed by brand_id;
+-- when this table / env is absent the client keeps everything in localStorage
+-- (nothing user-facing breaks). Idempotent — safe to re-run.
+create table if not exists brand_moodboard (
+  id          text primary key,             -- client-minted item key, e.g. "mb_lqx9…"
+  brand_id    uuid default '00000000-0000-0000-0000-000000000001',
+  created_at  timestamptz default now(),
+  image       text not null,                -- small JPEG dataURL thumbnail of the inspiration image
+  note        text,                         -- optional caption the owner typed
+  ts          bigint                        -- client epoch ms (newest-first ordering)
+);
+create index if not exists brand_moodboard_brand_idx on brand_moodboard (brand_id, ts desc);
+
 -- AI feedback events (WP-W / self-improvement-loop §1 — the capture layer).
 -- One row per chat turn: the user's verbatim message, the patch emitted, a
 -- compact before/after design diff, the renderTruth honesty verdict (incl. any

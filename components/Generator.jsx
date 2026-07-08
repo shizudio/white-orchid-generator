@@ -9,6 +9,7 @@ import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAc
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, looksLikeGuardSession, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
+import { listMoodboard, addMoodboardItem, removeMoodboardItem } from "@/lib/moodboard";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
    DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
@@ -2870,9 +2871,19 @@ export default function App() {
   // an Instagram-style grid of every session (the feed IS the composition,
   // feed-grammar §1) — not a popover. One overlay at a time; Escape closes it.
   const [feedOpen, setFeedOpen] = useState(false);
-  // (Hearts, item 10) The current session's liked state — drives the top-bar
-  // heart; persisted on the session record (local always, cloud when migrated).
+  // (Hearts, item 10) The current session's liked state — drives the canvas
+  // corner heart; persisted on the session record (local always, cloud when migrated).
   const [currentLiked, setCurrentLiked] = useState(false);
+  // (Feed folders — ratified) The Posts gallery has three folders: All ·
+  // Favourites (liked sessions) · Moodboard (external inspiration uploads).
+  const [feedFolder, setFeedFolder] = useState("all"); // all | favourites | moodboard
+  const [moodboard, setMoodboard] = useState([]);       // [{ id, image, note, ts }]
+  const [moodboardCfg, setMoodboardCfg] = useState(false);
+  const [moodEnlarged, setMoodEnlarged] = useState(null); // an item shown enlarged, or null
+  const moodInputRef = useRef(null);
+  // (Export CTA — ratified) Export moved from the top bar to the below-canvas
+  // control strip as the primary tangerine CTA; this drives its popover.
+  const [exportOpen, setExportOpen] = useState(false);
   // (WP-Y5) Ready-to-post checklist state: the per-format verdicts + which format
   // rows are expanded. Recomputed when the Export popover opens and after any fix.
   const [readyCheck, setReadyCheck] = useState(null);   // { ready, needCount, formats[] } | null
@@ -8804,9 +8815,41 @@ export default function App() {
   };
   // Opening the FEED GALLERY refreshes the tiles and auto-loads the archive —
   // the gallery shows EVERY session (latest + older) as one newest-first feed.
+  // The Moodboard folder's external inspiration is loaded here too (local always,
+  // merged with the cloud when configured; graceful when absent).
   useEffect(() => {
-    if (feedOpen) { refreshPostTiles(); loadArchivedTiles(); }
+    if (feedOpen) { refreshPostTiles(); loadArchivedTiles(); loadMoodboard(); }
   }, [feedOpen, refreshPostTiles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── (Feed folders — Moodboard) External inspiration: load / add / remove ─────
+  const loadMoodboard = async () => {
+    try {
+      const { configured, items } = await listMoodboard();
+      setMoodboard(Array.isArray(items) ? items : []);
+      setMoodboardCfg(!!configured);
+    } catch { /* graceful — local list already covers the offline case */ }
+  };
+  // Upload an inspiration image → downscale to a small JPEG thumb → store as a
+  // brand-scoped moodboard item (local always + cloud + capture pipe kind:'moodboard').
+  const addMoodboardFile = async (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+      const thumb = await compressImage(dataUrl, 480, 0.72);
+      const { item } = await addMoodboardItem({ image: thumb, note: "" });
+      setMoodboard(prev => [item, ...prev.filter(i => i.id !== item.id)]);
+    } catch { /* ignore — a bad file just doesn't get added */ }
+  };
+  const deleteMoodboardItem = async (id) => {
+    setMoodboard(prev => prev.filter(i => i.id !== id));
+    if (moodEnlarged?.id === id) setMoodEnlarged(null);
+    await removeMoodboardItem(id);
+  };
 
   // Load a newer cross-device draft (user-gated — never auto-clobbers local work).
   const loadNewerDraft = () => {
@@ -9697,7 +9740,56 @@ export default function App() {
     const byId = new Map();
     for (const t of postTiles) byId.set(t.id, t);
     for (const t of archivedTiles || []) if (!byId.has(t.id)) byId.set(t.id, t);
-    const tiles = [...byId.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const allTiles = [...byId.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    // (Feed folders) Favourites = liked sessions (no new storage — the like flag /
+    // the current session's live liked state). The tab bar switches folders.
+    const isLiked = (t) => t.liked === true || (t.id === sessionId && currentLiked);
+    const favTiles = allTiles.filter(isLiked);
+    const folders = [
+      { id:"all", label:"All", n: allTiles.length },
+      { id:"favourites", label:"Favourites", n: favTiles.length },
+      { id:"moodboard", label:"Moodboard", n: moodboard.length },
+    ];
+    const tiles = feedFolder === "favourites" ? favTiles : allTiles;
+
+    // One tile — shared by the All + Favourites folders.
+    const renderTile = (t) => {
+      const current = t.id === sessionId;
+      const liked = isLiked(t);
+      return (
+        <div key={t.id} style={{position:"relative"}}>
+          <button type="button" onClick={()=>openSession(t.id)} aria-current={current}
+            title={`${t.title || "Untitled post"}${t.exportedAt ? " · exported" : ""} — tap to open`}
+            style={{width:"100%",aspectRatio:"1/1",borderRadius:8,overflow:"hidden",display:"block",padding:0,cursor:"pointer",
+              border:current?`2px solid ${B.burnham}`:`1px solid ${B.ash}33`,background:"#fff",
+              boxShadow:"0 1px 8px rgba(43,80,64,0.05)"}}>
+            {t.thumb
+              ? <img src={t.thumb} alt={t.title || "post"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+              : <span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:500,letterSpacing:1,textTransform:"uppercase"}}>Post</span>}
+          </button>
+          {/* (item 10) HEART — toggles like/unlike; the like stores design genes. */}
+          <button type="button" className="wo-feed-heart" aria-pressed={liked}
+            aria-label={liked ? `Unlike ${t.title || "this post"}` : `Like ${t.title || "this post"}`}
+            title={liked ? "Liked — the studio learns from this" : "Like — the studio learns your style"}
+            onClick={(e)=>{ e.stopPropagation(); toggleLike(t.id); }}
+            style={{position:"absolute",right:8,bottom:34,width:30,height:30,borderRadius:"50%",border:"none",
+              background:"rgba(255,255,255,0.92)",boxShadow:"0 1px 5px rgba(43,80,64,0.16)",cursor:"pointer",
+              display:"grid",placeItems:"center",fontSize:15,lineHeight:1,
+              color:liked?B.tangerine:B.burnham}}>
+            {liked ? "♥" : "♡"}
+          </button>
+          <div style={{display:"flex",alignItems:"baseline",gap:6,marginTop:7,minHeight:15}}>
+            <span style={{flex:"1 1 auto",fontSize:11,color:B.jet,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title || "Untitled"}</span>
+            {t.exportedAt && (
+              <span title="Exported" style={{flex:"0 0 auto",fontSize:8.5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",color:B.celadonDeep}}>
+                ↧ exported
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div className="wo-feedgal" role="dialog" aria-modal="true" aria-label="Your posts">
         <style>{`
@@ -9706,15 +9798,22 @@ export default function App() {
           .wo-feedgal{position:fixed;inset:0;z-index:380;background:${B.whiteSmoke};overflow-y:auto;-webkit-overflow-scrolling:touch;}
           .wo-feedgal-inner{max-width:920px;margin:0 auto;padding:44px 40px 80px;}
           .wo-feedgal-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px 26px;}
+          .wo-feedgal-tabs{display:flex;gap:6;margin-bottom:28px;flex-wrap:wrap;}
+          .wo-feedtab{font-family:${FU.subtitle};font-size:11px;font-weight:600;letter-spacing:0.06em;
+            color:color-mix(in srgb,${B.burnham} 60%,transparent);background:transparent;border:1px solid transparent;
+            border-radius:999px;padding:7px 15px;cursor:pointer;white-space:nowrap;transition:background 140ms ease,color 140ms ease;}
+          .wo-feedtab:hover{color:${B.burnham};background:color-mix(in srgb,${B.celadon} 18%,transparent);}
+          .wo-feedtab[aria-selected="true"]{color:${B.burnham};background:color-mix(in srgb,${B.celadon} 26%,transparent);border-color:color-mix(in srgb,${B.burnham} 24%,transparent);}
+          .wo-feedtab .wo-feedtab-n{opacity:0.6;margin-left:5px;font-weight:500;}
           @media(max-width:640px){
             .wo-feedgal-inner{padding:24px 18px 64px;}
             .wo-feedgal-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px;}
           }
         `}</style>
         <div className="wo-feedgal-inner">
-          <div style={{display:"flex",alignItems:"baseline",gap:14,marginBottom:34,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:14,marginBottom:20,flexWrap:"wrap"}}>
             <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:2.4,textTransform:"uppercase",color:B.burnham}}>Your posts</span>
-            <span style={{fontSize:11.5,fontFamily:F.body,color:B.ash}}>{tiles.length ? `${tiles.length} post${tiles.length===1?"":"s"} — newest first` : ""}</span>
+            <span style={{fontSize:11.5,fontFamily:F.body,color:B.ash}}>{allTiles.length ? `${allTiles.length} post${allTiles.length===1?"":"s"} — newest first` : ""}</span>
             <span title={sessionCloudCfg?"Posts sync across your devices":"Saved on this device"} style={{fontSize:10,fontFamily:F.body,color:sessionCloudCfg?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{sessionCloudCfg?"◆ Synced":"◇ This device"}</span>
             <span style={{flex:1}} />
             <button type="button" onClick={()=>{startNewPost();setFeedOpen(false);}}
@@ -9722,55 +9821,102 @@ export default function App() {
             <button type="button" aria-label="Close the gallery" title="Back to the canvas (Esc)" onClick={()=>setFeedOpen(false)}
               style={{width:34,height:34,borderRadius:10,border:"none",background:`${B.ash}20`,color:B.jet,fontSize:16,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
           </div>
-          {tiles.length===0 ? (
-            <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:420}}>
-              No saved posts yet — describe one to {DEFAULT_ASSISTANT_NAME} and it will appear here automatically.
+          {/* (Feed folders — ratified) All · Favourites · Moodboard */}
+          <div className="wo-feedgal-tabs" role="tablist" aria-label="Folders">
+            {folders.map(f => (
+              <button key={f.id} type="button" role="tab" aria-selected={feedFolder===f.id}
+                className="wo-feedtab" onClick={()=>setFeedFolder(f.id)}>
+                {f.label}<span className="wo-feedtab-n">{f.n}</span>
+              </button>
+            ))}
+          </div>
+
+          {feedFolder === "moodboard" ? (
+            renderMoodboardFolder()
+          ) : tiles.length === 0 ? (
+            <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:440}}>
+              {feedFolder === "favourites"
+                ? "No favourites yet — tap the ♥ on a design (top-right of the canvas) or on any tile here, and it lands in this folder. The studio learns from what you love."
+                : <>No saved posts yet — describe one to {DEFAULT_ASSISTANT_NAME} and it will appear here automatically.</>}
             </p>
           ) : (
             <div className="wo-feedgal-grid">
-              {tiles.map(t => {
-                const current = t.id === sessionId;
-                const liked = t.liked === true || (current && currentLiked);
-                return (
-                  <div key={t.id} style={{position:"relative"}}>
-                    <button type="button" onClick={()=>openSession(t.id)} aria-current={current}
-                      title={`${t.title || "Untitled post"}${t.exportedAt ? " · exported" : ""} — tap to open`}
-                      style={{width:"100%",aspectRatio:"1/1",borderRadius:8,overflow:"hidden",display:"block",padding:0,cursor:"pointer",
-                        border:current?`2px solid ${B.burnham}`:`1px solid ${B.ash}33`,background:"#fff",
-                        boxShadow:"0 1px 8px rgba(43,80,64,0.05)"}}>
-                      {t.thumb
-                        ? <img src={t.thumb} alt={t.title || "post"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
-                        : <span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:500,letterSpacing:1,textTransform:"uppercase"}}>Post</span>}
-                    </button>
-                    {/* (item 10) HEART — toggles like/unlike; the like stores design genes. */}
-                    <button type="button" className="wo-feed-heart" aria-pressed={liked}
-                      aria-label={liked ? `Unlike ${t.title || "this post"}` : `Like ${t.title || "this post"}`}
-                      title={liked ? "Liked — the studio learns from this" : "Like — the studio learns your style"}
-                      onClick={(e)=>{ e.stopPropagation(); toggleLike(t.id); }}
-                      style={{position:"absolute",right:8,bottom:34,width:30,height:30,borderRadius:"50%",border:"none",
-                        background:"rgba(255,255,255,0.92)",boxShadow:"0 1px 5px rgba(43,80,64,0.16)",cursor:"pointer",
-                        display:"grid",placeItems:"center",fontSize:15,lineHeight:1,
-                        color:liked?B.tangerine:B.burnham}}>
-                      {liked ? "♥" : "♡"}
-                    </button>
-                    <div style={{display:"flex",alignItems:"baseline",gap:6,marginTop:7,minHeight:15}}>
-                      <span style={{flex:"1 1 auto",fontSize:11,color:B.jet,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title || "Untitled"}</span>
-                      {/* Exported — the quiet mark (never a badge shout). */}
-                      {t.exportedAt && (
-                        <span title="Exported" style={{flex:"0 0 auto",fontSize:8.5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1,textTransform:"uppercase",color:B.celadonDeep}}>
-                          ↧ exported
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {tiles.map(renderTile)}
             </div>
           )}
         </div>
+        {/* Enlarge overlay (moodboard) — tap a tile to view large; tap out to close. */}
+        {moodEnlarged && (
+          <div role="dialog" aria-modal="true" aria-label="Inspiration image"
+            onClick={()=>setMoodEnlarged(null)}
+            style={{position:"fixed",inset:0,zIndex:390,background:"rgba(37,45,40,0.72)",display:"grid",placeItems:"center",padding:32,cursor:"zoom-out"}}>
+            <div onClick={(e)=>e.stopPropagation()} style={{maxWidth:"min(90vw,720px)",maxHeight:"86vh",display:"flex",flexDirection:"column",gap:12,alignItems:"center"}}>
+              <img src={moodEnlarged.image} alt={moodEnlarged.note || "inspiration"} style={{maxWidth:"100%",maxHeight:"72vh",borderRadius:12,boxShadow:"0 24px 70px rgba(0,0,0,0.4)",display:"block"}} />
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                <button type="button" onClick={()=>deleteMoodboardItem(moodEnlarged.id)}
+                  style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,color:"#fff",background:B.jet+"cc",border:"none",borderRadius:999,padding:"8px 16px",cursor:"pointer"}}>Remove</button>
+                <button type="button" onClick={()=>setMoodEnlarged(null)}
+                  style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,color:"#fff",background:"rgba(255,255,255,0.18)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:999,padding:"8px 16px",cursor:"pointer"}}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
+
+  /* ── (Feed folders — Moodboard) EXTERNAL INSPIRATION grid ──────────────────
+     Uploaded reference images (NOT designs). "＋ Add inspiration" uploads; each
+     tile enlarges on tap and can be removed. Local + cloud + capture-pipe tagged
+     (kind:'moodboard') so the taste study can read it alongside favourites. */
+  const renderMoodboardFolder = () => (
+    <>
+      <input ref={moodInputRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={(e)=>{ const f=e.target.files?.[0]; if(f) addMoodboardFile(f); e.target.value=""; }} />
+      <div style={{display:"flex",alignItems:"baseline",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+        <span style={{fontSize:11.5,fontFamily:F.body,color:B.ash,lineHeight:1.5,maxWidth:460}}>
+          Inspiration you love from anywhere — reference images the studio learns your taste from. Not your designs.
+        </span>
+        <span style={{flex:1}} />
+        <span title={moodboardCfg?"Inspiration syncs across your devices":"Saved on this device"} style={{fontSize:10,fontFamily:F.body,color:moodboardCfg?B.celadonDeep:B.ash,whiteSpace:"nowrap"}}>{moodboardCfg?"◆ Synced":"◇ This device"}</span>
+      </div>
+      {moodboard.length === 0 ? (
+        <button type="button" onClick={()=>moodInputRef.current?.click()}
+          style={{width:"100%",maxWidth:440,padding:"28px 20px",borderRadius:14,border:`1.5px dashed ${B.ash}77`,
+            background:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:12,fontWeight:600,letterSpacing:0.6,
+            cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+          <span style={{fontSize:22,lineHeight:1}}>＋</span>
+          Add inspiration
+          <span style={{fontFamily:F.body,fontWeight:400,fontSize:11,color:B.ash,letterSpacing:0}}>Upload a reference image (PNG or JPG)</span>
+        </button>
+      ) : (
+        <div className="wo-feedgal-grid">
+          <button type="button" onClick={()=>moodInputRef.current?.click()}
+            aria-label="Add inspiration"
+            style={{aspectRatio:"1/1",borderRadius:8,border:`1.5px dashed ${B.ash}77`,background:"transparent",
+              color:B.burnham,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,
+              fontFamily:F.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5}}>
+            <span style={{fontSize:24,lineHeight:1}}>＋</span>
+            Add inspiration
+          </button>
+          {moodboard.map(m => (
+            <div key={m.id} style={{position:"relative"}}>
+              <button type="button" onClick={()=>setMoodEnlarged(m)} title="Tap to enlarge"
+                style={{width:"100%",aspectRatio:"1/1",borderRadius:8,overflow:"hidden",display:"block",padding:0,cursor:"zoom-in",
+                  border:`1px solid ${B.ash}33`,background:"#fff",boxShadow:"0 1px 8px rgba(43,80,64,0.05)"}}>
+                <img src={m.image} alt={m.note || "inspiration"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+              </button>
+              <button type="button" aria-label="Remove inspiration" title="Remove"
+                onClick={(e)=>{ e.stopPropagation(); deleteMoodboardItem(m.id); }}
+                style={{position:"absolute",top:-5,right:-5,width:20,height:20,borderRadius:10,border:"none",
+                  background:B.jet,color:"#fff",fontSize:13,lineHeight:"20px",cursor:"pointer",padding:0,
+                  boxShadow:"0 1px 5px rgba(43,80,64,0.2)"}}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
 
   /* ── DEFAULT LOGO SPOT ── The brand-standard corner the auto logo would take
      (resolvedLogo.position, defaulting bottom-right), inset by the format's
@@ -9940,16 +10086,9 @@ export default function App() {
           {dim.label}
         </span>
         <span style={{flex:1}} />
-        {/* (Hearts, item 10) A small heart on the current post — toggling stores
-            the design's GENES so the studio learns the house style. Quiet, recede
-            weight; fills tangerine when liked. */}
-        <button type="button" className="wo-topbtn wo-topbtn--recede" aria-pressed={currentLiked}
-          aria-label={currentLiked ? "Unlike this design" : "Like this design"}
-          title={currentLiked ? "Liked — the studio learns from designs you love" : "Love this design? Like it and the studio learns your style"}
-          onClick={()=>toggleLike(sessionId)}
-          style={{fontSize:15,lineHeight:1,color:currentLiked?B.tangerine:undefined}}>
-          {currentLiked ? "♥" : "♡"}
-        </button>
+        {/* (Hearts — ratified) The like ♥ moved to the TOP-RIGHT CORNER OF THE
+            CANVAS (Midjourney pattern) — see .wo-canvas-heart in the preview shell.
+            The top bar keeps only true globals + the finish (Undo, Export). */}
         {/* (D1 item 3) Export + Undo LEAD — the finish and the muscle-memory
             action. Posts/Templates/+Add recede (--recede) so these
             two carry the top bar. */}
@@ -10033,6 +10172,23 @@ export default function App() {
                 overlay={overlayChromeVisible && selectedEditorT && selectedEditorAsset ? { transform:selectedEditorT, ratio:selectedEditorAsset.ratio || 1 } : null}
                 text={textSelected && !selOverlay ? textBoundsRef.current : null}
               />
+              {/* ── (Hearts — ratified) CANVAS CORNER HEART (Midjourney pattern) ──
+                    A calm outline heart in the TOP-RIGHT corner of the preview; taps
+                    to fill. Its wrapper is pointer-events:none so it never blocks a
+                    click on a canvas element beneath it — only the small button itself
+                    is interactive (pointer-events:auto). Fills tangerine when liked;
+                    the like stores the design's GENES (toggleLike → logLike). */}
+              {sessionId && (
+                <div className="wo-canvas-heart-wrap" aria-hidden={false}
+                  style={{position:"absolute",top:0,right:0,width:56,height:56,pointerEvents:"none",zIndex:14}}>
+                  <button type="button" className="wo-canvas-heart" aria-pressed={currentLiked}
+                    aria-label={currentLiked ? "Unlike this design" : "Like this design"}
+                    title={currentLiked ? "Liked — the studio learns from designs you love" : "Love this design? Like it and the studio learns your style"}
+                    onClick={()=>toggleLike(sessionId)}>
+                    {currentLiked ? "♥" : "♡"}
+                  </button>
+                </div>
+              )}
               {/* ── DRAG LIFT (Refinement 3) ── While a gesture is live the dragged
                     element LIFTS: a soft shadow + ~2% scale on a positioned box over its
                     live rect. NO tangerine anywhere (accent is CTA-only ink). The box is

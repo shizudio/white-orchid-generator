@@ -1283,6 +1283,67 @@ canvas[role="application"]:focus-visible {
 .wo-topbtn-accent:hover { background: var(--tw-tangerine-dk); }
 .wo-topbtn-accent[aria-expanded="true"] { background: var(--tw-tangerine-dk); border-color: transparent; }
 
+/* (Hearts — ratified) CANVAS CORNER HEART (Midjourney pattern). A calm outline
+   heart in the top-right corner of the preview; fills tangerine when liked. The
+   wrapper is pointer-events:none (set inline) so it never blocks a click on a
+   canvas element beneath it — only this button is interactive. */
+.wo-canvas-heart {
+  pointer-events: auto;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--tw-burnham);
+  background: color-mix(in srgb, #ffffff 88%, transparent);
+  box-shadow: 0 1px 6px rgba(43, 80, 64, 0.18);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: transform 120ms ease, color 120ms ease, background 120ms ease;
+}
+.wo-canvas-heart:hover { background: #ffffff; transform: scale(1.06); }
+.wo-canvas-heart[aria-pressed="true"] { color: var(--tw-tangerine); }
+
+/* (Export CTA — ratified) The below-canvas Export popover: opens to the RIGHT of
+   the button and NEVER over the canvas (the canvas sits above the strip). On
+   narrow/mobile it becomes a bottom sheet (still never over the canvas). */
+.wo-export-backdrop { position: fixed; inset: 0; z-index: 219; background: transparent; }
+.wo-export-pop {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 12px);
+  z-index: 220;
+  width: 340px;
+  max-width: min(340px, 46vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(37, 78, 72, 0.16);
+  padding: 16px;
+}
+@media (max-width: 900px) {
+  .wo-export-pop {
+    position: fixed;
+    top: auto;
+    left: 0; right: 0; bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 76vh;
+    border-radius: 18px 18px 0 0;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .wo-export-backdrop { background: rgba(37, 45, 40, 0.35); }
+}
+
 /* Popover panel under the bar. One panel at a time; backdrop click closes. */
 .wo-topmenu-backdrop {
   position: fixed;
