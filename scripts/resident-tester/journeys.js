@@ -245,16 +245,24 @@ async function runJourneys(page, run, cons, baseUrl) {
     await settle(300);
     // Prefer the dynamic chat chip if present; else the top-bar + Add.
     const beforeTruth = await page.evaluate(() => { try { return window.__woTruth ? window.__woTruth() : null; } catch { return null; } });
+    // (2.8) Instrument which PATH the add takes so a 100%-reproducing failure can be
+    // diagnosed without eyeballing: was the dynamic ".wo-chat-chip add caption" chip
+    // even PRESENT (chip path), or did we fall back to asking chat (chat-fallback)?
+    // The distinction tells us whether the bug is "the chip never appears in a
+    // sandboxed session" vs "adding a caption genuinely never renders".
     let added = false;
-    const chips = await page.$$('.wo-chat-chip');
-    for (const c of chips) {
+    let addBranch = 'chat-fallback';
+    const allChips = await page.$$('.wo-chat-chip');
+    let addChipPresent = false;
+    for (const c of allChips) {
       const t = (await c.innerText().catch(() => '')).trim();
-      if (/add caption/i.test(t)) { await c.click(); added = true; break; }
+      if (/add caption/i.test(t)) { addChipPresent = true; await c.click(); added = true; addBranch = 'chip'; break; }
     }
     if (!added) {
       // Fall back to asking chat to add a caption (still exercises the add path).
       await sendChat(page, 'add small text at the bottom that says spaces are limited');
       added = true;
+      addBranch = 'chat-fallback';
     }
     await settle(2000);
     const afterTruth = await page.evaluate(() => { try { return window.__woTruth ? window.__woTruth() : null; } catch { return null; } });
@@ -272,12 +280,15 @@ async function runJourneys(page, run, cons, baseUrl) {
       return /added|caption|now says|small text/.test(last);
     });
     const changed = keysChanged || geomChanged || replySaysAdded;
+    // (2.8) Tag every step + defect with the branch taken and whether the chip was
+    // ever present, so the report can split "chip missing" from "add didn't render".
+    const branchTag = `branch=${addBranch}, addChipPresent=${addChipPresent}`;
     pushStep('+ Add caption renders', changed, changed
-      ? `caption landed (${keysChanged ? 'new role key' : geomChanged ? 'role geometry changed' : 'confirmed by reply'})`
-      : 'no role-bound delta and no add confirmation');
+      ? `caption landed via ${addBranch} (${keysChanged ? 'new role key' : geomChanged ? 'role geometry changed' : 'confirmed by reply'})`
+      : `no role-bound delta and no add confirmation [${branchTag}]`);
     if (!changed) {
       const shot = await run.shot(page, 'j5-add-caption');
-      run.recordDefect({ journey: 'add-caption', oracle: 'add-renders', expected: 'adding a caption changes the rendered design', observed: 'render truth unchanged after add', screenshot: shot, console: cons.peek(), severity: 'medium' });
+      run.recordDefect({ journey: 'add-caption', oracle: 'add-renders', expected: 'adding a caption changes the rendered design', observed: `render truth unchanged after add [${branchTag}]`, screenshot: shot, console: cons.peek(), severity: 'medium' });
     }
     cons.drain();
   } catch (e) {
