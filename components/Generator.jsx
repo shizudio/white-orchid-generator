@@ -10318,10 +10318,13 @@ export default function App() {
               cluster: [Refresh photo] · [Undo/Redo] · [Export ▸]. Affordances that
               used to float OVER the artwork live here, beneath the canvas, so the
               preview at rest shows ONLY the design. Refresh photo (photo posts) +
-              Undo/Redo (once there's history) are conditional; Export is ALWAYS
-              present as the primary tangerine CTA (brand accent — the one sanctioned
-              tangerine use). Its popover opens to the RIGHT of the button and never
-              overlaps the canvas (see .wo-export-pop). */}
+              Refresh photo is conditional (photo posts only); Undo/Redo are ALWAYS
+              present but DISABLED (greyed, not-allowed) when there's nothing to
+              undo/redo — a fresh design shows a disabled Undo, not a missing one
+              (client: "undo button gone"). Export is ALWAYS present as the primary
+              tangerine CTA (brand accent — the one sanctioned tangerine use). Its
+              popover opens to the RIGHT of the button and never overlaps the canvas
+              (see .wo-export-pop). */}
           {(
             <div className="generator-canvas-controls" style={{width:"100%",maxWidth:820,marginTop:12,display:"flex",gap:8,justifyContent:"center",alignItems:"center",flexWrap:"wrap"}}>
               {mediaObj && (
@@ -10336,27 +10339,34 @@ export default function App() {
                   {refreshingPhoto ? (refreshStage || "Refreshing…") : "Refresh photo"}
                 </button>
               )}
-              {(aiUndoStack.length>0||redoStack.length>0)&&(
+              {/* (canvas-chrome §3 / undo-visibility) Undo + Redo are ALWAYS in the
+                  strip so the cluster never re-shuffles; each is DISABLED (greyed,
+                  cursor:not-allowed, aria-disabled) when its stack is empty. Cmd+Z /
+                  Shift+Cmd+Z shortcuts are unaffected (handled globally). */}
+              {(() => {
+                const canUndo = aiUndoStack.length > 0;
+                const canRedo = redoStack.length > 0;
+                return (
                 <div style={{display:"inline-flex",gap:6}}>
-                  <button type="button" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
-                    aria-label="Undo" title="Undo the last change (⌘Z)"
+                  <button type="button" onClick={undoLastAiChange} disabled={!canUndo} aria-disabled={!canUndo}
+                    aria-label="Undo" title={canUndo ? "Undo the last change (⌘Z)" : "Nothing to undo yet"}
                     style={{display:"inline-flex",alignItems:"center",gap:6,padding:"7px 13px",borderRadius:999,
                       border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
                       fontFamily:F.subtitle,fontSize:10,fontWeight:500,letterSpacing:1.1,textTransform:"uppercase",
-                      cursor:aiUndoStack.length?"pointer":"default",opacity:aiUndoStack.length?1:0.4}}>
+                      cursor:canUndo?"pointer":"not-allowed",opacity:canUndo?1:0.4}}>
                     <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>↶</span> Undo
                   </button>
-                  {redoStack.length>0&&(
-                    <button type="button" onClick={redoLastChange}
-                      aria-label="Redo" title="Redo (⇧⌘Z)"
-                      style={{display:"inline-flex",alignItems:"center",padding:"7px 11px",borderRadius:999,
-                        border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
-                        fontFamily:F.subtitle,fontSize:12,fontWeight:500,cursor:"pointer"}}>
-                      <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
-                    </button>
-                  )}
+                  <button type="button" onClick={redoLastChange} disabled={!canRedo} aria-disabled={!canRedo}
+                    aria-label="Redo" title={canRedo ? "Redo (⇧⌘Z)" : "Nothing to redo"}
+                    style={{display:"inline-flex",alignItems:"center",padding:"7px 11px",borderRadius:999,
+                      border:`1px solid ${B.ash}55`,background:"#fff",color:B.burnham,
+                      fontFamily:F.subtitle,fontSize:12,fontWeight:500,
+                      cursor:canRedo?"pointer":"not-allowed",opacity:canRedo?1:0.4}}>
+                    <span aria-hidden="true" style={{lineHeight:1}}>↷</span>
+                  </button>
                 </div>
-              )}
+                );
+              })()}
               {/* (Export CTA — ratified) The primary finish, the ONE sanctioned
                   tangerine. Its popover opens to the RIGHT of the button (in the
                   empty margin right of the strip) and NEVER overlaps the canvas
