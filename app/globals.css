@@ -1334,33 +1334,36 @@ canvas[role="application"]:focus-visible {
 .wo-export-cta:hover { background: var(--tw-tangerine-dk); transform: translateY(-1px); }
 .wo-export-cta[aria-expanded="true"] { background: var(--tw-tangerine-dk); }
 .wo-export-backdrop { position: fixed; inset: 0; z-index: 219; background: transparent; }
+/* Base = a bottom sheet: the always-safe fallback used whenever there isn't a
+   clear ≥ panel-width margin to the RIGHT of the canvas (narrow laptops, mobile).
+   It docks below the canvas, never covering it, and scrolls INTERNALLY so the
+   page itself never scrolls below the fold. */
 .wo-export-pop {
-  position: absolute;
-  top: 0;
-  left: calc(100% + 12px);
+  position: fixed;
+  left: 0; right: 0; bottom: 0; top: auto;
   z-index: 220;
-  width: 340px;
-  max-width: min(340px, 46vw);
-  max-height: 70vh;
+  width: 100%;
+  max-height: min(72vh, calc(100vh - 88px));
+  overflow-y: auto;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -14px 50px rgba(37, 78, 72, 0.14);
+  padding: 16px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.wo-export-backdrop { background: rgba(37, 45, 40, 0.28); }
+/* Side panel: used only when the canvas leaves a real right-margin. Its
+   left/top/width/max-height are set INLINE from the live canvas rect (JS) so it
+   sits fully in that margin — never over the canvas, never below the fold. */
+.wo-export-pop--side {
+  position: fixed;
+  right: auto; bottom: auto;
   overflow-y: auto;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 16px;
   box-shadow: 0 24px 70px rgba(37, 78, 72, 0.16);
   padding: 16px;
-}
-@media (max-width: 900px) {
-  .wo-export-pop {
-    position: fixed;
-    top: auto;
-    left: 0; right: 0; bottom: 0;
-    width: 100%;
-    max-width: 100%;
-    max-height: 76vh;
-    border-radius: 18px 18px 0 0;
-    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  }
-  .wo-export-backdrop { background: rgba(37, 45, 40, 0.35); }
 }
 
 /* Popover panel under the bar. One panel at a time; backdrop click closes. */

@@ -10364,14 +10364,33 @@ export default function App() {
                   title="Export this design — every format, ready to post">
                   Export <span aria-hidden="true" style={{fontSize:11,marginLeft:1,transform:exportOpen?"rotate(90deg)":"none",transition:"transform 0.18s",display:"inline-block"}}>▸</span>
                 </button>
-                {exportOpen && (
-                  <>
-                    <div className="wo-export-backdrop" onClick={()=>setExportOpen(false)} aria-hidden="true" />
-                    <div className="wo-export-pop" role="dialog" aria-label="Export">
-                      {renderExportPanel()}
-                    </div>
-                  </>
-                )}
+                {exportOpen && (() => {
+                  // Place the export panel in the clear margin to the RIGHT of the
+                  // canvas when one exists (fully off the artwork, fully on screen);
+                  // otherwise fall back to the base bottom-sheet class. Keyed off the
+                  // live canvas rect, not the button (the button sits under the canvas
+                  // centre, so a button-anchored panel overlapped the artwork).
+                  const PANEL_W = 316, GAP = 14;
+                  let sideStyle = null;
+                  if (typeof window !== "undefined") {
+                    const cr = canvasShellRef.current?.getBoundingClientRect();
+                    const vw = window.innerWidth, vh = window.innerHeight;
+                    if (cr && vw > 900 && (vw - cr.right) >= PANEL_W + GAP) {
+                      const maxH = Math.round(Math.min(vh * 0.74, vh - 24));
+                      const top = Math.round(Math.max(12, Math.min(cr.top, vh - 12 - Math.min(maxH, 520))));
+                      sideStyle = { left: Math.round(cr.right + GAP), top, width: PANEL_W, maxHeight: maxH };
+                    }
+                  }
+                  return (
+                    <>
+                      <div className="wo-export-backdrop" onClick={()=>setExportOpen(false)} aria-hidden="true" />
+                      <div className={sideStyle ? "wo-export-pop wo-export-pop--side" : "wo-export-pop"}
+                        role="dialog" aria-label="Export" style={sideStyle || undefined}>
+                        {renderExportPanel()}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           )}
