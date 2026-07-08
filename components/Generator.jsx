@@ -10088,15 +10088,10 @@ export default function App() {
         <span style={{flex:1}} />
         {/* (Hearts — ratified) The like ♥ moved to the TOP-RIGHT CORNER OF THE
             CANVAS (Midjourney pattern) — see .wo-canvas-heart in the preview shell.
-            The top bar keeps only true globals + the finish (Undo, Export). */}
-        {/* (D1 item 3) Export + Undo LEAD — the finish and the muscle-memory
-            action. Posts/Templates/+Add recede (--recede) so these
-            two carry the top bar. */}
-        <button type="button" className="wo-topbtn wo-topbtn--lead" onClick={undoLastAiChange} disabled={!aiUndoStack.length}
-          title={aiUndoStack.length?"Undo the last change (⌘Z · redo ⇧⌘Z)":"Nothing to undo"}
-          style={{opacity:aiUndoStack.length?1:0.4}}>
-          ↶ Undo
-        </button>
+            (One undo — ratified) The top-bar Undo was REMOVED: there is exactly ONE
+            global undo now — the one in the below-canvas control strip
+            (.generator-canvas-controls). Cmd+Z / Cmd+Shift+Z shortcuts still work.
+            The top bar keeps only true globals + the Export CTA. */}
         <button type="button" className="wo-topbtn wo-topbtn-accent" aria-expanded={topMenu==="export"}
           onClick={()=>setTopMenu(prev=>prev==="export"?null:"export")}>
           Export
