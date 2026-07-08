@@ -3136,6 +3136,7 @@ export default function App() {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) { t.blur(); return; }
       if (feedOpen) { setFeedOpen(false); return; }
+      if (exportOpen) { setExportOpen(false); return; }
       if (topMenu) { setTopMenu(null); return; }
       if (auditOpen) { setAuditOpen(false); return; }
       if (showLibPicker) { setShowLibPicker(false); return; }
@@ -3143,7 +3144,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectorEl, topMenu, auditOpen, showLibPicker, feedOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [inspectorEl, topMenu, auditOpen, showLibPicker, feedOpen, exportOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── UNIFIED AI APPLY PATH ──
      applyDesignPatch(patch) is the ONE place any AI-driven change touches the
@@ -9675,59 +9676,67 @@ export default function App() {
         </div>
       </>
     );
-    if (topMenu === "export") return (
-      <>
-        <MenuHead label="Export" sub={`${W} × ${H} px · ${dim.label}`} />
-        <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:10}}>
-          <div style={{display:"flex",gap:6,flex:1}}>{[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
-            <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)} style={{flex:1,padding:"8px",borderRadius:8,border:`1px solid ${exportFormat===f?B.burnham:B.ash+"33"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:1,cursor:"pointer"}}>{l}</button>
-          ))}</div>
-          {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
-        </div>
-        {/* (WP-Y2) Export = the SET by default. One idea, all formats — the whole
-            set is the natural finish, so "Download all formats" is the primary
-            action; the single-format download stays available as a secondary. */}
-        <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
-          width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",
-          border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",
-          letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
-        }}>Download all {DIMENSIONS.length} formats</button>
-        <button onClick={download} title={`Download only ${dim.label} as ${exportFormat.toUpperCase()}`} style={{
-          width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,
-          border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
-          letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
-        }}>Just this one · {dim.label}</button>
-        {/* (WP-Y5) Ready-to-post checklist — per-format GO/FIX gate. Advisory (never
-            blocks export); a fix routes through the one patch pipeline + is undoable. */}
-        <ReadyToPost
-          check={ledgerCheck}
-          expanded={readyExpanded}
-          setExpanded={setReadyExpanded}
-          actionsOf={(iss)=>findingActions(iss, (i)=>acknowledgeIssue(i, iss.anchor?.dimensionId || dimensionId))}
-          onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
-          currentDim={dimensionId}
-          acks={acks}
-          ackedOf={findingAckPinned}
-        />
-        <div style={{display:"flex",gap:8,marginTop:14}}>
-          {/* (One Advice Ledger) The manual AI audit — its findings merge into the SAME
-              dots + checklist above (one voice). Opens a slim runner surface for status
-              + summary; there is no separate findings list.
-              (Declutter §6.4) The Caption writer button is gone — caption work lives
-              in chat ("Rewrite caption" chip). */}
-          <button onClick={()=>{setAuditOpen(true);setTopMenu(null);runAiAudit();}} title="Review this design for on-brand polish (advisory). Findings appear as the same dots + checklist." style={{
-            flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
-            border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
-            letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
-          }}><span aria-hidden="true">✓</span> AI audit</button>
-        </div>
-        {/* (Feed gallery, item 9) The recent-exports history + "Clear all" left this
-            menu — exported posts are marked in the Posts gallery, and the OS
-            download folder is the file history. */}
-      </>
-    );
+    // (Export CTA — ratified) Export left the top bar for the below-canvas control
+    // strip (renderExportPanel below). topMenuContent now serves only Templates.
     return null;
   };
+
+  /* ── (Export CTA — ratified) EXPORT PANEL ────────────────────────────────────
+     The export controls (formats · download-all · ready-to-post · AI audit ·
+     save-template) rendered inside the below-canvas popover. Moved here verbatim
+     from the old top-bar Export menu; the only change is the AI-audit button now
+     closes the below-canvas popover (setExportOpen) instead of the top menu. */
+  const renderExportPanel = () => (
+    <>
+      <MenuHead label="Export" sub={`${W} × ${H} px · ${dim.label}`} />
+      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:10}}>
+        <div style={{display:"flex",gap:6,flex:1}}>{[{f:"png",l:"PNG"},{f:"jpeg",l:"JPG"}].map(({f,l})=>(
+          <button key={f} aria-pressed={exportFormat===f} onClick={()=>setExportFormat(f)} style={{flex:1,padding:"8px",borderRadius:8,border:`1px solid ${exportFormat===f?B.burnham:B.ash+"33"}`,background:exportFormat===f?B.burnham:"#fff",color:exportFormat===f?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:1,cursor:"pointer"}}>{l}</button>
+        ))}</div>
+        {brandKit?.guardrails&&<GuardrailTooltip text={brandKit.guardrails} />}
+      </div>
+      {/* (WP-Y2) Export = the SET by default. One idea, all formats — the whole
+          set is the natural finish, so "Download all formats" is the primary
+          action; the single-format download stays available as a secondary. */}
+      <button onClick={downloadAll} title={`Export all ${DIMENSIONS.length} formats as ${exportFormat.toUpperCase()}`} style={{
+        width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",
+        border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",
+        letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,
+      }}>Download all {DIMENSIONS.length} formats</button>
+      <button onClick={download} title={`Download only ${dim.label} as ${exportFormat.toUpperCase()}`} style={{
+        width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,
+        border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
+        letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,
+      }}>Just this one · {dim.label}</button>
+      {/* (WP-Y5) Ready-to-post checklist — per-format GO/FIX gate. Advisory (never
+          blocks export); a fix routes through the one patch pipeline + is undoable. */}
+      <ReadyToPost
+        check={ledgerCheck}
+        expanded={readyExpanded}
+        setExpanded={setReadyExpanded}
+        actionsOf={(iss)=>findingActions(iss, (i)=>acknowledgeIssue(i, iss.anchor?.dimensionId || dimensionId))}
+        onSwitchFormat={(id)=>{ if(id&&id!==dimensionId) setDimensionId(id); }}
+        currentDim={dimensionId}
+        acks={acks}
+        ackedOf={findingAckPinned}
+      />
+      <div style={{display:"flex",gap:8,marginTop:14}}>
+        {/* (One Advice Ledger) The manual AI audit — its findings merge into the SAME
+            dots + checklist above (one voice). Opens a slim runner surface for status
+            + summary; there is no separate findings list.
+            (Declutter §6.4) The Caption writer button is gone — caption work lives
+            in chat ("Rewrite caption" chip). */}
+        <button onClick={()=>{setAuditOpen(true);setExportOpen(false);runAiAudit();}} title="Review this design for on-brand polish (advisory). Findings appear as the same dots + checklist." style={{
+          flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,
+          border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",
+          letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+        }}><span aria-hidden="true">✓</span> AI audit</button>
+      </div>
+      {/* (Feed gallery, item 9) The recent-exports history + "Clear all" left this
+          menu — exported posts are marked in the Posts gallery, and the OS
+          download folder is the file history. */}
+    </>
+  );
 
   /* ── (Ratified item 9) THE FEED GALLERY ─────────────────────────────────────
      Posts opens a FULL-CANVAS overlay: a 3-wide Instagram-style grid (2-wide on
@@ -10085,17 +10094,12 @@ export default function App() {
           style={{fontFamily:FU.subtitle,fontSize:10,fontWeight:500,letterSpacing:0.8,textTransform:"uppercase",color:B.ash,padding:"0 10px",whiteSpace:"nowrap"}}>
           {dim.label}
         </span>
-        <span style={{flex:1}} />
-        {/* (Hearts — ratified) The like ♥ moved to the TOP-RIGHT CORNER OF THE
-            CANVAS (Midjourney pattern) — see .wo-canvas-heart in the preview shell.
-            (One undo — ratified) The top-bar Undo was REMOVED: there is exactly ONE
-            global undo now — the one in the below-canvas control strip
-            (.generator-canvas-controls). Cmd+Z / Cmd+Shift+Z shortcuts still work.
-            The top bar keeps only true globals + the Export CTA. */}
-        <button type="button" className="wo-topbtn wo-topbtn-accent" aria-expanded={topMenu==="export"}
-          onClick={()=>setTopMenu(prev=>prev==="export"?null:"export")}>
-          Export
-        </button>
+        {/* (Ratified small wins) The top bar now keeps ONLY true globals (Posts,
+            Templates, the read-only format label). Three actions moved OUT:
+            • the like ♥ → the canvas top-right corner (.wo-canvas-heart);
+            • Undo → the single below-canvas control (one global undo);
+            • Export → the below-canvas control strip as the primary tangerine CTA
+              (its popover opens to the right of the button, never over the canvas). */}
       </div>
       {topMenu && (
         <>
@@ -10305,11 +10309,15 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── BELOW-CANVAS CONTROL STRIP (canvas-chrome §3) ── Affordances that
-              used to float OVER the artwork now live here, beneath the canvas, so
-              the preview at rest shows ONLY the design. Refresh photo (photo posts)
-              + Undo/Redo (once there's history) sit in one airy row. */}
-          {(mediaObj || aiUndoStack.length>0 || redoStack.length>0) && (
+          {/* ── BELOW-CANVAS CONTROL STRIP (canvas-chrome §3) ── The PRIMARY action
+              cluster: [Refresh photo] · [Undo/Redo] · [Export ▸]. Affordances that
+              used to float OVER the artwork live here, beneath the canvas, so the
+              preview at rest shows ONLY the design. Refresh photo (photo posts) +
+              Undo/Redo (once there's history) are conditional; Export is ALWAYS
+              present as the primary tangerine CTA (brand accent — the one sanctioned
+              tangerine use). Its popover opens to the RIGHT of the button and never
+              overlaps the canvas (see .wo-export-pop). */}
+          {(
             <div className="generator-canvas-controls" style={{width:"100%",maxWidth:820,marginTop:12,display:"flex",gap:8,justifyContent:"center",alignItems:"center",flexWrap:"wrap"}}>
               {mediaObj && (
                 <button type="button" onClick={refreshPhoto} disabled={refreshingPhoto}
@@ -10344,6 +10352,27 @@ export default function App() {
                   )}
                 </div>
               )}
+              {/* (Export CTA — ratified) The primary finish, the ONE sanctioned
+                  tangerine. Its popover opens to the RIGHT of the button (in the
+                  empty margin right of the strip) and NEVER overlaps the canvas
+                  (the canvas sits above the strip; the popover anchors at the
+                  button's top and extends down + right). On narrow/mobile it opens
+                  as a bottom sheet (still never over the canvas). */}
+              <div className="wo-export-anchor" style={{position:"relative",display:"inline-flex"}}>
+                <button type="button" className="wo-export-cta" aria-expanded={exportOpen} aria-haspopup="dialog"
+                  onClick={()=>setExportOpen(v=>!v)}
+                  title="Export this design — every format, ready to post">
+                  Export <span aria-hidden="true" style={{fontSize:11,marginLeft:1,transform:exportOpen?"rotate(90deg)":"none",transition:"transform 0.18s",display:"inline-block"}}>▸</span>
+                </button>
+                {exportOpen && (
+                  <>
+                    <div className="wo-export-backdrop" onClick={()=>setExportOpen(false)} aria-hidden="true" />
+                    <div className="wo-export-pop" role="dialog" aria-label="Export">
+                      {renderExportPanel()}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 

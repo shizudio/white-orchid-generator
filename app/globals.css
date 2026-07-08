@@ -1314,6 +1314,25 @@ canvas[role="application"]:focus-visible {
 /* (Export CTA — ratified) The below-canvas Export popover: opens to the RIGHT of
    the button and NEVER over the canvas (the canvas sits above the strip). On
    narrow/mobile it becomes a bottom sheet (still never over the canvas). */
+.wo-export-cta {
+  font-family: var(--font-syne);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--tw-tangerine);
+  border: none;
+  border-radius: 999px;
+  padding: 8px 20px;
+  min-height: 34px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(255, 99, 71, 0.28);
+  transition: background 140ms ease, transform 120ms ease;
+}
+.wo-export-cta:hover { background: var(--tw-tangerine-dk); transform: translateY(-1px); }
+.wo-export-cta[aria-expanded="true"] { background: var(--tw-tangerine-dk); }
 .wo-export-backdrop { position: fixed; inset: 0; z-index: 219; background: transparent; }
 .wo-export-pop {
   position: absolute;
