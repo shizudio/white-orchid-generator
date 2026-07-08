@@ -132,12 +132,32 @@ async function fortifyContext(context, run, opts = {}) {
 // Attach console-error capture to a page; returns { drain } to pull+clear errors.
 function captureConsole(page) {
   const errors = [];
+  // (2.6) Capture the FAILING REQUEST URL for network-level failures. A bare console
+  // "Failed to load resource: net::ERR_CONNECTION_REFUSED" carries NO url, so a past
+  // pass couldn't tell a transient teardown/startup race from a genuinely broken
+  // route. requestfailed fires for connection-level failures (refused/aborted/reset)
+  // and hands us req.url() + the error text — we attach both so the oracle can
+  // classify. Requests WE deliberately block (Higgsfield host aborts) are by-design,
+  // never defects, so they're skipped here.
+  page.on('requestfailed', (req) => {
+    const url = req.url();
+    if (config.blockedHosts.some(h => url.includes(h))) return; // intentional abort
+    if (/favicon/i.test(url)) return;
+    const errTxt = (req.failure() && req.failure().errorText) || 'request failed';
+    errors.push(`net ${errTxt} @ ${url}`);
+  });
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       const t = msg.text();
       // Filter noise that isn't an app defect: favicon 404s, ResizeObserver loops,
       // and the expected "cloud unconfigured" chatter from our own write-blocks.
       if (/favicon|ResizeObserver|blockedByTester|Failed to load resource.*(sessions|feedback)/i.test(t)) return;
+      // (2.6) A network-level failure (net::ERR_*) is captured WITH its url by the
+      // requestfailed listener above — drop the url-less console duplicate so the same
+      // failure isn't counted twice AND the url-bearing record is the one kept. (HTTP
+      // error responses — "responded with a status of 500" — are NOT requestfailures,
+      // so they fall through and are still captured here.)
+      if (/Failed to load resource:\s*net::ERR_/i.test(t)) return;
       errors.push(t);
     }
   });

@@ -340,14 +340,39 @@ async function canvasHitTargets(page) {
   };
 }
 
+// (2.6) Errors that are ENVIRONMENT ARTIFACTS of the sealed sandbox, not product
+// defects a real (fully-configured) user would ever hit:
+//   • net::ERR_* connection-level failures — a request racing the isolated server's
+//     startup/teardown (the dominant, url-less "500-ish" noise last pass mis-counted;
+//     evidence: 13 no-console-errors flags, 0 matching entries in any server.log).
+//   • credential-gated generation routes (photo / moodboard / logo / brand assets /
+//     creative plan) — these legitimately 500 in the sandbox because their keys are
+//     intentionally unset (photos are mocked); in production the keys ARE set.
+// Genuine app console errors (a real runtime throw, a broken same-origin route that
+// SHOULD work) are NOT matched here and still flag.
+const EXPECTED_CONSOLE = /net::ERR_(CONNECTION_REFUSED|CONNECTION_RESET|ABORTED|FAILED|EMPTY_RESPONSE|NETWORK_CHANGED|TIMED_OUT)|higgsfield|\/api\/(feed-photo|images|design-generate|moodboard|logo-variants|overlay-assets|brand-assets|creative-plan)\b/i;
+
 // 8. CONSOLE-ERRORS — surfaced from a collected console-error list (Node side).
+//    (2.6) Re-scoped: transient/expected sandbox artifacts (see EXPECTED_CONSOLE) are
+//    partitioned OUT of the defect count and logged separately as informational, so
+//    they stop inflating the report's "distinct issue types" headline. A genuine
+//    console error still fails the oracle.
 function noConsoleErrors(errors) {
+  const all = Array.isArray(errors) ? errors : [];
+  const genuine = all.filter(e => !EXPECTED_CONSOLE.test(String(e)));
+  const artifacts = all.filter(e => EXPECTED_CONSOLE.test(String(e)));
   return {
     name: 'no-console-errors',
-    ok: errors.length === 0,
-    observed: errors.length ? errors.slice(0, 5).join(' | ') : 'clean',
+    ok: genuine.length === 0,
+    observed: genuine.length
+      ? genuine.slice(0, 5).join(' | ')
+      : (artifacts.length
+          ? `clean (ignored ${artifacts.length} transient/sandbox artifact(s): ${artifacts.slice(0, 2).join(' | ').slice(0, 180)})`
+          : 'clean'),
     expected: 'no console errors during the action',
     severity: 'medium',
+    // Informational: the excluded transient/expected artifacts (for a future pass).
+    expectedArtifacts: artifacts,
   };
 }
 
