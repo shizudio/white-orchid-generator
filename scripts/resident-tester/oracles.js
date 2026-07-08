@@ -143,14 +143,37 @@ function claimVsChanged(snap, { expectChange } = {}) {
 //    the COUNT and flag any non-zero on a freshly composed design as low-sev
 //    (the report ranks by frequency).
 function bornClean(snap) {
-  const findings = snap.ready && Array.isArray(snap.ready)
-    ? snap.ready.reduce((n, f) => n + ((f.findings && f.findings.length) || 0), 0)
+  // (2.7) Surface WHICH finding fires, not just a count. __woReadyCheck() returns a
+  // per-format array of { dimensionId, findings:[{ id, category, ... }] }; the old
+  // oracle threw the ids away and logged only a dot count, forcing every born-clean
+  // investigation to eyeball screenshots to guess the category. Now we record the
+  // distinct finding ids (with per-format tags) so the next pass reads the root
+  // cause straight from the defect event.
+  const ready = Array.isArray(snap.ready) ? snap.ready : null;
+  const findings = ready
+    ? ready.reduce((n, f) => n + ((f.findings && f.findings.length) || 0), 0)
     : null;
+  // Distinct "id@dimension" tags across every format's findings.
+  const tags = [];
+  if (ready) {
+    for (const f of ready) {
+      const dim = f.dimensionId || f.dimension || '?';
+      for (const x of (Array.isArray(f.findings) ? f.findings : [])) {
+        const id = x && (x.id || x.category) ? `${x.id || x.category}@${dim}` : null;
+        if (id && !tags.includes(id)) tags.push(id);
+      }
+    }
+  }
   const dots = snap.advisorDots;
+  const findingSummary = findings != null
+    ? `, ${findings} ready finding(s)` + (tags.length ? `: ${tags.join(', ')}` : '')
+    : '';
   return {
     name: 'born-clean',
     ok: dots === 0,
-    observed: `${dots} advisor dot(s)` + (findings != null ? `, ${findings} ready finding(s)` : ''),
+    observed: `${dots} advisor dot(s)${findingSummary}`,
+    // Machine-readable finding ids for report aggregation (2.7).
+    findingIds: tags,
     expected: 'zero deterministic findings on a system-produced design',
     severity: 'medium',
   };
