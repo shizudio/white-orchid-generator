@@ -30,6 +30,31 @@ const REPO = path.resolve(__dirname, '../..');
 const DIST_DIR = process.env.WO_DIST_DIR || '.next-resident';
 const notes = [];
 
+// (2.9) Load .env.local into process.env for the RUNNER. Next.js auto-loads
+// .env.local for `next start`, but this Node runner does NOT — so keys the runner
+// itself needs (FEEDBACK_DEV_KEY, to pull real /feedback data for the report) were
+// invisible even though they're set on disk. Zero-dependency parser (no dotenv):
+// KEY=VALUE lines, `#` comments, optional surrounding quotes. Shell/CI env WINS —
+// we only fill keys that aren't already set, so an explicit override is never
+// clobbered. Silent no-op if the file is absent (CI without a local env file).
+function loadEnvLocal() {
+  const envPath = path.join(REPO, '.env.local');
+  let raw;
+  try { raw = fs.readFileSync(envPath, 'utf8'); } catch { return; }
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!m) continue; // blank line or `# comment`
+    const key = m[1];
+    if (key in process.env && process.env[key] !== '') continue; // shell/CI override wins
+    let val = m[2];
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    process.env[key] = val;
+  }
+}
+loadEnvLocal();
+
 function log(...a) { console.log('[resident]', ...a); }
 
 // Launch the isolated production build. `mockPhotos:true` (default) unsets the
