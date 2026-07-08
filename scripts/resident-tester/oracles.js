@@ -29,6 +29,12 @@ const HONESTY_PATTERNS = [
   /that didn't change anything visible/i,
   /the layout didn't change just now/i,
   /I couldn't (do that|apply that)/i,
+  // The app's SUCCESSFUL self-correction after a claimed-inability-but-changed
+  // retry (ArtDirectorChat.jsx line 763). Verbatim: "Correction — that actually
+  // worked: I changed the {fields}. Tap Undo…". Without this the oracle reads the
+  // "I changed the …" as a CLAIM_PATTERN and flags the app's own honest, correct
+  // self-correction as a silent false claim (~52% of claim-vs-changed defects).
+  /Correction\s*—\s*that actually worked/i,
 ];
 
 // Narration verbs that CLAIM a change occurred (used to catch silent false claims:
