@@ -1099,6 +1099,19 @@ canvas[role="application"]:focus-visible {
     min-height: 44px;
   }
 
+  /* (P1.1) Below-canvas control pills (Like / Refresh / Undo / Redo / Export)
+     meet the WCAG 2.5.5 / Apple HIG 44px floor on mobile. Desktop keeps its
+     compact ~28-34px sizing (this is inside the max-width:760px block). The
+     icon-only Redo also needs the 44px minimum WIDTH. Visual weight is
+     unchanged — Export stays the lone tangerine CTA, Like keeps its rose. */
+  .generator-canvas-controls button {
+    min-height: 44px;
+  }
+  .generator-canvas-controls button[aria-label="Redo"] {
+    min-width: 44px;
+    justify-content: center;
+  }
+
   .library-filter-group button,
   .library-save-action {
     min-height: 44px;
@@ -1661,6 +1674,14 @@ canvas[role="application"]:focus-visible {
     border-top: 1px solid var(--line);
   }
   .wo-chat-list { min-height: 180px; }
+
+  /* (P1.1) Quick-action chips (+ Add caption / + Add date / Change photo …)
+     reach the 44px tap floor on mobile. Desktop keeps the compact 32px chip. */
+  .wo-chat-chip {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
 }
 
 /* ── Ghost slots (§3.2) — faint dashed add-affordances in empty role regions.
