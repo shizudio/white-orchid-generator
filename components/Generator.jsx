@@ -464,8 +464,11 @@ const ARCHETYPES = [
     elements:{
       photo:{x:0.60,y:0,w:0.40,h:1},
       microLabel:{x:0.08,y:0.14,w:0.44,h:0.05},
-      hero:{x:0.08,y:0.22,w:0.46,h:0.34},
-      support:{x:0.08,y:0.60,w:0.44,h:0.24},
+      // (R5 · scale courage) hero box deepened 0.34→0.42 so a short display
+      // headline can size up toward the moodboard's presence before the
+      // word-width floor caps it; support moves down in step (reflow re-snaps).
+      hero:{x:0.08,y:0.22,w:0.46,h:0.42},
+      support:{x:0.08,y:0.68,w:0.44,h:0.18},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.14,heroToSupport:7}, split:0.60,
@@ -556,8 +559,9 @@ const ARCHETYPES = [
     elements:{
       card:{x:0.54,y:0.32,w:0.38,h:0.42},        // the floated photo card
       microLabel:{x:0.08,y:0.16,w:0.42,h:0.05},
-      hero:{x:0.08,y:0.24,w:0.42,h:0.34},
-      support:{x:0.08,y:0.62,w:0.40,h:0.16},
+      // (R5 · scale courage) hero deepened 0.34→0.40 — bolder display headline.
+      hero:{x:0.08,y:0.24,w:0.42,h:0.40},
+      support:{x:0.08,y:0.68,w:0.40,h:0.14},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.16,heroToSupport:8},
@@ -694,8 +698,9 @@ const ARCHETYPES = [
     elements:{
       photo:{x:0.52,y:0,w:0.48,h:1},
       microLabel:{x:0.06,y:0.20,w:0.42,h:0.05},
-      hero:{x:0.06,y:0.28,w:0.42,h:0.24},
-      support:{x:0.06,y:0.56,w:0.42,h:0.22},
+      // (R5 · scale courage) hero deepened 0.24→0.30 — bolder display headline.
+      hero:{x:0.06,y:0.28,w:0.42,h:0.30},
+      support:{x:0.06,y:0.62,w:0.42,h:0.18},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.17,heroToSupport:7}, split:0.52,
@@ -748,8 +753,9 @@ const ARCHETYPES = [
       // (T6) tightened type block: eyebrow pulled to just above the hero (consistent
       // rhythm gap, one left edge at x0.08) — fixes "weird spacing between typefaces".
       microLabel:{x:0.08,y:0.27,w:0.44,h:0.05},
-      hero:{x:0.08,y:0.33,w:0.46,h:0.30},
-      support:{x:0.08,y:0.66,w:0.42,h:0.08},
+      // (R5 · scale courage) hero deepened 0.30→0.34 — bolder display headline.
+      hero:{x:0.08,y:0.33,w:0.46,h:0.34},
+      support:{x:0.08,y:0.70,w:0.42,h:0.07},
       logo:{position:"bottom-left",sizeId:"s"},
     },
     scaleRatio:{heroCapFrac:0.22,heroToSupport:9},
@@ -1985,6 +1991,29 @@ function reflowEditorial(ctx, a){
     const widestWordFits=(size)=>{ let ok=true; for(const wt of words){ ctx.font=heroFont(register,size,wt.italic); if(ctx.measureText(wt.text).width>heroBox.w){ ok=false; break; } } return ok; };
     const multiWord=words.length>=3; // orphan-shrink only helps when ≥3 words can re-pack
     let size=Math.max(heroStart,heroMin);
+    // ── (R5 · headline scale floor — composition-study-2 §4 "scale courage") ──
+    // On PHOTO-LED archetypes with a DISPLAY hero the moodboard's headlines span
+    // 70–100% of the canvas width; the generator's were timid because a short
+    // headline stopped at the capFrac start size even when its quiet zone could
+    // hold far more. When the caller passes heroWidthTarget (≈0.70×canvas W),
+    // raise the STARTING size so the headline drawn on one line would span that
+    // width (the type-size equivalent for very short words), capped at 0.42×H.
+    // The EXISTING shrink-to-fit loop below still owns the outcome — it reduces
+    // the size whenever the role's box (the quiet zone) genuinely can't hold it,
+    // so nothing new can collide, crop, or cross a floor (born-clean holds).
+    if(a.heroWidthTarget && words.length){
+      let oneW=0;
+      for(let i=0;i<words.length;i++){
+        const wt=words[i];
+        ctx.font=heroFont(register,100,wt.italic);
+        oneW+=ctx.measureText(wt.text).width;
+        if(i<words.length-1 && wt.space!==false) oneW+=ctx.measureText(" ").width;
+      }
+      if(oneW>0){
+        const sizeForWidth=100*a.heroWidthTarget/oneW;
+        size=Math.max(size, Math.min(sizeForWidth, 0.42*h));
+      }
+    }
     let hitFloor=false;
     while(size>=heroMin){
       const fit=measureHeroLines(ctx,words,register,size,heroBox.w);
@@ -5711,6 +5740,12 @@ export default function App() {
         leading: mat.heroLeading || (register==="serif"?1.02:1.05), leadingBody: mat.leadingBody||1.32,
         motifLayers: overlayLayers.filter(l=>l.motif),
         decorObstacles,   // (C3+R4) decor shapes: compose-or-avoid, never a partial clip
+        // (R5) HEADLINE SCALE FLOOR — photo-led archetypes with a DISPLAY hero
+        // (capFrac ≥0.10 excludes the whisper/metadata registers) target a
+        // rendered headline width of ≥70% of the canvas width; the reflow's
+        // fit logic shrinks only when the quiet zone genuinely can't hold it.
+        heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask")
+          && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.70*w : null,
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
       // (Refinement 1) FREE PLACEMENT wins over reflow. The reflow engine de-collides the
