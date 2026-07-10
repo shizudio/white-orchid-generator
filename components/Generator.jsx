@@ -1898,10 +1898,62 @@ function reflowEditorial(ctx, a){
     if(rightClear>0.18*w){ const nx=seamObstacle.x+seamObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
     return box;
   };
+  // ── (C3+R4 · shapes are obstacles, or partners — composition studies 1/2) ──
+  // Decor/overlay shapes join the obstacle set so a blob can never clip a text
+  // role (study-1 like-12). Each obstacle: {box (px), canCompose (bool)}.
+  //   • PARTNER (R4, study-2 mood-8): when the text block fits fully INSIDE the
+  //     shape with ≥6% of the shape's short side as padding — and the ink reads
+  //     against the shape's fill (caller sets canCompose) — the text is CENTRED
+  //     on the shape (blob-behind-text, done right).
+  //   • OBSTACLE (C3): otherwise the role is nudged clear (nearer side first,
+  //     seam-tolerant like the photo band) so their bboxes never intersect.
+  // No partial clips ever. Composition never lands outside the text-safe rect.
+  const decorObs=Array.isArray(a.decorObstacles)?a.decorObstacles.filter(d=>d&&d.box):[];
+  const resolveDecor=(box)=>{
+    if(!box||!decorObs.length) return box;
+    for(const d of decorObs){
+      const inf={x:d.box.x-seamTol,y:d.box.y-seamTol,w:d.box.w+seamTol*2,h:d.box.h+seamTol*2};
+      if(!intersects(box,inf)) continue;
+      // R4 COMPOSE — centre the text ON the shape with ≥6% padding inside its bounds.
+      const pad=0.06*Math.min(d.box.w,d.box.h);
+      if(d.canCompose && box.w<=d.box.w-pad*2 && box.h<=d.box.h-pad*2){
+        const cx=d.box.x+(d.box.w-box.w)/2, cy=d.box.y+(d.box.h-box.h)/2;
+        // Only compose when the centred block stays inside the text-safe rect
+        // (born-clean: never composed into a platform action band).
+        if(cx>=safeL&&cy>=safeTop&&cx+box.w<=safeR&&cy+box.h<=safeBot){
+          box={...box,x:cx,y:cy,composedOnShape:true};
+          continue;
+        }
+      }
+      // C3 AVOID — pick the axis with the roomier clearance. Horizontal clip when
+      // a clear side strip ≥18% of canvas width exists; else vertical nudge to the
+      // nearer clear strip (mirrors the photo-band logic).
+      const leftW=inf.x-box.x, rightClear=(box.x+box.w)-(inf.x+inf.w);
+      const nearerLeft=(box.x+box.w/2)<d.box.x+d.box.w/2;
+      if(nearerLeft && leftW>0.18*w){ box={...box,w:Math.min(box.w,inf.x-box.x-gapPx)}; continue; }
+      if(!nearerLeft && rightClear>0.18*w){ const nx=inf.x+inf.w+gapPx; box={...box,x:nx,w:(box.x+box.w)-nx}; continue; }
+      const above=inf.y-safeTop, below=safeBot-(inf.y+inf.h);
+      const nearerAbove=(box.y+box.h/2)<d.box.y+d.box.h/2;
+      const minStrip=0.04*h;
+      const goAbove=nearerAbove ? (above>=minStrip||above>=below) : (below>=minStrip?false:above>=below);
+      if(goAbove){
+        const bottom=inf.y-gapPx;
+        const ny=Math.max(safeTop,Math.min(box.y,bottom-Math.min(box.h,minStrip)));
+        box={...box,y:ny,h:Math.max(minStrip,Math.min(box.h,bottom-ny))};
+      }else{
+        const top=inf.y+inf.h+gapPx;
+        const ny=Math.min(Math.max(top,box.y),safeBot-minStrip);
+        box={...box,y:ny,h:Math.max(minStrip,Math.min(box.h,safeBot-ny))};
+      }
+    }
+    return box;
+  };
   if(heroBox) heroBox=constrainToBand(heroBox);
+  if(heroBox) heroBox=resolveDecor(heroBox);
   // (C2) The eyebrow is a text role too — it must be seam-safe like hero/support
   // (it was previously never constrained against the photo obstacle).
   if(labelBox) labelBox=constrainToBand(labelBox);
+  if(labelBox) labelBox=resolveDecor(labelBox);
   // Reserve vertical room for the support caption BELOW the hero when both share the
   // lower zone: cap the hero box height so hero_bottom + gap + a min caption fits above
   // the bottom safe margin. This prevents the tall-format (Story) case where a big hero
@@ -2049,6 +2101,9 @@ function reflowEditorial(ctx, a){
     }
     // Avoid a photo obstacle (side clip, or move out of a full-width band).
     supBox=constrainToBand(supBox);
+    // (C3+R4) then compose-or-avoid against decor shapes (after the rhythm snap so
+    // the final caption position is what gets de-collided).
+    supBox=resolveDecor(supBox);
     // Re-clamp inside the bottom safe margin after any band move.
     if(supBox.y+supBox.h>safeBot){
       const room=safeBot-supBox.y;
@@ -5550,8 +5605,41 @@ export default function App() {
         // column inside the safe margin. Text avoids the SAME bled block below.
         drawSplitPhoto(bleedBox(mat.photoRegion));
       }
-      // Motifs are materialized as ordinary OVERLAY LAYERS now — they render in the
-      // shared topLayers block below, so nothing motif-specific happens here.
+      // ── (C3+R4 · shapes are obstacles, or partners) ─────────────────────────
+      // Decor/overlay SHAPES (motif layers + built-in brand shapes in overlay mode)
+      // join the reflow engine's obstacle set — a blob can never clip a headline
+      // (study-1 like-12). Each obstacle carries `canCompose`: true when the shape
+      // has a known solid tint the ink reads against (≥4.5:1), so the reflow may
+      // COMPOSE the text ON the shape (study-2 mood-8) instead of avoiding it.
+      // Solid decor shapes are ALSO drawn early — UNDER the text — so both the
+      // composed (blob-behind-text) and avoided cases render with text on top;
+      // the late topLayers pass skips them (outline/lineart rings stay on top but
+      // still register as obstacles). User accessories are untouched.
+      const _decorEarly=new Set();
+      const decorObstacles=[];
+      for(const layer of topLayers){
+        const a=overlays.find(o=>o.id===layer.assetId);
+        const isDecor=layer.motif||(a&&a.category==="overlays");
+        if(!isDecor) continue;
+        const img=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId];
+        if(!img) continue;
+        const t=resolveT(layer);
+        const ratio=(img.width&&img.height)?img.width/img.height:(a?.ratio||1);
+        const ow=(t.scale??0.2)*w, oh=ow/ratio;
+        const dBox={x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh};
+        let canCompose=false, fill=null;
+        if((layer.mode||"frame")==="overlay"&&layer.motif){
+          fill=mixHex(ARCHETYPE_COLORS[t.colorId]||B.celadon,B.burnham,0.22);
+          canCompose=contrastRatio(hexLuminance(fill),hexLuminance(inkColor))>=4.5;
+        }
+        decorObstacles.push({box:dBox,canCompose});
+        // Early (under-text) draw for solid overlay-mode decor.
+        if((layer.mode||"frame")==="overlay"){
+          if(layer.motif){ const tinted=tintedAccessory(img,fill); drawOverlayLayer(ctx,tinted||img,w,h,t); }
+          else drawOverlayLayer(ctx,img,w,h,t);
+          _decorEarly.add(layer);
+        }
+      }
       // 3. Text roles — positioned. hero via drawHeroText; support = caption; label =
       //    eyebrow. The REFLOW ENGINE (Commit 3) adjusts these measured boxes to
       //    de-collide before the final draw.
@@ -5622,6 +5710,7 @@ export default function App() {
         // looser-than-default leading (closing card) overflows the box and clamps line 2.
         leading: mat.heroLeading || (register==="serif"?1.02:1.05), leadingBody: mat.leadingBody||1.32,
         motifLayers: overlayLayers.filter(l=>l.motif),
+        decorObstacles,   // (C3+R4) decor shapes: compose-or-avoid, never a partial clip
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
       // (Refinement 1) FREE PLACEMENT wins over reflow. The reflow engine de-collides the
@@ -6311,6 +6400,7 @@ export default function App() {
       // from ARCHETYPE_COLORS (pastel keys); user accessories keep their B tinting.
       const _octail = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
       topLayers.forEach(layer=>{
+        if(_decorEarly.has(layer)) return;   // (C3+R4) already drawn UNDER the text
         const img=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId]; if(!img) return;
         const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
         if(layer.motif){ const base=ARCHETYPE_COLORS[t.colorId]||B.celadon; const col=mixHex(base,B.burnham,0.22); const tinted=tintedAccessory(img,col); drawOverlayLayer(ctx,tinted||img,w,h,t); return; }
