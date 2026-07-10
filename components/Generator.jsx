@@ -1860,24 +1860,48 @@ function reflowEditorial(ctx, a){
   const gapPx=Math.min(w,h)*0.02;
   const safeW=(1-sm.l-sm.r)*w;
   const bandFull = photoObstacle && photoObstacle.w>=0.8*safeW;
+  // (C2 · seam-safe text, composition-study-1) SEAM TOLERANCE — a text role whose
+  // bbox comes within 2% of the canvas min-dimension of the photo/background
+  // boundary counts as ON the seam and must be resolved, not just a hard overlap.
+  // The obstacle is inflated by this tolerance for the trigger test AND for the
+  // repositioned edges, so a nudged box always clears the seam by ≥2%.
+  const seamTol=Math.min(w,h)*0.02;
+  const seamObstacle=photoObstacle?{x:photoObstacle.x-seamTol,y:photoObstacle.y-seamTol,
+    w:photoObstacle.w+seamTol*2,h:photoObstacle.h+seamTol*2}:null;
   const constrainToBand=(box)=>{
-    if(!box||!photoObstacle||!intersects(box,photoObstacle)) return box;
+    if(!box||!seamObstacle||!intersects(box,seamObstacle)) return box;
     if(bandFull){
-      // Clear strip above vs below the band — keep the box in the taller one, without
-      // disturbing its relative Y (a support box already reflowed below the hero must
-      // stay below it, only capped so it doesn't spill into the band).
-      const above=photoObstacle.y-safeTop, below=safeBot-(photoObstacle.y+photoObstacle.h);
-      if(above>=below){ const bottom=photoObstacle.y-gapPx; const ny=Math.max(safeTop,Math.min(box.y,bottom-0.05*h)); return {...box,y:ny,h:Math.max(0.05*h,Math.min(box.h,bottom-ny))}; }
-      const top=photoObstacle.y+photoObstacle.h+gapPx; const ny=Math.max(top,box.y); return {...box,y:ny,h:Math.max(0.05*h,safeBot-ny)};
+      // Clear strip above vs below the band. (C2) Prefer the NEARER field — the
+      // strip holding the box's vertical centre — when it can hold a min-height
+      // box; fall back to the taller strip otherwise. The box's relative Y is
+      // preserved where possible (a support box reflowed below the hero must stay
+      // below it, only capped so it doesn't spill onto the seam).
+      const above=seamObstacle.y-safeTop, below=safeBot-(seamObstacle.y+seamObstacle.h);
+      const boxCy=box.y+box.h/2;
+      const minStrip=0.05*h+gapPx;
+      const nearerIsAbove=boxCy<photoObstacle.y+photoObstacle.h/2;
+      // Nearer strip wins when it can hold a min-height box; else the other strip
+      // if IT can; else whichever is taller (degenerate case — clamp does its best).
+      const useAbove=nearerIsAbove ? (above>=minStrip || above>=below)
+                                   : (below>=minStrip ? false : above>=below);
+      if(useAbove){ const bottom=seamObstacle.y-gapPx; const ny=Math.max(safeTop,Math.min(box.y,bottom-0.05*h)); return {...box,y:ny,h:Math.max(0.05*h,Math.min(box.h,bottom-ny))}; }
+      const top=seamObstacle.y+seamObstacle.h+gapPx; const ny=Math.max(top,box.y); return {...box,y:ny,h:Math.max(0.05*h,safeBot-ny)};
     }
-    // Side object → clip width to the wider clear side.
-    const leftW=Math.max(0,photoObstacle.x-box.x);
-    const rightClear=Math.max(0,(box.x+box.w)-(photoObstacle.x+photoObstacle.w));
-    if(leftW>=rightClear && leftW>0.18*w) return {...box,w:Math.min(box.w,photoObstacle.x-box.x-gapPx)};
-    if(rightClear>0.18*w){ const nx=photoObstacle.x+photoObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
+    // Side object → clip width to a clear side. (C2) Prefer the NEARER side (the
+    // one holding the box's horizontal centre) when it clears the min width.
+    const leftW=Math.max(0,seamObstacle.x-box.x);
+    const rightClear=Math.max(0,(box.x+box.w)-(seamObstacle.x+seamObstacle.w));
+    const nearerIsLeft=(box.x+box.w/2)<photoObstacle.x+photoObstacle.w/2;
+    if(nearerIsLeft && leftW>0.18*w) return {...box,w:Math.min(box.w,seamObstacle.x-box.x-gapPx)};
+    if(!nearerIsLeft && rightClear>0.18*w){ const nx=seamObstacle.x+seamObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
+    if(leftW>=rightClear && leftW>0.18*w) return {...box,w:Math.min(box.w,seamObstacle.x-box.x-gapPx)};
+    if(rightClear>0.18*w){ const nx=seamObstacle.x+seamObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
     return box;
   };
   if(heroBox) heroBox=constrainToBand(heroBox);
+  // (C2) The eyebrow is a text role too — it must be seam-safe like hero/support
+  // (it was previously never constrained against the photo obstacle).
+  if(labelBox) labelBox=constrainToBand(labelBox);
   // Reserve vertical room for the support caption BELOW the hero when both share the
   // lower zone: cap the hero box height so hero_bottom + gap + a min caption fits above
   // the bottom safe margin. This prevents the tall-format (Story) case where a big hero
@@ -5741,7 +5765,11 @@ export default function App() {
         // (the same obstacles reflow de-collides text against) nor squeeze the caption
         // past its floor. floor = the bottom safe margin, or the top of a full-width
         // photo band sitting below the hero (editorial_split / portrait story bands).
-        const _dObs=cardBox||maskBox||((mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null);
+        // (C2 · seam-safe) the obstacle is inflated by the 2% seam tolerance so the
+        // date line never lands within the seam band either.
+        const _dObs0=cardBox||maskBox||((mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null);
+        const _dTol=Math.min(w,h)*0.02;
+        const _dObs=_dObs0?{x:_dObs0.x-_dTol,y:_dObs0.y-_dTol,w:_dObs0.w+_dTol*2,h:_dObs0.h+_dTol*2}:null;
         let dFloor=_safeBotD;
         if(_dObs && _dObs.w>=0.8*(1-sm.l-sm.r)*w && _dObs.y>heroBox.y) dFloor=Math.min(dFloor,_dObs.y-0.02*h);
         // Fit the date on ONE line at ~0.55× the hero (min floor keeps it prominent).

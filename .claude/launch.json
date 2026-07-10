@@ -13,6 +13,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "dev", "-p", "3100"],
       "port": 3100
+    },
+    {
+      "name": "wo-next-3210",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "-p", "3210"],
+      "port": 3210
     }
   ]
 }
