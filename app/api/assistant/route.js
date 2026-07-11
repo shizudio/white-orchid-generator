@@ -74,6 +74,10 @@ const ARCHETYPE_PHOTO_DIRECTIVES = {
   portrait_credential: 'a single subject toward the right; keep the left side an even, calm background.',
   // photo revealed through the petal window on the right → subject sits RIGHT.
   petal_window: 'compose the main subject slightly right of centre with calm negative space around it.',
+  // (R2) photo revealed through a large centred organic cutout → subject centred.
+  shape_cutout: 'compose the main subject centred with calm, even negative space around it.',
+  // (R3) message pill overlaps the lower third → subject upper half, calm lower third.
+  message_pill: 'compose the main subject in the upper half; keep the lower third calm and even for a message card.',
   // text-forward layouts (hero text over/near a supporting photo) → calm TOP.
   serif_word: 'keep the upper third calm negative space for a large headline.',
   big_number: 'keep the centre and upper area calm for a large date or number.',
@@ -101,6 +105,8 @@ const WINDOW_MS = 60_000;
 // so the landing flow proceeds text-only exactly as before. Which archetypes benefit:
 const PHOTO_ATTACH_ARCHETYPES = new Set([
   'editorial_split', 'floated_card', 'documentary', 'full_bleed_duotone',
+  'shape_cutout',   // (R2) the cutout needs a photo to reveal
+  'message_pill',   // (R3) the pill overlaps a full-bleed photo
 ]);
 async function pickLandingPhoto(archetypeId, dimensionId) {
   if (!PHOTO_ATTACH_ARCHETYPES.has(archetypeId)) return null;
@@ -174,11 +180,11 @@ function wantsTextOnly(text) {
 // Preferred photo-led archetypes per intent (order matters — first cap-clear wins).
 // petal_window is excluded (decor-gated signature tile).
 const PHOTO_LED_BY_INTENT = {
-  event:       ['editorial_split', 'full_bleed_duotone', 'floated_card', 'documentary', 'portrait_credential'],
-  text_post:   ['editorial_split', 'floated_card', 'portrait_credential', 'documentary', 'full_bleed_duotone'],
-  photo_logo:  ['documentary', 'full_bleed_duotone', 'floated_card', 'editorial_split', 'portrait_credential'],
-  texture_text:['full_bleed_duotone', 'documentary', 'floated_card', 'editorial_split', 'portrait_credential'],
-  quote:       ['portrait_credential', 'floated_card', 'editorial_split', 'documentary', 'full_bleed_duotone'],
+  event:       ['editorial_split', 'full_bleed_duotone', 'floated_card', 'shape_cutout', 'message_pill', 'documentary', 'portrait_credential'],
+  text_post:   ['editorial_split', 'floated_card', 'shape_cutout', 'message_pill', 'portrait_credential', 'documentary', 'full_bleed_duotone'],
+  photo_logo:  ['documentary', 'shape_cutout', 'full_bleed_duotone', 'floated_card', 'message_pill', 'editorial_split', 'portrait_credential'],
+  texture_text:['full_bleed_duotone', 'documentary', 'shape_cutout', 'floated_card', 'message_pill', 'editorial_split', 'portrait_credential'],
+  quote:       ['portrait_credential', 'message_pill', 'floated_card', 'editorial_split', 'shape_cutout', 'documentary', 'full_bleed_duotone'],
 };
 // Deterministic photo-led pick: first cap-clear preference for this intent; if the
 // caps have saturated the whole photo-led pool (a run of photo-first landings),
@@ -462,6 +468,13 @@ const LANDING_ARCHETYPES = [
   { id:'portrait_credential',desc:'a portrait beside a name/title/credential — staff spotlight, new-teacher, testimonial', suits:['photo_logo','event','quote'], klass:'light', cap:0.10, palette:'ivory field, portrait photo + credential stack' },
   { id:'motif_field',       desc:'a solid pastel field warmed by a few flat botanical/geometric motifs — playful values, enrollment', suits:['text_post','quote','event'], klass:'light', cap:0.14, palette:'soft pastel field, 2–3 flat motifs' },
   { id:'petal_window',      desc:'a photo revealed through the orchid/petal mask on a solid field — SIGNATURE, only when the user names the petal/orchid/shape', suits:['photo_logo','texture_text','quote'], klass:'light', cap:0.12, palette:'ivory field, one orchid-mask photo window' },
+  // (R2 · composition-study-2 moods 7/10) shape-masked photo variant in the DEFAULT
+  // rotation — unlike petal_window it is NOT decor-gated: a bold colour-block canvas
+  // with the photo revealed through a large organic brand-shape cutout + one serif line.
+  { id:'shape_cutout',      desc:'a bold colour-block canvas with the photo revealed through a large organic shape cutout, one serif line below — photo moments, announcements, brand warmth', suits:['photo_logo','texture_text','quote'], klass:'dark', cap:0.12, palette:'deep-green/sage/ivory colour block, one organic photo cutout, serif line' },
+  // (R3 · composition-study-2 mood 3) message on a rounded pill card overlapping a
+  // full-bleed photo's lower third — text keeps its own field, composition gains overlap.
+  { id:'message_pill',      desc:'a full-bleed warm photo with the message on a rounded brand-colour pill card overlapping the lower third — quotes, warm announcements, community notes', suits:['quote','text_post','event'], klass:'light', cap:0.10, palette:'warm full-bleed photo, one ivory/green/butter message pill' },
   // ── FEED-GRAMMAR CARDS (feed-grammar §2) — brand-sequence tiles. brand/closing carry
   // the lockup (rare, ≤1-in-8); stat/cta/schedule carry no logo. Accent = the pill only.
   { id:'brand_card',        desc:'campaign opener: flower mark + THE WHITE ORCHID wordmark + italic tagline on a dark or butter field — brand statement, sequence opener', suits:['text_post'], klass:'dark', cap:0.08, palette:'deep-green or butter field, mark+wordmark lockup, italic tagline' },
@@ -475,7 +488,7 @@ const LANDING_ARCH_BY_ID = Object.fromEntries(LANDING_ARCHETYPES.map(a => [a.id,
 // ALTERNATE across the grid (the reference's checkerboard). Classify each archetype.
 const PHOTO_LED = new Set([
   'editorial_split', 'full_bleed_duotone', 'floated_card', 'documentary',
-  'portrait_credential', 'petal_window',
+  'portrait_credential', 'petal_window', 'shape_cutout', 'message_pill',
 ]);
 const isPhotoLed = (id) => PHOTO_LED.has(id);
 // petal_window is doubly gated: the DECOR intent gate (below) AND its ≤1-in-8 cap.
@@ -514,6 +527,8 @@ const LANDING_VARIANTS = {
   portrait_credential:[{bg:'whiteSmoke',kind:'ivory'}], // no variants array client-side → base only
   motif_field:       [{bg:'whiteSmoke',kind:'ivory'},{bg:'butter',kind:'pastel'},{bg:'lilac',kind:'pastel'},{bg:'sky',kind:'pastel'}],
   petal_window:      [{bg:'whiteSmoke',kind:'ivory'},{bg:'terracotta',kind:'pastel'},{bg:'burnham',kind:'dark'}],
+  shape_cutout:      [{bg:'burnham',kind:'dark'},{bg:'sage',kind:'pastel'},{bg:'whiteSmoke',kind:'ivory'},{bg:'dustyPink',kind:'pastel'}],
+  message_pill:      [{bg:'whiteSmoke',kind:'ivory'},{bg:'burnham',kind:'dark'},{bg:'butter',kind:'pastel'},{bg:'celadon',kind:'pastel'}],
   brand_card:        [{bg:'burnham',kind:'dark'},{bg:'butter',kind:'pastel'}],
   stat_tile:         [{bg:'celadon',kind:'pastel'},{bg:'sage',kind:'pastel'}],
   cta_card:          [{bg:'whiteSmoke',kind:'ivory'}],
