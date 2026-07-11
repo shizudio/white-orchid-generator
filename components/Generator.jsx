@@ -775,6 +775,82 @@ const ARCHETYPES = [
     // caption on long copy (the story hero↔caption overlap).
     perDim:{ story:{mask:{x:0.30,y:0.12,w:0.44,h:0.26},hero:{x:0.06,y:0.50,w:0.84,h:0.18},support:{x:0.06,y:0.74,w:0.60,h:0.08},microLabel:{x:0.06,y:0.44,w:0.60,h:0.04}} },
   },
+  { // (R2 · composition-study-2 moods 7/10) Shape-Cutout Photo Reveal — a bold
+    // colour-block canvas with the photo revealed through a LARGE organic brand
+    // shape cutout (shape-1/2/3 or the orchid petal), one serif line in the clear
+    // space below. Reuses frame-mode (photo clipped into an SVG silhouette) + the
+    // brand shape library; rides the default rotation and emits genes like any
+    // variant (archetypeId/archVariant), so likes can weight it.
+    id:"shape_cutout", name:"Shape Cutout",
+    elements:{
+      mask:{x:0.15,y:0.08,w:0.70,h:0.52},        // the large organic cutout window
+      hero:{x:0.10,y:0.64,w:0.80,h:0.14},        // one serif line in clear space
+      support:{x:0.10,y:0.82,w:0.72,h:0.08},
+      logo:{position:"bottom-right",sizeId:"s"},
+    },
+    scaleRatio:{heroCapFrac:0.11,heroToSupport:4},
+    whitespace:0.38, gridAnchor:"center-column", centerExclude:false,
+    palette:{klass:"dark",bg:"burnham",ink:"whiteSmoke",accent:"celadon"},
+    // Colour-block fields (mood 7's colour-block energy, brand- AND contrast-safe:
+    // every bg/ink pair clears the advisor's 3:1 solid-field floor — terracotta
+    // fails with BOTH brand inks, so it is deliberately absent; born-clean rule).
+    // Each variant pairs a field with a different brand shape so the ring rotates
+    // BOTH the field and the silhouette.
+    variants:[
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",      klass:"dark", shapeId:"shape-1"},
+      {bg:"sage",      ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"shape-2"},
+      {bg:"whiteSmoke",ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"shape-3"},
+      {bg:"dustyPink", ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"orchid-petal"},
+    ],
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false, logoUse:"mark",
+    suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
+    special:"shapeCutout",
+    perDim:{
+      story:{ mask:{x:0.15,y:0.14,w:0.70,h:0.34}, hero:{x:0.06,y:0.52,w:0.84,h:0.10}, support:{x:0.06,y:0.64,w:0.84,h:0.08} },
+      wide:{ mask:{x:0.52,y:0.08,w:0.42,h:0.84}, hero:{x:0.06,y:0.28,w:0.42,h:0.36}, support:{x:0.06,y:0.70,w:0.40,h:0.12} },
+      banner:{ mask:{x:0.58,y:0.06,w:0.38,h:0.88}, hero:{x:0.05,y:0.24,w:0.48,h:0.40}, support:{x:0.05,y:0.70,w:0.44,h:0.14} },
+    },
+  },
+  { // (R3 · composition-study-2 mood 3) Message Pill — a full-bleed warm photo with
+    // the message carried on a ROUNDED PILL/CARD overlapping the photo's lower third:
+    // the text keeps its own solid field (born-clean by construction — the pill is a
+    // brand colour whose variant ink clears the contrast floor) while the composition
+    // gains the moodboard's overlap energy. The pill dodges the saliency map's focal
+    // subject horizontally (never a face), and rides the default rotation emitting
+    // genes like any variant. The pill rect itself is sized at draw time to the
+    // MEASURED copy (hero + date + caption) so text is always fully inside it.
+    id:"message_pill", name:"Message Pill",
+    elements:{
+      photo:{x:0,y:0,w:1,h:1},
+      hero:{x:0.14,y:0.655,w:0.72,h:0.13,align:"center"},
+      support:{x:0.17,y:0.815,w:0.66,h:0.06,align:"center"},
+    },
+    // capFrac deliberately <0.10 so the R5 width floor does NOT fire — a pill
+    // message is a card voice, not a display headline (it must stay inside its card).
+    scaleRatio:{heroCapFrac:0.085,heroToSupport:4},
+    whitespace:0.08, gridAnchor:"center-column", centerExclude:false,
+    palette:{klass:"light",bg:"whiteSmoke",ink:"burnham",accent:"softTangerine"},
+    // Pill colour = the variant field (invisible under the full-bleed photo, so the
+    // bg token is free to mean the PILL). Every bg/ink pair clears the 4.5:1 text
+    // floor on the pill (born-clean rule; the draw re-verifies and flips defensively).
+    variants:[
+      {bg:"whiteSmoke",ink:"burnham",   accentUse:"softTangerine",klass:"light"},
+      {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",      klass:"dark"},
+      {bg:"butter",    ink:"burnham",   accentUse:"softTangerine",klass:"light"},
+      {bg:"celadon",   ink:"burnham",   accentUse:"softTangerine",klass:"light"},
+    ],
+    photoTreatment:"warmGrade", heroRegister:"serif", caps:false, fullBleed:true, thinBorder:false,
+    suitedPostTypes:["quote","text_post","event"], frequencyCap:0.10, logoUse:"none", // photo tile: label/pill only (P1 restraint)
+    special:"messagePill",
+    perDim:{
+      // Story: pill lifted clear of the platform bottom band (text-safe margins clamp too).
+      story:{ hero:{x:0.10,y:0.60,w:0.80,h:0.10,align:"center"}, support:{x:0.12,y:0.725,w:0.76,h:0.05,align:"center"} },
+      // Wide/banner are short — the lower third is a sliver, so the pill sits just
+      // below centre (still overlapping the photo's lower half, mood-3 energy).
+      wide:{ hero:{x:0.25,y:0.56,w:0.50,h:0.18,align:"center"}, support:{x:0.28,y:0.78,w:0.44,h:0.08,align:"center"} },
+      banner:{ hero:{x:0.30,y:0.38,w:0.40,h:0.28,align:"center"}, support:{x:0.32,y:0.72,w:0.36,h:0.10,align:"center"} },
+    },
+  },
   /* ═══ FEED-GRAMMAR ARCHETYPES (WP-P P2 — feed-grammar §2/§3) ══════════════════
      The four brand-sequence cards the client's reference grids open/close a campaign
      with, plus the schedule list. They compose through the SAME materialized render
@@ -935,7 +1011,7 @@ function archetypeVariant(arch,variantIdx){
   const base=arch?.palette||{bg:"whiteSmoke",ink:"burnham",accent:"softTangerine",klass:"light"};
   if(!vs) return {bg:base.bg,ink:base.ink,accentUse:base.accent,klass:base.klass||"light"};
   const v=vs[((variantIdx||0)%vs.length+vs.length)%vs.length];
-  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels,logoUse:v.logoUse};
+  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels,logoUse:v.logoUse,shapeId:v.shapeId};
 }
 function materializeArchetypeLayout(arch, dimId, variantIdx){
   const el=resolveArchetypeElements(arch,dimId);
@@ -949,6 +1025,10 @@ function materializeArchetypeLayout(arch, dimId, variantIdx){
   }else if(arch.special==="petalWindow" && el.mask){
     const c={x:(el.mask.x+el.mask.w/2),y:(el.mask.y+el.mask.h/2)};
     photoFrame={type:"petalMask", box:asRole(el.mask), areaFrac:arch.maskAreaFrac||0.30, centroid:c};
+  }else if(arch.special==="shapeCutout" && el.mask){
+    // (R2) photo revealed through a brand-shape silhouette (frame-mode); the
+    // variant picks the shape so the ring rotates field + silhouette together.
+    photoFrame={type:"shapeMask", box:asRole(el.mask), shapeId:V.shapeId||"shape-1"};
   }
   return {
     roles:{ hero:asRole(el.hero), support:asRole(el.support), microLabel:asRole(el.microLabel) },
@@ -4647,7 +4727,9 @@ export default function App() {
     // palette-variant cycling when the ring lands back on the current archetype.
     let nextIsPhotoLed = true;
     try {
-      const PHOTO_LED_RING = ['editorial_split', 'floated_card', 'full_bleed_duotone', 'documentary', 'portrait_credential'];
+      // (R2) shape_cutout and (R3) message_pill join the default photo-led rotation
+      // (study-2 moods 7/10 and mood 3).
+      const PHOTO_LED_RING = ['editorial_split', 'floated_card', 'shape_cutout', 'full_bleed_duotone', 'message_pill', 'documentary', 'portrait_credential'];
       const SOLID_RING = ['big_number', 'label_headline', 'stat_tile', 'serif_word', 'cta_card'];
       const start = tryAnotherRef.current.startId ?? (tryAnotherRef.current.startId = archetypeId);
       // INTERLEAVED ring: photo-led alternates and solid feed tiles take turns
@@ -5170,7 +5252,21 @@ export default function App() {
         photoRegion: specNums?specNums.photoRegion:null,
         register: heroRegister||"serif", caps: !!(specNums?.caps),
         usesDateAsHero: !!(specNums?.usesDateAsHero),
-        photoTreatment, photoFrame: photoFrame||{type:"none"},
+        photoTreatment,
+        // (R2 · per-dim frame cascade) The photoFrame STATE box is authored on the
+        // MASTER dim; on other formats the archetype's own per-dim mask/card
+        // geometry (perDim overrides, resolved by specNums) is the correct absolute
+        // placement for that format's safe zones — exactly how text roles already
+        // cascade. Without this, a square-authored mask lands mid-canvas on Story
+        // and shoves the text stack past the platform band (live-only copy drops).
+        // Type/radius/shape edits in state still win; only the BOX cascades, and
+        // only while the state frame type matches the archetype's own.
+        photoFrame: (()=>{ const f=photoFrame||{type:"none"};
+          if(dimId!==MASTER_DIM && specNums?.photoFrame && f.type!=="none"
+             && specNums.photoFrame.type===f.type && specNums.photoFrame.box){
+            return {...f, box:specNums.photoFrame.box};
+          }
+          return f; })(),
         fullBleed: !!(specNums?.fullBleed), thinBorder: !!(specNums?.thinBorder),
         heroCapFrac: specNums?.heroCapFrac||0.3, heroToSupport: specNums?.heroToSupport||8,
         leading: heroRegister==="heavySans"?1.05:1.02, leadingBody: specNums?.leadingBody||1.32,
@@ -5585,26 +5681,41 @@ export default function App() {
           ctx.restore();
           ctx.restore();
         }
-      }else if(frame.type==="petalMask"){
+      }else if(frame.type==="petalMask"||frame.type==="shapeMask"){
         const m0=clampBox(frame.box);
-        // (B8 petal coherence) The orchid silhouette is (near-)SQUARE. Drawing it at
-        // Math.max(m.w,m.h) while filling the photo into the full m.w×m.h RECT made the
-        // outline and the photo rect DISAGREE on wide formats (a rectangle floating in a
-        // larger petal outline — the client's Banner bug). Lock the mask to a single
-        // SQUARE window = min(m.w,m.h), centred in the authored box, and draw BOTH the
-        // silhouette AND the photo into that SAME square so outline+photo+window are one
-        // aligned unit on every one of the 6 formats.
-        const m = m0 ? (()=>{ const sq=Math.min(m0.w,m0.h); return {x:m0.x+(m0.w-sq)/2, y:m0.y+(m0.h-sq)/2, w:sq, h:sq}; })() : null;
+        // (B8 petal coherence + R2 shape cutout) The silhouette and the photo rect
+        // must agree as ONE aligned unit on every format. Lock the mask window to
+        // the SHAPE'S OWN aspect ratio, contained + centred in the authored box,
+        // and draw BOTH the silhouette AND the photo into that SAME rect. For the
+        // (near-)square orchid this reduces to the old square lock; (R2) generic
+        // brand shapes (shape-1/2/3) keep their intrinsic proportions undistorted.
+        const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):"orchid-petal"];
+        const m = m0 ? (()=>{
+          const ar=(shapeImg&&shapeImg.width&&shapeImg.height)?shapeImg.width/shapeImg.height:1;
+          let mw=m0.w, mh=mw/ar;
+          if(mh>m0.h){ mh=m0.h; mw=mh*ar; }
+          return {x:m0.x+(m0.w-mw)/2, y:m0.y+(m0.h-mh)/2, w:mw, h:mh};
+        })() : null;
         maskBox=m;
-        const orchid=archAssetImgs.current["orchid-petal"];
-        if(m && mediaObj && orchid){
+        if(m && mediaObj && shapeImg){
+          // (R2 ROOT CAUSE — partial-alpha silhouettes) Brand SVGs may carry a
+          // partial fill opacity (shape-1 ships fill-opacity 0.4). The old code
+          // stacked 8 source-over draws to saturate alpha — fine for the ADDITIVE
+          // pass, but the destination-in RE-MASK then MULTIPLIED the partial alpha
+          // 8× (0.4⁸ ≈ 0) and silently wiped the whole masked photo. Rasterize the
+          // silhouette ONCE into its own canvas (the 8 stacked draws saturate alpha
+          // THERE), and use that saturated bitmap for BOTH passes — one draw each,
+          // so the re-mask preserves alpha instead of decimating it. The opaque
+          // orchid renders identically through this path (1⁸ = 1).
+          const sil=document.createElement("canvas");
+          sil.width=Math.max(2,Math.round(m.w)); sil.height=Math.max(2,Math.round(m.h));
+          const silCtx=sil.getContext("2d");
+          for(let i=0;i<8;i++) silCtx.drawImage(shapeImg,0,0,sil.width,sil.height);
           const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
           const octx=oc.getContext("2d");
-          octx.save(); octx.translate(m.x+m.w/2,m.y+m.h/2);
-          const scale=Math.max(m.w,m.h);
-          for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
+          octx.save();
+          octx.drawImage(sil,m.x,m.y,m.w,m.h);
           octx.globalCompositeOperation="source-in";
-          octx.translate(-(m.x+m.w/2),-(m.y+m.h/2));
           const _eM=effImgTFor(m.w,m.h,true);
           octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
           drawPhotoFramed(octx,mediaObj,m.w,m.h,_eM); octx.restore();
@@ -5614,19 +5725,21 @@ export default function App() {
           // Treat the masked photo (WP-U: the MATERIALIZED treatment — warm grade by
           // default; green duotone only when the design explicitly carries it), then
           // RE-MASK: blend passes paint the whole rect (incl. the transparent area
-          // OUTSIDE the flower) at low alpha, leaving a faint tinted rectangle. Knock
-          // everything outside the flower back out with a destination-in pass of the
-          // orchid silhouette, so only the flower survives.
+          // OUTSIDE the silhouette) at low alpha, leaving a faint tinted rectangle.
+          // Knock everything outside the silhouette back out with a destination-in
+          // pass of the SATURATED shape, so only the shape's interior survives.
           treatOf(mat.photoTreatment)(octx,m.x,m.y,m.w,m.h);
           octx.save();
           octx.globalCompositeOperation="destination-in";
-          octx.translate(m.x+m.w/2,m.y+m.h/2);
-          for(let i=0;i<8;i++) octx.drawImage(orchid,-scale/2,-scale/2,scale,scale);
+          octx.drawImage(sil,m.x,m.y,m.w,m.h);
           octx.restore();
           ctx.drawImage(oc,0,0);
-        }else if(m && orchid){
-          const tinted=tintedAccessory(orchid,ARCHETYPE_COLORS.terracotta);
-          if(tinted) containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,Math.max(m.w,m.h),Math.max(m.w,m.h),0.9);
+        }else if(m && shapeImg){
+          // No photo yet → placeholder: the silhouette tinted to a readable tone on
+          // this field (terracotta on light fields, the field ink at low volume on dark).
+          const phColor=hexLuminance(fieldColor)>0.5?ARCHETYPE_COLORS.terracotta:B.whiteSmoke;
+          const tinted=tintedAccessory(shapeImg,phColor);
+          if(tinted) containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,m.w,m.h,0.9);
         }
       }else if(mat.photoRegion && !mat.fullBleed){
         // Plain split/side photo (editorial_split, portrait_credential materialized).
@@ -5718,7 +5831,40 @@ export default function App() {
       }
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
-      if(mat.fullBleed && mediaObj && heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
+      // (R3) messagePill text sits on the PILL, not the photo — the photo-zone colour
+      // flip below must not run (its sample would read the photo behind the pill);
+      // the pill branch resolves its own contrast ink against the pill colour.
+      if(mat.fullBleed && mediaObj && heroBox && mat.special!=="messagePill" && (!textColorId||textColorId==="auto")){ resolveZoneTc({x:heroBox.x,y:heroBox.y,w:heroBox.w,h:heroBox.h}); heroInk=zoneTc; }
+      // ── (R3 · mood 3) MESSAGE-PILL FOCAL DODGE ────────────────────────────────
+      // The pill overlaps the photo's lower third; the saliency map (skin-tone +
+      // local-contrast, the same estimator the smart crop and logo guard use) tells
+      // us where the subject is. When a confident focal subject reaches down into
+      // the pill zone, slide the WHOLE text column (hero + caption + eyebrow keep
+      // their relative offsets) horizontally away from the focal x — inside the
+      // text-safe margins — so the card never covers a face. Vertical stays lower-
+      // third (the crop targets faces at fy≈0.38, so the dodge rarely fires).
+      // Saliency is advisory: any failure leaves the authored centre placement.
+      if(mat.special==="messagePill" && mediaObj && heroBox){
+        try{
+          const _f=estimateFocalPoint(mediaObj);
+          if(_f && _f.confidence>=0.35){
+            const _g=photoGeom(mediaObj,w,h,effImgTFor(w,h,false));
+            if(_g){
+              const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh;
+              const _fr=0.20*Math.min(w,h);                    // focal exclusion radius (≈ logo guard's band)
+              const _pTop=heroBox.y-0.05*h;                    // pill top ≈ hero top − padding
+              const _overX=fxC+_fr>heroBox.x && fxC-_fr<heroBox.x+heroBox.w;
+              if(_overX && fyC+_fr>_pTop){
+                const _l=smText.l*w, _r=(1-smText.r)*w;
+                const _nx=fxC>w/2 ? _l : (_r-heroBox.w);       // slide to the emptier side
+                const _dx=Math.max(_l,Math.min(_r-heroBox.w,_nx))-heroBox.x;
+                const _sh=(b)=>b?{...b,x:Math.max(_l,Math.min(_r-b.w,b.x+_dx))}:b;
+                supBox=_sh(supBox); labelBox=_sh(labelBox); heroBox=_sh(heroBox);
+              }
+            }
+          }
+        }catch(_){/* saliency unavailable → authored placement stands */}
+      }
 
       // ── REFLOW + COLLISION ENGINE (Commit 3) ──────────────────────────────────
       // Measure each role at its target size, then deterministically de-collide:
@@ -5744,7 +5890,7 @@ export default function App() {
         // (capFrac ≥0.10 excludes the whisper/metadata registers) target a
         // rendered headline width of ≥70% of the canvas width; the reflow's
         // fit logic shrinks only when the quiet zone genuinely can't hold it.
-        heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask")
+        heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask")
           && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.70*w : null,
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
@@ -5826,7 +5972,83 @@ export default function App() {
         // gradient scrim (never a hard band) so the white label reads on any photo while
         // the image still bleeds. Detect it: caps hero, short text, no support.
         const isPhotoLabel = mat.caps && heroFinal && heroFinal.length<=22 && !supportText;
-        if(isPhotoLabel && heroBox){
+        if(mat.special==="messagePill" && heroBox){
+          // ── (R3 · mood 3) MESSAGE PILL — a rounded brand-colour card carrying the
+          // copy, overlapping the photo. Sized to the MEASURED copy (the same font/
+          // size primitives the hero/date/caption draws below use, so the text is
+          // fully inside by construction), filled with the variant field colour, and
+          // the ink re-verified against THAT colour with the harmonizer's contrast
+          // machinery (contrastRatio/suggestTextColor) — flip only when the current
+          // ink genuinely fails AND the user hasn't pinned a text colour (pins win;
+          // a pinned low-contrast ink surfaces as an advisor dot, never a revert).
+          const _pLead=mat.heroLeading||(register==="serif"?1.02:1.05);
+          let _pBot=heroBox.y+reflow.heroPx*_pLead;
+          if(heroFinal){
+            const _pf=measureHeroLines(ctx,heroWords(heroFinal),register,reflow.heroPx,heroBox.w);
+            _pBot=heroBox.y+Math.max(1,_pf.lineCount)*reflow.heroPx*_pLead;
+          }
+          // Date-line extension (mirrors the prominent-date draw's sizing below).
+          if(ccDateText && !isBigNum && heroFinal){
+            const _dSz=Math.max(20*S,reflow.heroPx*0.55);
+            _pBot+=Math.max(0.014*h,reflow.heroPx*0.18)+_dSz*1.28;
+          }
+          // Caption extension (mirrors the caption draw's fitText + descender room).
+          // (R3 hardening — verified live) Extend the pill for the caption ONLY when
+          // the caption will really draw: the caption path below is COMPLETE-OR-ABSENT
+          // (spec §6) — when the floored caption can't fit above its floor it drops
+          // entirely, and extending the pill for it left a lopsided empty band inside
+          // the card. Mirror the draw's own floor/room-lines/lift arithmetic (same
+          // sf, same 0.28em descender, same 0.005h tolerance) so pill and caption
+          // agree run-to-run; when they'd disagree the pill errs OVERSIZED (cosmetic),
+          // never undersized (text outside the card).
+          if(supportText && supBox){
+            const _sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+            const _floorP=_supFree?h:(1-sm.b)*h;   // fullBleed → no photo-band floor
+            let _rlP=Math.max(1,Math.floor((_floorP-supBox.y-_sf.size*0.28)/_sf.lineHeight));
+            const _lbP=(n)=>supBox.y+_sf.size+(n-1)*_sf.lineHeight+_sf.size*0.28;
+            while(_rlP>1 && _lbP(_rlP)>_floorP) _rlP--;
+            let _syP=supBox.y;
+            if(_lbP(_rlP)>_floorP){ _syP=Math.max(_pBot+0.008*h,supBox.y-(_lbP(_rlP)-_floorP)); }
+            const _sobP=_syP+_sf.size+(_rlP-1)*_sf.lineHeight+_sf.size*0.28;
+            const _willDraw=!(_sobP>_floorP+0.005*h || _sf.lines.length>Math.min(3,_rlP));
+            if(_willDraw){
+              const _sTop=Math.max(supBox.y,_pBot+Math.max(0.012*h,0.10*reflow.heroPx));
+              _pBot=Math.max(_pBot,_sTop+Math.max(_sf.size,_sf.lines.length*_sf.lineHeight)+_sf.size*0.28);
+            }
+          }
+          const _pad=0.045*Math.min(w,h), _padX=_pad*1.35;
+          const _pR={
+            x:Math.max(0.02*w,heroBox.x-_padX),
+            y:Math.max(0.02*h,heroBox.y-_pad*1.15),
+          };
+          _pR.w=Math.min(0.98*w,heroBox.x+heroBox.w+_padX)-_pR.x;
+          _pR.h=Math.min(0.98*h,_pBot+_pad)-_pR.y;
+          // Rounded pill/card: full pill ends on a one-liner, soft card on stacked copy.
+          const _rad=Math.min(_pR.h*0.5,0.09*Math.min(w,h));
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(_pR.x+_rad,_pR.y);
+          ctx.arcTo(_pR.x+_pR.w,_pR.y,_pR.x+_pR.w,_pR.y+_pR.h,_rad);
+          ctx.arcTo(_pR.x+_pR.w,_pR.y+_pR.h,_pR.x,_pR.y+_pR.h,_rad);
+          ctx.arcTo(_pR.x,_pR.y+_pR.h,_pR.x,_pR.y,_rad);
+          ctx.arcTo(_pR.x,_pR.y,_pR.x+_pR.w,_pR.y,_rad);
+          ctx.closePath();
+          ctx.fillStyle=fieldColor;
+          ctx.fill();
+          ctx.restore();
+          // Ink vs the PILL colour (not the photo): pins verbatim; else ensure ≥4.5.
+          if(!pinnedProps?.textColorId){
+            const _bgL=hexLuminance(fieldColor);
+            if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5){
+              const _iv=contrastRatio(_bgL,hexLuminance(B.whiteSmoke)), _gr=contrastRatio(_bgL,hexLuminance(B.burnham));
+              heroInk=_iv>=_gr?B.whiteSmoke:B.burnham;
+              if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5) heroInk=B[suggestTextColor(_bgL)];
+            }
+          }
+          zoneTc=heroInk;
+          // The auto logo (if the user re-enables one) must clear the whole card.
+          frameBox=_pR;
+        }else if(isPhotoLabel && heroBox){
           // Bottom scrim: transparent → burnham, covering the lower ~28% of the tile so
           // the label + descenders always sit on a dark wash. Forces the label ink white.
           const scrimTop=Math.min(heroBox.y-0.06, 0.72)*h, scrimH=h-scrimTop;
@@ -6237,7 +6459,7 @@ export default function App() {
         const whitespaceFrac=Math.max(0,Math.min(1,1-occArea/(w*h)));
         // Warmth-device count: the materialized frame/motif set is 1 device; a user-
         // added frame/overlay/lineart/outline (NON-motif) stacks on top.
-        const specialDevice=(frame.type==="card"||frame.type==="petalMask"||overlayLayers.some(l=>l.motif))?1:0;
+        const specialDevice=(frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||overlayLayers.some(l=>l.motif))?1:0;
         const extraLayerDevices=topLayers.filter(l=>!l.motif&&["frame","overlay","lineart","outline"].includes(l.mode||"frame")).length;
         const warmthDevices=specialDevice+extraLayerDevices;
         const provPal=provArch?.palette||{};
@@ -6338,7 +6560,7 @@ export default function App() {
             doubleBackdrop:_doubleBackdrop,   // (single-owner) a role banded >1× per render
             decorOverlapsText:_decorOverlapsText, decorInFocal:_decorInFocal,  // (item 4a) decor law
             frameMisalign:(()=>{               // (item 4b/4d) mask/outline/photo window must be ONE unit
-              const fb=(frame.type==="card")?cardBox:(frame.type==="petalMask")?maskBox:null;
+              const fb=(frame.type==="card")?cardBox:(frame.type==="petalMask"||frame.type==="shapeMask")?maskBox:null;
               const pw=_photoWin;
               if(!fb||!pw||!mediaObj) return 0;
               // The frame's mask rect and the photo's DRAWN window must coincide (±1.5% of
