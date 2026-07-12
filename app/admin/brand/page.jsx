@@ -72,7 +72,7 @@ export default function BrandKitPage() {
         body: JSON.stringify({ name, dataUrl, kind, ratio }),
       });
       const d = await res.json().catch(() => ({}));
-      if (d?.asset?.src) { setAssets(prev => [d.asset, ...prev]); setAssetNote('Added — it’s now in the editor’s ＋ Add gallery for everyone.'); }
+      if (d?.asset?.src) { setAssets(prev => [d.asset, ...prev]); setAssetNote('Added — it’s now in the studio’s Shapes inspector (＋ Add shape) for everyone.'); }
       else if (d?.configured === false) { setAssetsConfigured(false); setAssetNote(d.error || 'Cloud storage isn’t configured — assets can’t be shared yet.'); }
       else setAssetNote(d?.error || 'That upload didn’t go through — please try again.');
     } finally {
@@ -166,13 +166,14 @@ export default function BrandKitPage() {
 
         <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
 
-        {/* Decorative assets (Declutter item 7) — the owner uploads official
-            SVG/PNG marks here; they appear in the editor's + Add → Shapes/
-            Decoration for everyone. The editor itself no longer has an uploader. */}
+        {/* Shapes & decorative assets — the owner uploads official SVG/PNG marks
+            here; they appear in the editor's Shapes inspector (＋ Add shape) for
+            everyone, usable as a photo frame, a solid fill, or an outline. The
+            editor itself no longer has an uploader (born-clean: only real assets). */}
         <section style={{ marginBottom: 48 }}>
-          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Decorative assets</div>
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Shapes &amp; decorative assets</div>
           <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 16, maxWidth: 520 }}>
-            Official decoration marks (SVG or PNG). Anything uploaded here becomes available to every staff member in the studio’s ＋ Add gallery — this is the only place new decorative art enters the brand.
+            Official shapes and decoration marks (SVG or PNG). Anything uploaded here becomes available to every staff member in the studio’s Shapes inspector (＋ Add shape) — usable as a photo frame, a solid fill, or an outline. This is the only place new shape art enters the brand.
           </p>
           <input ref={assetInputRef} type="file" accept="image/svg+xml,image/png" style={{ display: 'none' }}
             onChange={e => { const f = e.target.files?.[0]; if (f) uploadAsset(f); e.target.value = ''; }} />
