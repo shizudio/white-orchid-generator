@@ -140,7 +140,7 @@ fold and the ghost/chip paths preserve every prior capability.
 | Background | The selected-swatch label + render-truth note | Brand swatches ONLY | Opacity slider (+ PNG-alpha note) · Shapes (petal marks) · Decoration (accessory shapes) |
 | Photo | Help line ("select the preview to resize…") | Library · Upload | Image/Video toggle · Sample photos strip · Midjourney launcher · Quick position (Center/50/75/Fill/0°) |
 | Logo | Overlap hint (when relevant) | Variant grid (primary/secondary tabs) · Remove / Add-back logo | 9-grid placement · Size steps (position is drag-first on the preview) |
-| Overlay (shape) | Drag hint | Mode (Frame/Outline/Line Art/On top) + its colour/weight sub-controls; or Accessory colour + quick size | Size / Rotate / Opacity sliders · layout reset header |
+| Overlay (shape) | Drag hint | Mode (Frame/Fill/Outline/Line Art) + its colour/weight/opacity sub-controls; or Accessory colour + quick size | Size / Rotate / Opacity sliders · layout reset header |
 
 The fold is a single `<MoreFold id=…>` per panel; `foldOpen` is an in-memory
 React state map (no localStorage), so a fold the user opened stays open across
@@ -158,6 +158,45 @@ element hops within the session and resets calm on reload.
 | Add Photo | Canvas ghost slot "＋ add a photo" (opens Library) + Photo inspector Library/Upload |
 | Shapes (petal marks) | Background / Overlay inspector "More options" fold → Shapes; chat ("add a petal / add a shape" → assistant `addOverlay` grammar, DECOR_INTENT-gated) |
 | Decoration (accessory shapes) | Background / Overlay inspector "More options" fold → Decoration; chat (`addOverlay`) |
+
+### 2.9 Free shapes (2026-07-10, client-ratified)
+
+Client ruling (verbatim intent): *"I can add any type of shape once on the preview,
+move them freely around, rotate them freely; more than 1 shape can exist together at
+any point in time; I can delete a shape anytime. While I have a shape I should be able
+to change the background colour … or change the colour of the shape. Shapes can be used
+as: frame (photo mask), overlay on top (adjustable opacity), or outline (adjustable
+thickness). I can upload more shapes in the brand page."*
+
+The shape system is a **user-driven manual tool** (autonomous generations are untouched —
+born-clean). It lives in the **Shapes inspector** (the `Shape`→`Shapes` chip), which is
+its home and is shown whenever a design exists:
+
+- **Many instances.** A UI add drops a NEW overlay layer every tap (nudged off the last
+  so it doesn't hide), so the same shape can coexist any number of times. Each instance
+  is its own `uid` with the on-image transform editor (drag / rotate / resize / snap) and
+  its own delete (canvas + inspector row). z-order = add order (latest on top). The AI
+  grammar keeps one-instance-per-asset so an auto pass never stacks duplicate decor.
+- **Three modes + colour, per instance.** `frame` (photo clipped into the silhouette),
+  `fill` (solid brand-tinted silhouette on top — brand-palette colour incl. "as-is" +
+  opacity 0–1), `outline` (stroke ring — brand colour + thickness). `lineart` is kept as
+  a fourth, upload-oriented mode. Recolour uses brand tokens only (read from the kit; zero
+  inline brand facts). Fill/outline tint the SVG through the offscreen `source-in` pipeline.
+- **Background stays independent.** The Background chip keeps editing the field colour
+  while shapes exist — shape colour and field colour are separate controls.
+- **The Shapes panel** stacks: the archetype's own **Layout shape** variant picker (part
+  of the layout, above) → the **list of every free shape layer** (thumb + mode badge +
+  per-instance delete, tap to edit inline) → **＋ Add shape** opening the shape tray
+  (built-in petals/shapes + uploaded officials).
+- **Uploads.** New shape art enters ONLY via the Brand kit page's *Shapes & decorative
+  assets* uploader (official brand assets, `/api/brand-assets`); uploaded shapes appear in
+  the tray + add-list for everyone. Cloud-unconfigured degrades to the built-ins.
+
+Every shape action rides the one patch pipeline (`applyPatch` → `overlayUpdate` /
+`addOverlay` / `removeOverlay`), so undo/redo and honesty hold by construction. No new
+patch enums: modes reuse `overlayMode`; the fill colour rides `overlayUpdate.style`
+(a client-only key). Autonomous text collision-free vs every shape layer still holds
+(decor shapes remain reflow obstacles/compose-partners).
 
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
