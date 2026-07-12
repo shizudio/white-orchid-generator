@@ -5039,6 +5039,13 @@ export default function App() {
       if(live) logoBoxRef.current={..._logoBox,position:place.position};
       if(live){
         auditLogo.explicit=!!logoBase.explicit;
+        // (Item 1 — logo pin) A user's EXPLICIT logo choice is either a placement
+        // (userLogoTouched → logoBase.explicit) OR a variant pick in the Logo panel
+        // (logoVariantTouched). Both PIN the logo: the render draws it verbatim (law 5),
+        // and an illegible pinned logo raises a LIVE advisor dot (never an auto-swap, M3).
+        // Auto (non-pinned) logos are the system's free variable — they stay off the live
+        // ledger so fresh generations stay born-clean (law 4).
+        auditLogo.pinned=!!(logoBase.explicit||logoVariantTouched);
         auditLogo.overlapsText=!!place.overlapsText;
         auditLogo.free=!!place.free;
         if(logoFocal){
@@ -5165,6 +5172,23 @@ export default function App() {
               }catch(_){ auditLogo.suggestPosition=null; }
             }
           }
+        }
+      }
+      // (Item 1 — pinned logo vs the SOLID field) The photo-box sample above can be fooled
+      // when the lockup straddles the field and a photo (the box mean is lifted by the photo
+      // or by the asset's own light details), so a green mark on the matching green field
+      // reads as "legible" while its strokes actually vanish. Add a DETERMINISTIC, brand-fact
+      // check for a PINNED logo: the same 3:1 floor the solid-field text guard uses, between
+      // the logo ink and the effective FIELD colour. Catches green-on-green with or without a
+      // photo. Pinned-only → auto logos (the system's free variable) stay off the ledger, so
+      // fresh generations keep zero dots (born-clean). We still draw the pick verbatim (M3).
+      if((live||opts.captureAudit) && auditLogo.pinned){
+        // Effective field = a live background override, else the (variant-written) bgColor.
+        const _fieldHex=(fieldColorOverride && BG_ID_SET.has(fieldColorOverride) ? BG_OPTIONS.find(b=>b.id===fieldColorOverride)?.color : null) || curBg?.color || B.whiteSmoke;
+        const fieldCr=contrastRatio(hexLuminance(_fieldHex), effInkLum);
+        if(fieldCr<3){
+          auditLogo.illegible=true;
+          auditLogo.photoContrast=(auditLogo.photoContrast==null)?+fieldCr.toFixed(2):Math.min(auditLogo.photoContrast,+fieldCr.toFixed(2));
         }
       }
       // The official asset, verbatim — nothing painted behind or around it.
@@ -6359,8 +6383,14 @@ export default function App() {
       // mark NOR the lockup on the LIVE design (the calibration board still shows the
       // archetype's own logo). logoBoxRef stays null → the "＋ add logo" ghost re-appears.
       const _logoRemoved = logoHidden && !_calibRender;
-      const wantMark = !_logoRemoved && logoUse==="mark" && !effUserLogoTouched;
-      const drawLockup = !_logoRemoved && (effUserLogoTouched || logoUse==="lockup");
+      // (Item 1 — explicit pick renders as picked) A logo VARIANT pick in the Logo panel
+      // (logoVariantTouched) PINS that lockup (law 5): it short-circuits the archetype's
+      // own mark policy exactly like a placement does, so the chosen logo actually paints
+      // instead of being dropped for the restraint mark. Fresh generations reset
+      // logoVariantTouched=false (materializeArchetype), so the mark policy still governs
+      // them → born-clean holds.
+      const wantMark = !_logoRemoved && logoUse==="mark" && !effUserLogoTouched && !logoVariantTouched;
+      const drawLockup = !_logoRemoved && (effUserLogoTouched || logoVariantTouched || logoUse==="lockup");
       // (Commit 2) DETERMINISTIC ROTATION SEED — stable for a given design, but varies
       // across archetype / palette variant / copy so consecutive designs don't repeat the
       // same lockup. Mirrors the palette rotation ring's determinism.
@@ -6446,7 +6476,7 @@ export default function App() {
       // Archetype-driven lockup (brand_card) with no user placement → draw the full lockup
       // centred per its logo.position (mark-above-wordmark reads as the standard lockup).
       // (Scope addendum) suppressed when the logo is pinned OFF.
-      if(logoUse==="lockup" && !effUserLogoTouched && !_logoRemoved) putLogo(textEnvelope,{...logoOpts});
+      if(logoUse==="lockup" && !effUserLogoTouched && !logoVariantTouched && !_logoRemoved) putLogo(textEnvelope,{...logoOpts});
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
