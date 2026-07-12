@@ -390,9 +390,11 @@ const FORMAT_LAYOUTS = {
 const formatLayoutFor=(dimId,postType)=>(FORMAT_LAYOUTS[dimId]||FORMAT_LAYOUTS.ig_square)[postType]||FORMAT_LAYOUTS.ig_square.text_post;
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   ARCHETYPE LIBRARY (Commit 3) — the 12 archetypes of docs/visual-language-spec
+   ARCHETYPE LIBRARY (Commit 3) — the archetype catalog of docs/visual-language-spec
    §2, encoded as DATA the render path resolves layout from when archetypeId is
-   set. Backward compatible: archetypeId=null → legacy FORMAT_LAYOUTS path.
+   set. The catalog grows — trust THIS array (and ARCHETYPE_IDS) for what exists,
+   never a hand-counted number in a comment (stale counts mislead cap tuning).
+   Backward compatible: archetypeId=null → legacy FORMAT_LAYOUTS path.
 
    Each archetype:
      id            stable id (mirrored in lib/design-patch.js PATCH_OPTIONS)
@@ -4216,7 +4218,7 @@ export default function App() {
 
     if (DEV_HOOKS) {
       // Dev-only verification hook (Commit 3): drive an archetype design + sample
-      // content from the console so each of the 12 can be rendered + asserted.
+      // content from the console so every catalog archetype can be rendered + asserted.
       window.__woSetArchetype = (id, content = {}) => {
         // Set copy + postType FIRST so materialization writes roles for the right
         // postType and the eyebrow/register reflect the actual copy.
@@ -4541,7 +4543,7 @@ export default function App() {
     let cancelled = false;
     // Preload the FULL special-asset set ON MOUNT (not gated on an active archetype), so
     // the petal mask + motif shapes are ALWAYS ready — the calibration board (Commit 4)
-    // renders all 12 archetypes offscreen even with no archetype applied, and the §2.11
+    // renders the full archetype catalog offscreen even with no archetype applied, and the §2.11
     // motif field / §2.12 petal window must not render blank because the asset hadn't
     // loaded yet (the "motifs invisible / empty petal window" bug).
     const wanted = new Set(["orchid-petal","shape-1","shape-2","shape-3","acc-spark"]);
@@ -7436,7 +7438,7 @@ export default function App() {
 
   /* ── CALIBRATION BOARD (Commit 4, dev-only) ──────────────────────────────────
      window.__woCalibrationBoard(content?) renders the CURRENT design's content
-     through ALL 12 archetypes at ig_square into ONE tall labelled composite (3×4
+     through the FULL archetype catalog at ig_square into ONE tall labelled composite (3-wide
      grid) and returns + downloads a PNG dataURL for the client to score-tune the
      spec numbers. Each cell renders via renderScene with opts.archOverride (no live
      state mutation). If `content` is passed, its headline/subtext/attribution/
@@ -7450,7 +7452,7 @@ export default function App() {
       content = content || { headline: "Freedom to *explore*", subtext: "Every child", attribution: "Ms Chen", dateText: "18 July" };
       const CELL = 360;               // per-archetype tile (ig_square, downscaled)
       const cols = 3, pad = 18, labelH = 26;
-      const rows = Math.ceil(ARCHETYPE_IDS.length / cols); // (P4) show ALL archetypes (now 17)
+      const rows = Math.ceil(ARCHETYPE_IDS.length / cols); // (P4) show ALL archetypes — the grid grows with the array
       const boardW = cols * CELL + (cols + 1) * pad;
       const boardH = rows * (CELL + labelH) + (rows + 1) * pad + 40;
       const board = document.createElement("canvas");
