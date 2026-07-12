@@ -2075,15 +2075,20 @@ function reflowEditorial(ctx, a){
     let size=Math.max(heroStart,heroMin);
     // ── (R5 · headline scale floor — composition-study-2 §4 "scale courage") ──
     // On PHOTO-LED archetypes with a DISPLAY hero the moodboard's headlines span
-    // 70–100% of the canvas width; the generator's were timid because a short
+    // 70–100% of their free zone; the generator's were timid because a short
     // headline stopped at the capFrac start size even when its quiet zone could
-    // hold far more. When the caller passes heroWidthTarget (≈0.70×canvas W),
-    // raise the STARTING size so the headline drawn on one line would span that
-    // width (the type-size equivalent for very short words), capped at 0.42×H.
-    // The EXISTING shrink-to-fit loop below still owns the outcome — it reduces
-    // the size whenever the role's box (the quiet zone) genuinely can't hold it,
-    // so nothing new can collide, crop, or cross a floor (born-clean holds).
-    if(a.heroWidthTarget && words.length){
+    // hold far more. heroWidthTarget is a FILL FRACTION (≈0.92) of the RESOLVED
+    // hero box — applied HERE, after constrainToBand/resolveDecor carved the
+    // photo/decor obstacles out of heroBox — so the floor tracks the width the
+    // headline ACTUALLY has (the old ≈0.70×canvas target ignored obstacle
+    // narrowing, leaving carved-box headlines timid). Raise the STARTING size so
+    // the headline drawn on one line would span that width (the type-size
+    // equivalent for very short words), capped at 0.42×H. The EXISTING
+    // shrink-to-fit loop below still owns the outcome — it reduces the size
+    // whenever the role's box (the quiet zone) genuinely can't hold it, so
+    // nothing new can collide, crop, or cross a floor (born-clean holds by
+    // construction).
+    if(a.heroWidthTarget && words.length && heroBox.w>0){
       let oneW=0;
       for(let i=0;i<words.length;i++){
         const wt=words[i];
@@ -2092,7 +2097,7 @@ function reflowEditorial(ctx, a){
         if(i<words.length-1 && wt.space!==false) oneW+=ctx.measureText(" ").width;
       }
       if(oneW>0){
-        const sizeForWidth=100*a.heroWidthTarget/oneW;
+        const sizeForWidth=100*(a.heroWidthTarget*heroBox.w)/oneW;
         size=Math.max(size, Math.min(sizeForWidth, 0.42*h));
       }
     }
@@ -5924,10 +5929,14 @@ export default function App() {
         decorObstacles,   // (C3+R4) decor shapes: compose-or-avoid, never a partial clip
         // (R5) HEADLINE SCALE FLOOR — photo-led archetypes with a DISPLAY hero
         // (capFrac ≥0.10 excludes the whisper/metadata registers) target a
-        // rendered headline width of ≥70% of the canvas width; the reflow's
-        // fit logic shrinks only when the quiet zone genuinely can't hold it.
+        // starting size that fills ~92% of the RESOLVED hero box width. Passed
+        // as a FRACTION of that box (not canvas px): reflowEditorial multiplies
+        // it against heroBox.w AFTER its own constrainToBand/resolveDecor pass,
+        // so the floor follows the free zone when photo/decor obstacles narrow
+        // it. The reflow's shrink-to-fit logic keeps final say (0.42×H cap
+        // intact) — it shrinks only when the quiet zone genuinely can't hold it.
         heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask")
-          && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.70*w : null,
+          && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.92 : null,
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
       // (Refinement 1) FREE PLACEMENT wins over reflow. The reflow engine de-collides the
