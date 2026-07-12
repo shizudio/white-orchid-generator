@@ -3124,6 +3124,10 @@ export default function App() {
   // Post-export save-as-template nudge (ux-architecture §2.7). Shown once per
   // session after a successful export; dismissal is remembered per session.
   const [exportNudge, setExportNudge] = useState(false);
+  // (A4 · law 6 honesty) Batch-export failures — {failedIds, ok, run} or null.
+  // "Download all" must never silently skip a format; the notice below the
+  // canvas surfaces what failed with a retry for those formats only.
+  const [exportFail, setExportFail] = useState(null);
   const nudgeDismissedRef = useRef(new Set());
 
   const curType = POST_TYPES.find(t => t.id === postType);
@@ -8419,12 +8423,22 @@ export default function App() {
   };
 
   /* ── Download every format via off-screen renderScene ── */
-  const downloadAll = async () => {
+  // (A4 · law 6 honesty) A per-format render exception is never a silent skip:
+  // failures are collected and surfaced as a warm retryable notice below the
+  // canvas (never alert(); the formats that DID render still download), logged
+  // through the feedback loop (kind:'export-error', fire-and-forget), and the
+  // notice's retry re-runs ONLY the failed formats — passed here as `only`
+  // (an array of dimension ids; the Export button's click event is ignored).
+  const downloadAll = async (only) => {
+    const retryIds = Array.isArray(only) && only.length ? only : null;
+    const dims = retryIds ? DIMENSIONS.filter(d => retryIds.includes(d.id)) : DIMENSIONS;
+    setExportFail(null);   // a fresh run owns the notice — stale failures would mislead
     const slugify = str => str.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30);
     const slug = headline ? slugify(headline) : activeTemplateName ? slugify(activeTemplateName) : postType;
     const isJpg = exportFormat === "jpeg";
-    for (let i=0; i<DIMENSIONS.length; i++) {
-      const d = DIMENSIONS[i];
+    const failed = [];
+    for (let i=0; i<dims.length; i++) {
+      const d = dims[i];
       try {
         const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
         const ctx = c.getContext("2d");
@@ -8437,9 +8451,20 @@ export default function App() {
         // Stagger so the browser doesn't block the burst of downloads.
         await new Promise(res => setTimeout(res, 300));
         a.click();
-      } catch(e) { console.warn("Could not export", d.id, e); }
+      } catch(e) { console.warn("Could not export", d.id, e); failed.push(d.id); }
     }
-    markSessionExported();   // (Feed gallery) the set counts as exported too
+    // (Feed gallery) the set counts as exported — only when something landed.
+    if (dims.length - failed.length > 0) markSessionExported();
+    if (failed.length) {
+      setExportFail({ failedIds: failed, ok: dims.length - failed.length, run: dims.length });
+      // (self-improvement-loop §1) capture the defect signal — never blocks the UX.
+      try {
+        logFeedbackClient({
+          turn_id: newTurnId(), session_id: sessionId || null, kind: "export-error",
+          export_error: { failed, of: dims.length, format: exportFormat, retry: !!retryIds },
+        });
+      } catch { /* never surface */ }
+    }
   };
 
   /* ── Photo reframe: drag to pan, slider to zoom ── */
@@ -10967,6 +10992,26 @@ export default function App() {
               <button type="button" onClick={()=>{saveDesignTemplate();setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
                 style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save template</button>
               <button type="button" aria-label="Dismiss" title="Not now" onClick={()=>{setExportNudge(false);if(sessionId)nudgeDismissedRef.current.add(sessionId);}}
+                style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
+            </div>
+          )}
+
+          {/* ── (A4 · law 6 honesty) BATCH-EXPORT FAILURE NOTICE ── "Download
+              all" never silently skips a format: what failed surfaces here as a
+              warm retryable line below the canvas (same non-blocking surface as
+              the save-as-template toast — export itself stays advisory-gated,
+              never blocked). Try again re-runs ONLY the failed formats. */}
+          {exportFail && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
+              padding:"10px 14px",borderRadius:14,background:"#fff",
+              border:`1px solid ${B.ash}44`,boxShadow:"0 2px 10px rgba(43,80,64,0.10)"}}>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>
+                {exportFail.ok} of {exportFail.run} formats downloaded — {exportFail.failedIds.map(id=>DIMENSIONS.find(d=>d.id===id)?.label||id).join(", ")} failed. Try again.
+              </span>
+              <button type="button" onClick={()=>downloadAll(exportFail.failedIds)}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Try again</button>
+              <button type="button" aria-label="Dismiss" title="Dismiss" onClick={()=>setExportFail(null)}
                 style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
             </div>
           )}
