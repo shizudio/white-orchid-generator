@@ -3708,10 +3708,17 @@ export default function App() {
       const asset = overlays.find(o => o.id === patch.addOverlay.assetId) || DEFAULT_OVERLAYS.find(o => o.id === patch.addOverlay.assetId);
       if (asset) {
         const mode = inList(patch.addOverlay.mode, "overlayMode") ? patch.addOverlay.mode : "overlay";
-        const t = suggestPlacement(asset.kind, asset.ratio, W, H);
         const uid = "ol_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        // (Free shapes — client 2026-07-10) A UI add drops a NEW instance every time so
+        // the same shape can live many times over (drag/rotate/resize each freely). The
+        // AI grammar keeps one-instance-per-asset (born-clean: an auto pass never stacks
+        // duplicate decor). New instances land nudged off the last same-asset one so they
+        // don't hide underneath it. z-order = add order (latest on top = end of array).
+        const sameCount = opts.uiSource ? overlayLayers.filter(l => l.assetId === asset.id).length : 0;
+        const t = suggestPlacement(asset.kind, asset.ratio, W, H);
+        if (sameCount > 0) { t.x = Math.min(0.9, (t.x ?? 0.5) + 0.06 * sameCount); t.y = Math.min(0.9, (t.y ?? 0.5) + 0.06 * sameCount); }
         setOverlayLayers(prev => [
-          ...prev.filter(l => l.assetId !== asset.id), // one instance per built-in shape
+          ...(opts.uiSource ? prev : prev.filter(l => l.assetId !== asset.id)),
           { uid, assetId: asset.id, mode, master: t, byDim: {} },
         ]);
         applied.push("addOverlay");
@@ -5805,7 +5812,7 @@ export default function App() {
         // Early (under-text) draw for solid overlay-mode decor.
         if((layer.mode||"frame")==="overlay"){
           if(layer.motif){ const tinted=tintedAccessory(img,fill); drawOverlayLayer(ctx,tinted||img,w,h,t); }
-          else drawOverlayLayer(ctx,img,w,h,t);
+          else { const fc=layer.fillColor&&B[layer.fillColor]; const src=fc?tintedAccessory(img,fc):img; drawOverlayLayer(ctx,src||img,w,h,t); }  // (Free shapes) fill = brand-tinted silhouette
           _decorEarly.add(layer);
         }
       }
@@ -6696,7 +6703,7 @@ export default function App() {
         if(layer.motif){ const base=ARCHETYPE_COLORS[t.colorId]||B.celadon; const col=mixHex(base,B.burnham,0.22); const tinted=tintedAccessory(img,col); drawOverlayLayer(ctx,tinted||img,w,h,t); return; }
         if(layer.mode==="outline"){drawOutlineLayer(ctx,_octail,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);return;}
         if(layer.mode==="lineart"){drawLineArtLayer(ctx,_octail,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
-        if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else drawOverlayLayer(ctx,img,w,h,t);
+        if(asset?.category==="accessories"){const colorId=t.colorId||"auto";const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);}else{const fc=layer.fillColor&&B[layer.fillColor];drawOverlayLayer(ctx,fc?tintedAccessory(img,fc)||img:img,w,h,t);}  // (Free shapes) fill = brand-tinted silhouette
       });
       if(live){
         roleBoundsRef.current=_roleB; // (WP-U fix #1) publish per-role hit boxes
@@ -8798,13 +8805,15 @@ export default function App() {
   };
   // (Declutter item 7) uploadOverlay left the editor — decoration enters the
   // brand ONLY through the Brand kit admin page (official assets).
-  // Tap a shape: add it once (through THE pipeline), or if placed, toggle off.
-  const toggleOverlay = (asset) => {
-    const existing = overlayLayers.find(l => l.assetId === asset.id);
-    if (existing) { deleteLayer(existing.uid); return; }
-    const mode = asset.kind === "corner" || asset.kind === "accessory" ? "overlay" : "frame";
+  // (Free shapes — client 2026-07-10) Tap a shape to ADD a fresh instance every time
+  // (through THE pipeline); the same shape can coexist many times over. Per-instance
+  // delete lives on the canvas + the Shapes inspector. Default mode: a photo present
+  // frames it; otherwise it drops as a fill-on-top so it's visible with no photo.
+  const addShape = (asset) => {
+    const mode = asset.kind === "corner" || asset.kind === "accessory" ? "overlay" : (mediaObj ? "frame" : "overlay");
     applyPatch({ addOverlay: { assetId: asset.id, mode } }, { source: "ui" });
   };
+  const toggleOverlay = addShape; // legacy call sites add a new instance
   // ── RAW overlay writers — only the patch pipeline calls these. UI surfaces
   //    use the pipeline wrappers below (WP-V Stage 1). ──
   const writeLayerMode = (uid, mode) => {
@@ -9389,17 +9398,19 @@ export default function App() {
      shape); an already-placed shape jumps to its overlay inspector. */
   const renderShapesSection = () => {
     const shapeTile = (o) => {
-      const placedLayer = overlayLayers.find(l => l.assetId === o.id);
-      const placed = !!placedLayer;
+      // (Free shapes) A tile ADDS a fresh instance every tap — the same shape can be
+      // placed repeatedly. The badge shows how many are on the design (delete lives on
+      // the canvas + the Shapes inspector), not an on/off toggle.
+      const count = overlayLayers.filter(l => l.assetId === o.id).length;
       // Petal marks are ivory assets — a soft celadon backing keeps them visible
       // on the white tile (accessories stay on white).
       const tileBg = (o.builtin && o.category === "overlays") ? `${B.celadonDeep}2e` : "#fff";
       return (
-        <button key={o.id} aria-pressed={placed} onClick={()=>{ if(placedLayer){ selectElement("overlay", placedLayer.uid); } else { toggleOverlay(o); } }} title={`${o.name} — tap to ${placed?"edit":"add"}`}
-          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${placed?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
-          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:placed?1:0.6}} />
+        <button key={o.id} onClick={()=>addShape(o)} title={`${o.name} — tap to add${count?` (${count} placed)`:""}`}
+          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${count?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:count?1:0.6}} />
           <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
-          {placed&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 3px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:600}}>ON</span>}
+          {count>0&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 4px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>{count}</span>}
         </button>
       );
     };
@@ -9453,6 +9464,56 @@ export default function App() {
         <div style={{fontSize:10,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>
           Each shape comes with its matched field colour, so the pairing always stays legible.
         </div>
+      </>
+    );
+  };
+
+  // (Free shapes — client 2026-07-10) The Shapes inspector is the HOME of the free-shape
+  // system. It stacks: the archetype's own "Layout shape" variant picker (part of the
+  // layout, ABOVE) → the list of every FREE shape layer on the design (thumb + mode badge
+  // + per-instance delete, tap to edit inline) → "＋ Add shape" opening the shape tray
+  // (built-in + uploaded brand shapes). Every action rides applyPatch → undoable + honest.
+  const SHAPE_MODE_LABEL = { frame:"Frame", overlay:"Fill", outline:"Outline", lineart:"Line Art" };
+  const renderShapesHome = () => {
+    const hasLayoutShapes = (ARCHETYPES_BY_ID[archetypeId]?.variants || []).some(v => v.shapeId);
+    const selLayer = overlayLayers.find(l => l.uid === selOverlay);
+    return (
+      <>
+        {hasLayoutShapes && <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Layout shape</div>
+          {renderShapeVariantPanel()}
+        </div>}
+        <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8,paddingTop:hasLayoutShapes?12:0,borderTop:hasLayoutShapes?`1px solid ${B.ash}22`:"none"}}>Shapes on this design</div>
+        {overlayLayers.length===0
+          ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No free shapes yet. Add one below — then drag, rotate and resize it on the preview. Add as many as you like.</div>
+          : <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
+              {overlayLayers.map((l,i)=>{
+                const a=overlays.find(o=>o.id===l.assetId); const on=selOverlay===l.uid; const mode=l.mode||"frame";
+                return (
+                  <div key={l.uid} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:9,border:`1.5px solid ${on?B.burnham:B.ash+"33"}`,background:on?`${B.burnham}0d`:"#fff"}}>
+                    <button onClick={()=>selectElement("overlay",l.uid)} title="Edit this shape" style={{flex:1,display:"flex",alignItems:"center",gap:8,background:"none",border:"none",cursor:"pointer",padding:0,textAlign:"left"}}>
+                      <span style={{width:30,height:30,borderRadius:7,background:`${B.celadonDeep}22`,display:"grid",placeItems:"center",flexShrink:0}}>
+                        {(a?.dataUrl||a?.src)?<img src={a.dataUrl||a.src} alt="" style={{maxWidth:22,maxHeight:22,objectFit:"contain"}}/>:<span aria-hidden="true" style={{fontSize:14,color:B.burnham}}>✦</span>}
+                      </span>
+                      <span style={{display:"flex",flexDirection:"column",gap:2,minWidth:0}}>
+                        <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a?.name||"Shape"} {overlayLayers.filter(x=>x.assetId===l.assetId).length>1?`· ${overlayLayers.filter((x,xi)=>x.assetId===l.assetId&&xi<=i).length}`:""}</span>
+                        <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.6,textTransform:"uppercase",color:B.ash}}>{SHAPE_MODE_LABEL[mode]||mode}</span>
+                      </span>
+                    </button>
+                    <button onClick={()=>deleteLayer(l.uid)} aria-label={`Delete ${a?.name||"shape"}`} title="Delete this shape (undoable)" style={{flexShrink:0,width:26,height:26,borderRadius:7,border:`1px solid ${B.ash}44`,background:"#fff",color:B.tangerine,cursor:"pointer",fontSize:14,lineHeight:1,display:"grid",placeItems:"center"}}>×</button>
+                  </div>
+                );
+              })}
+            </div>}
+        {selLayer && <div style={{padding:"10px 11px",borderRadius:9,background:`${B.whiteSmoke}88`,border:`1px solid ${B.ash}2e`,marginBottom:10}}>
+          <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Editing: {overlays.find(o=>o.id===selLayer.assetId)?.name||"Shape"}</div>
+          {renderOverlayPanel()}
+        </div>}
+        <button onClick={()=>toggleFold("shapeAdd")} aria-expanded={!!foldOpen.shapeAdd}
+          style={{display:"inline-flex",alignItems:"center",gap:7,padding:"8px 14px",borderRadius:999,border:`1.5px solid ${B.burnham}`,background:foldOpen.shapeAdd?B.burnham:"#fff",color:foldOpen.shapeAdd?"#fff":B.burnham,fontFamily:FU.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,cursor:"pointer"}}>
+          <span aria-hidden="true" style={{fontSize:13,lineHeight:1}}>＋</span> Add shape
+        </button>
+        {foldOpen.shapeAdd && <div style={{marginTop:12}}>{renderShapesSection()}</div>}
       </>
     );
   };
@@ -9804,12 +9865,22 @@ export default function App() {
       <>
         {!isAccessory&&<>
           <div style={{display:"flex",gap:6,marginBottom:8}}>
-            {[{m:"frame",l:"Frame"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"},{m:"overlay",l:"On top"}].map(({m,l})=>{
+            {[{m:"frame",l:"Frame"},{m:"overlay",l:"Fill"},{m:"outline",l:"Outline"},{m:"lineart",l:"Line Art"}].map(({m,l})=>{
               const on=(selLayer.mode||"frame")===m;
-              return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Outer silhouette border only":m==="lineart"?"Keep internal stroke pattern and remove pale fills":"Shape drawn as-is on top"}
+              return <button key={m} onClick={()=>setLayerMode(selOverlay,m)} title={m==="frame"?"Photo fills the shape":m==="outline"?"Outer silhouette border only":m==="lineart"?"Keep internal stroke pattern and remove pale fills":"Solid shape on top — pick a brand colour + opacity"}
                 style={{flex:1,padding:"6px 3px",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{l}</button>;
             })}
           </div>
+          {((selLayer.mode||"frame")==="overlay")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
+            <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Fill colour</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
+              <button aria-label="Fill as-is" aria-pressed={!selLayer.fillColor} title="Keep the shape's own colours" onClick={()=>setLayerStyle(selOverlay,{fillColor:""})}
+                style={{width:30,height:30,borderRadius:"50%",border:!selLayer.fillColor?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:"#fff",display:"grid",placeItems:"center",fontFamily:FU.subtitle,fontSize:7,fontWeight:800,color:B.jet,cursor:"pointer"}}>AS-IS</button>
+              {["tangerine","burnham","whiteSmoke","celadon","wisteria","dustyPink","jet"].map(key=>{const on=selLayer.fillColor===key;return <button key={key} aria-label={`Fill ${key}`} aria-pressed={on} title={key} onClick={()=>setLayerStyle(selOverlay,{fillColor:key})}
+                style={{width:30,height:30,borderRadius:"50%",border:on?`3px solid ${B.tangerine}`:`2px solid ${B.ash}66`,background:B[key],boxShadow:"0 0 0 2px #fff inset",cursor:"pointer"}} />;})}
+            </div>
+            <Slider label="Opacity" min={0} max={1} step={0.01} value={selT.opacity??1} suffix={Math.round((selT.opacity??1)*100)+"%"} onChange={v=>updateLayerT(selOverlay,{opacity:v})} />
+          </div>}
           {(selLayer.mode==="outline")&&<div style={{padding:"9px 11px",borderRadius:8,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`,marginBottom:8}}>
             <div style={{fontSize:10,color:B.ash,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Outline colour</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:9}}>
@@ -9921,11 +9992,12 @@ export default function App() {
     ...(mediaObj ? [{ key:"photo", label:videoObj?"Video":"Photo", icon:"▣" }] : []),
     ...(postHasCopy ? [{ key:"text", label:textRoleLabel, icon:"T" }] : []),
     ...(logoRendered ? [{ key:"logo", label:"Logo", icon:"❋" }] : []),
-    // (Shape chip — client feedback 2026-07-10) Archetypes whose variants pair a
-    // brand shape (shape_cutout) expose a Shape element, so the cutout
-    // silhouette is editable in the inspector like any other element.
-    ...((ARCHETYPES_BY_ID[archetypeId]?.variants || []).some(v => v.shapeId)
-      ? [{ key:"shape", label:"Shape", icon:"✦" }] : []),
+    // (Free shapes — client 2026-07-10) The Shapes chip is the HOME of the free-shape
+    // system: it is the entry point for ADDING shapes and lists every shape layer on the
+    // design, plus (for shape_cutout etc.) the archetype's own "Layout shape" variant
+    // picker. Shown whenever a design exists so "add a shape" is always one tap away.
+    ...((archetypeId || postHasCopy || mediaObj || overlayLayers.length)
+      ? [{ key:"shape", label:"Shapes", icon:"✦" }] : []),
     ...overlayLayers.map(l => {
       const a = overlays.find(o => o.id === l.assetId);
       return { key:l.uid, label:a?.name || "Overlay", icon:"✦", thumb:a?.dataUrl||a?.src, overlay:true };
@@ -9956,7 +10028,7 @@ export default function App() {
   const inspectorInfo = (() => {
     if (inspectorEl == null) return null;
     if (inspectorEl === "bg")    return { title:"Background", body:renderBackgroundPanel() };
-    if (inspectorEl === "shape") return { title:"Shape", body:renderShapeVariantPanel() };
+    if (inspectorEl === "shape") return { title:"Shapes", body:renderShapesHome() };
     if (inspectorEl === "photo") return { title:videoObj?"Video":"Photo", body:renderPhotoPanel() };
     if (inspectorEl === "text")  return { title:textInspectorTitle, body:renderTextPanel("wo-text-primary-inspector") };
     if (inspectorEl === "logo")  return { title:"Logo", body:(
