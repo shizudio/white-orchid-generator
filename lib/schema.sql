@@ -220,6 +220,25 @@ create table if not exists design_templates (
 );
 create index if not exists design_templates_brand_idx on design_templates (brand_id, deleted, updated_at desc);
 
+-- (Moodboard → Templates P2 — docs/moodboard-templates-spec.md §4/§5) The template
+-- PROPOSAL lifecycle. `status` distinguishes the working set from machine-proposed
+-- candidates the human has not yet gated: 'official' (in the Templates gallery —
+-- hand-saved, starter, or a proposal the owner accepted), 'proposed' (synthesized
+-- by the nightly learning pass, awaiting the review pop-up — NEVER shown in the
+-- working set, spec §4), 'declined' (kept as evidence so the pattern ledger learns
+-- the decline, spec §5). `rationale` is the one-paragraph honesty note the
+-- synthesizer writes (names the real moodboard sources, spec "one voice / honesty");
+-- `source_moodboard_ids` is the jsonb array of brand_moodboard ids that inspired the
+-- proposal (spec §4). Idempotent; default 'official' so every pre-existing row (and
+-- an un-migrated DB) is treated exactly as a working template — the gallery is
+-- unchanged until a proposal is actually synthesized.
+alter table design_templates add column if not exists status               text not null default 'official';
+alter table design_templates add column if not exists rationale            text;
+alter table design_templates add column if not exists source_moodboard_ids jsonb;
+-- Proposal queries filter by (brand_id, status) — e.g. "the one pending proposal"
+-- and "hide proposed/declined from the gallery" — so give that pair its own index.
+create index if not exists design_templates_status_idx on design_templates (brand_id, status);
+
 -- Design drafts (cross-device working doc — mirrors localStorage "wo-workdoc")
 -- id is a stable per-design draft key (e.g. "current"); latest-write-wins by updated_at.
 create table if not exists design_drafts (
@@ -292,6 +311,15 @@ create table if not exists brand_moodboard (
 );
 create index if not exists brand_moodboard_brand_idx on brand_moodboard (brand_id, ts desc);
 
+-- (Moodboard → Templates P1 — docs/moodboard-templates-spec.md §2) The aspirational
+-- GENE vocabulary extracted from each inspiration image by one cheap vision call at
+-- upload time (lib/moodboard-genes.js): { paletteClass, compositionDevice, photoTreatment,
+-- typeRegister, densityClass } — the study-2 composition taxonomy the pattern miner reads.
+-- Idempotent; nullable so a classification failure (or an un-migrated DB) stores the item
+-- with genes:null and NEVER blocks the upload. The nightly learning pass backfills null rows
+-- (capped per night) and reads these at weight 0.5 alongside likes at 1.0 (lib/preferences.js).
+alter table brand_moodboard add column if not exists genes jsonb;
+
 -- AI feedback events (WP-W / self-improvement-loop §1 — the capture layer).
 -- One row per chat turn: the user's verbatim message, the patch emitted, a
 -- compact before/after design diff, the renderTruth honesty verdict (incl. any
@@ -315,6 +343,24 @@ create table if not exists ai_feedback_events (
 );
 create index if not exists ai_feedback_events_session_idx on ai_feedback_events (brand_id, session_id, created_at desc);
 create index if not exists ai_feedback_events_created_idx on ai_feedback_events (brand_id, created_at desc);
+
+-- (G1 · docs/asset-pipeline.md Part V) LANDING ROTATION MEMORY — the frequency-cap
+-- + anti-repeat ring that keeps ONE brand's Instagram feed varied (petal ≤1-in-8,
+-- dark share 25–30%, no two adjacent solids sharing a field). It is correctly
+-- GLOBAL PER BRAND (it protects a single feed's rhythm), so it lives in ONE row
+-- keyed by brand_id — surviving deploys and shared across serverless instances,
+-- unlike the old module-level in-memory ring which reset on deploy and diverged per
+-- instance (app/api/assistant/route.js RECENT_PICKS / RECENT_VKINDS / LAST_BG).
+-- `state` carries { recentPicks:[], recentVKinds:[], lastBg:null }, capped at
+-- RECENT_MAX (12) entries. Concurrency is last-write-wins (worst case one lost pick,
+-- self-corrects within a RECENT_MAX window). Idempotent; an absent table/env
+-- degrades to the in-memory ring (lib/rotation-state.js) — exactly today's rhythm
+-- behaviour minus durability. No seed row needed: the first landing turn upserts it.
+create table if not exists brand_rotation (
+  brand_id   uuid primary key default '00000000-0000-0000-0000-000000000001',
+  updated_at timestamptz default now(),
+  state      jsonb not null default '{}'::jsonb
+);
 
 -- ── Seed brand kit (one row) ──────────────────
 insert into brand_kit (id) values ('00000000-0000-0000-0000-000000000001')
