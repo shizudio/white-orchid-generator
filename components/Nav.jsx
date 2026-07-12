@@ -5,7 +5,9 @@ export default function Nav({ section }) {
   return (
     <nav className="app-nav" style={{ background: 'var(--bg-deep)', padding: '0 32px', height: 64, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line-on-deep)', position: 'sticky', top: 0, zIndex: 100 }}>
       <Link className="app-nav-brand" href="/" aria-label="The White Orchid home" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', borderBottom: 'none' }}>
-        <img src="/assets/logos/ds/logo-circle.png" alt="" style={{ width: 28, height: 28, objectFit: 'contain', filter: 'brightness(0) invert(0.92) sepia(0.2) saturate(0.4)' }} />
+        {/* The real circle mark (ivory orchid on brand green) — the old CSS
+            filter washed it into a blank disc (client feedback 2026-07-10). */}
+        <img src="/assets/logos/ds/logo-circle.png" alt="" style={{ width: 30, height: 30, objectFit: 'contain' }} />
         <span className="app-nav-wordmark" style={{ fontFamily: 'var(--font-wordmark)', fontSize: 11, letterSpacing: '0.18em', color: 'var(--fg-on-deep)', textTransform: 'uppercase' }}>
           The White Orchid
         </span>
