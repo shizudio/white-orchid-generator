@@ -9392,6 +9392,41 @@ export default function App() {
     );
   };
 
+  // (Shape chip — client feedback 2026-07-10) The cutout-silhouette picker for
+  // archetypes whose variants pair a brand shape with a contrast-safe field
+  // colour (shape_cutout). Choosing a shape routes the WHOLE variant through
+  // applyInspectorPatch (one-patch pipeline: undoable, honest, pin-aware) —
+  // the shape/field pairing is deliberate, keeping every combination legible.
+  const renderShapeVariantPanel = () => {
+    const vars = ARCHETYPES_BY_ID[archetypeId]?.variants || [];
+    return (
+      <>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          {vars.map((v, i) => {
+            if (!v.shapeId) return null;
+            const a = overlays.find(o => o.id === v.shapeId);
+            const sel = archVariant === i;
+            return (
+              <button key={`${v.shapeId}-${i}`} type="button" aria-pressed={sel} title={a?.name || v.shapeId}
+                onClick={()=>applyInspectorPatch({archetypeId, archVariant:i},{controlId:"shape"})}
+                style={{width:64,height:64,borderRadius:12,cursor:"pointer",display:"grid",placeItems:"center",
+                  background:B[v.bg] || v.bg,transition:"all 0.15s",
+                  border:sel?`3px solid ${B.burnham}`:`2px solid ${B.ash}44`,
+                  transform:sel?"scale(1.06)":"scale(1)"}}>
+                {(a?.dataUrl || a?.src)
+                  ? <img src={a.dataUrl || a.src} alt="" style={{width:40,height:40,objectFit:"contain",opacity:0.92}} />
+                  : <span aria-hidden="true" style={{fontSize:20,color:"#fff"}}>✦</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{fontSize:10,color:B.ash,marginTop:8,fontFamily:F.body,lineHeight:1.5}}>
+          Each shape comes with its matched field colour, so the pairing always stays legible.
+        </div>
+      </>
+    );
+  };
+
   const renderBackgroundPanel = () => (
     <>
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
@@ -9856,6 +9891,11 @@ export default function App() {
     ...(mediaObj ? [{ key:"photo", label:videoObj?"Video":"Photo", icon:"▣" }] : []),
     ...(postHasCopy ? [{ key:"text", label:textRoleLabel, icon:"T" }] : []),
     ...(logoRendered ? [{ key:"logo", label:"Logo", icon:"❋" }] : []),
+    // (Shape chip — client feedback 2026-07-10) Archetypes whose variants pair a
+    // brand shape (shape_cutout) expose a Shape element, so the cutout
+    // silhouette is editable in the inspector like any other element.
+    ...((ARCHETYPES_BY_ID[archetypeId]?.variants || []).some(v => v.shapeId)
+      ? [{ key:"shape", label:"Shape", icon:"✦" }] : []),
     ...overlayLayers.map(l => {
       const a = overlays.find(o => o.id === l.assetId);
       return { key:l.uid, label:a?.name || "Overlay", icon:"✦", thumb:a?.dataUrl||a?.src, overlay:true };
@@ -9886,6 +9926,7 @@ export default function App() {
   const inspectorInfo = (() => {
     if (inspectorEl == null) return null;
     if (inspectorEl === "bg")    return { title:"Background", body:renderBackgroundPanel() };
+    if (inspectorEl === "shape") return { title:"Shape", body:renderShapeVariantPanel() };
     if (inspectorEl === "photo") return { title:videoObj?"Video":"Photo", body:renderPhotoPanel() };
     if (inspectorEl === "text")  return { title:textInspectorTitle, body:renderTextPanel("wo-text-primary-inspector") };
     if (inspectorEl === "logo")  return { title:"Logo", body:(
