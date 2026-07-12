@@ -7,7 +7,7 @@ import { useBrandKit } from "./BrandProvider";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
 import { runLocalAudit as computeLocalAudit, computeReadyChecklist, ackKey, isAcked, partitionIssues, ackFingerprint, normalizeAuditFinding, mergeAuditIntoChecklist, reconcileAuditFindings, ledgerAnchorKey, PLATFORM_SAFE } from "@/lib/audit-local";
 import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fetchDraft, pushDraft, mergeTemplates, isTemplateSyncEligible } from "@/lib/cloud-sync";
-import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, looksLikeGuardSession, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
+import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, setHarnessMode, isHarnessMode, purgeGuardSessions, looksLikeGuardSession, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
 import { listMoodboard, addMoodboardItem, removeMoodboardItem } from "@/lib/moodboard";
 // (Moodboard→Templates §5) The P2 enum-level precheck, reused client-side as the
@@ -9370,7 +9370,12 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined" || !DEV_HOOKS) return;
     window.__woMockProposal = (row) => intakeProposalRef.current?.(row, { mock: true });
-    return () => { try { delete window.__woMockProposal; } catch { /* already gone */ } };
+    // Manual QA needs harness mode HELD ACROSS a whole interactive flow (the
+    // wrapped __wo* guards only cover their own run). Dev-only, same A1 flag —
+    // while on, session autosave no-ops local + cloud (M8: no test pollution);
+    // a reload restores normal persistence (module flag resets to false).
+    window.__woHarnessMode = (on) => { setHarnessMode(on); return isHarnessMode(); };
+    return () => { try { delete window.__woMockProposal; delete window.__woHarnessMode; } catch { /* already gone */ } };
   }, []);
   // The three actions — exactly these (spec §5).
   const resolveProposal = async (action) => {   // 'accept' | 'decline'
