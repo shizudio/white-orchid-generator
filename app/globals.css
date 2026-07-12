@@ -1905,3 +1905,14 @@ canvas[role="application"]:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .wo-inspector-dock { animation: none !important; }
 }
+
+/* ── (Moodboard→Templates spec §5 + §6) Template card actions + proposal modal
+   buttons. Visual style is inline (Generator.jsx house pattern); this class only
+   guarantees the WCAG 2.5.5 / Apple HIG 44px tap floor on mobile — desktop keeps
+   the compact popover-scale buttons. ── */
+@media (max-width: 767px) {
+  .wo-tpl-act {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

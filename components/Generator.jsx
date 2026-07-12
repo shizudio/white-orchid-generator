@@ -10,6 +10,9 @@ import { fetchTemplates, pushTemplate, deleteTemplate as cloudDeleteTemplate, fe
 import { newSessionId, newTurnId, getCurrentSessionId, setCurrentSessionId, saveSession, localSaveSession, localGetSession, localGetAllSessions, cloudListSessions, cloudGetSession, mergeSessionTiles, installFeedbackDump, enrichVerdict as enrichVerdictClient, logFeedback as logFeedbackClient, withHarnessMode, purgeGuardSessions, looksLikeGuardSession, setSessionLiked, buildGenes, classifySceneCategory, logLike } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
 import { listMoodboard, addMoodboardItem, removeMoodboardItem } from "@/lib/moodboard";
+// (Moodboard→Templates §5) The P2 enum-level precheck, reused client-side as the
+// first layer of the born-clean render gate before a proposal may be shown.
+import { precheckProposalState } from "@/lib/proposal-engine";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
    DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
@@ -314,7 +317,11 @@ const SK_LIB = "wo-image-library";
 const SK_OVL = "wo-overlays";       // overlay asset library
 const SK_DOC = "wo-workdoc";        // placed overlay layers (working doc)
 const SK_TPL = "wo-design-templates"; // reusable complete design templates
+const SK_HIDDEN_STARTERS = "wo-hidden-starters"; // starter template ids removed from the gallery (device-local — starters have no DB row)
 const SK_DOC_TS = "wo-workdoc-ts";    // local timestamp of last working-doc save (for cross-device newer-draft detection)
+// (Moodboard→Templates §5) "Later" on the review pop-up — sessionStorage clears
+// with the tab, so the dismissed proposal returns NEXT session, never mid-work.
+const SK_PROPOSAL_LATER = "wo-proposal-later";
 const MAX_LIB = 15;
 
 const TYPE_LAYOUT_DEFAULTS = {
@@ -3089,6 +3096,23 @@ export default function App() {
   const [moodboardCfg, setMoodboardCfg] = useState(false);
   const [moodEnlarged, setMoodEnlarged] = useState(null); // an item shown enlarged, or null
   const moodInputRef = useRef(null);
+  // (Moodboard→Templates §5) The pending template PROPOSAL under review, or null.
+  // Shape: { id, name, rationale, state, thumb, sources:[{id,image}], mock }.
+  // Set only by the intake pipeline AFTER the born-clean render gate passes —
+  // an unreviewed proposal influences nothing; a failing one is never surfaced.
+  const [proposal, setProposal] = useState(null);
+  const [proposalBusy, setProposalBusy] = useState(null); // 'accept' | 'decline' | null while a PATCH is in flight
+  const [proposalErr, setProposalErr] = useState("");     // warm retryable line (law 6 — never a dead end)
+  // (Moodboard→Templates §6) Template EDIT mode — {id, name, starter} of the
+  // template being edited in place, or null. Opening rides applyDesignTemplate;
+  // Save updates the SAME row; Save-as-new forks via saveDesignTemplate.
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [tplNotice, setTplNotice] = useState("");          // transient confirmation line under the canvas
+  const [confirmRemoveTpl, setConfirmRemoveTpl] = useState(null); // template id awaiting the Remove confirm
+  // Starters have no DB row to soft-delete, so Remove hides them on THIS device
+  // (persisted; one-tap restore keeps it reversible — honesty over false parity).
+  const [hiddenStarters, setHiddenStarters] = useState([]);
+  const hiddenStartersLoaded = useRef(false);
   // (Export CTA — ratified) Export moved from the top bar to the below-canvas
   // control strip as the primary tangerine CTA; this drives its popover.
   const [exportOpen, setExportOpen] = useState(false);
@@ -4431,6 +4455,14 @@ export default function App() {
   // Official brand assets are cloud-authoritative — never persisted locally.
   useEffect(() => { if (ready) sSet(SK_OVL, overlays.filter(o => !o.official)); }, [overlays, ready]);
   useEffect(() => { if (ready) sSet(SK_TPL, designTemplates); }, [designTemplates, ready]);
+  // (Moodboard→Templates §6) Hidden starters: load once, persist after the load
+  // has landed (the loaded ref stops a mount-time [] from clobbering the store).
+  useEffect(() => { (async () => {
+    const h = await sGet(SK_HIDDEN_STARTERS);
+    if (Array.isArray(h)) setHiddenStarters(h.filter(id => typeof id === "string"));
+    hiddenStartersLoaded.current = true;
+  })(); }, []);
+  useEffect(() => { if (hiddenStartersLoaded.current) sSet(SK_HIDDEN_STARTERS, hiddenStarters); }, [hiddenStarters]);
 
   /* ── (WP-W) Session init — restore the current session or mint a new one ──
      Runs once ready. If a current session exists (this or another device), open
@@ -9039,7 +9071,7 @@ export default function App() {
   };
   const saveDesignTemplate = () => {
     const name = (window.prompt("Template name", `Design template ${designTemplates.length + 1}`) || "").trim();
-    if (!name) return;
+    if (!name) return false;
     const thumb = templateThumb();
     const state = currentTemplateState();
     const localId = "dt_" + Date.now().toString(36);
@@ -9049,13 +9081,14 @@ export default function App() {
     saveOverlays();
     // Sync to the shared library when eligible; on failure keep local + mark unsynced (retried next mount).
     if (cloudTplConfigured) {
-      if (!isTemplateSyncEligible(tpl)) { markLocalOnly(localId); return; }
+      if (!isTemplateSyncEligible(tpl)) { markLocalOnly(localId); return true; }
       pushTemplate({ name, thumb, state }).then(r => {
         if (r.configured && r.template) replaceTemplateId(localId, r.template);
         else if (r.tooLarge) markLocalOnly(localId);
         else markUnsynced(localId, true);
       });
     }
+    return true;
   };
   const applyDesignTemplate = (template) => {
     const s = template?.state; if (!s) return;
@@ -9143,9 +9176,249 @@ export default function App() {
   };
   const deleteDesignTemplate = (id) => {
     setDesignTemplates(prev => prev.filter(t => t.id !== id));
-    // Soft-delete cloud rows (uuid ids). Local-only "dt_*" ids never hit the API.
+    // Soft-delete cloud rows (uuid ids) — the API sets deleted:true, reversible
+    // in DB (spec §6). Local-only "dt_*" ids never hit the API.
     if (cloudTplConfigured && /^[0-9a-f-]{36}$/i.test(id)) cloudDeleteTemplate(id);
   };
+
+  /* ── (Moodboard→Templates spec §6) TEMPLATE MANAGEMENT — Remove + Edit ───────
+     Every template in the gallery gets Remove (soft-delete, confirmed, reversible
+     server-side) and Edit (opens the template as the working design through THE
+     applyDesignTemplate path — pins/undo laws hold by construction; saving
+     updates the template in place with a confirmation, or saves-as-new). No
+     template is ever auto-modified by the system: only these explicit gestures
+     write to a template row. */
+  const isStarterTemplate = (t) => !!t && STARTER_TEMPLATES.some(s => s.id === t.id);
+  // Remove (post-confirm): user templates soft-delete server-side; starters are
+  // module constants with no DB row, so Remove hides them on THIS device
+  // (persisted + one-tap restorable in the same menu — reversible, honestly local).
+  const removeTemplate = (template) => {
+    if (!template) return;
+    if (isStarterTemplate(template)) setHiddenStarters(prev => prev.includes(template.id) ? prev : [...prev, template.id]);
+    else deleteDesignTemplate(template.id);
+    if (editingTemplate?.id === template.id) setEditingTemplate(null);
+    setConfirmRemoveTpl(null);
+  };
+  const startEditTemplate = (template) => {
+    if (!template) return;
+    if (!applyTemplateWithGuard(template)) return;   // user kept their work — stay put
+    setEditingTemplate({ id: template.id, name: template.name, starter: isStarterTemplate(template) });
+    setTopMenu(null);
+  };
+  // Save IN PLACE — updates the same template row (cloud upsert by uuid) after a
+  // confirmation; the working design itself is untouched (you keep editing).
+  const saveEditedTemplate = () => {
+    const et = editingTemplate;
+    if (!et || et.starter) return;   // built-ins can't be updated in place (Save-as-new only — law 6, never offer what we can't execute)
+    if (!window.confirm(`Update the template “${et.name}” with the current design?`)) return;
+    let thumb = null; try { thumb = templateThumb(); } catch { /* canvas not ready — keep the old thumb */ }
+    const state = currentTemplateState();
+    setDesignTemplates(prev => prev.map(t => t.id === et.id ? { ...t, ...(thumb ? { thumb } : {}), state } : t));
+    const tpl = { id: et.id, name: et.name, thumb, state };
+    if (cloudTplConfigured && /^[0-9a-f-]{36}$/i.test(et.id)) {
+      if (!isTemplateSyncEligible(tpl)) markLocalOnly(et.id);
+      else pushTemplate(tpl).then(r => {
+        if (r.configured && r.template) setDesignTemplates(prev => prev.map(t => t.id === et.id ? { ...t, name: r.template.name, thumb: r.template.thumb, state: r.template.state, synced: true, unsynced: false } : t));
+        else if (r.tooLarge) markLocalOnly(et.id);
+        else markUnsynced(et.id, true);
+      });
+    }
+    setTplNotice(`Template “${et.name}” updated.`);
+    setEditingTemplate(null);
+  };
+  const saveEditedAsNew = () => {
+    if (saveDesignTemplate()) { setTplNotice("Saved as a new template."); setEditingTemplate(null); }
+  };
+  // The confirmation line fades on its own — it is a receipt, not a task.
+  useEffect(() => {
+    if (!tplNotice) return;
+    const t = setTimeout(() => setTplNotice(""), 6000);
+    return () => clearTimeout(t);
+  }, [tplNotice]);
+  // An armed inline Remove confirm disarms when the Templates popover closes —
+  // reopening the menu never greets the user with a live "Yes, remove".
+  useEffect(() => { if (topMenu !== "templates") setConfirmRemoveTpl(null); }, [topMenu]);
+
+  /* ── (Moodboard→Templates spec §5) PROPOSAL REVIEW — the human gate ──────────
+     On studio load, if ONE pending proposal exists (status:'proposed'), it is
+     gated then shown in a calm modal. BORN-CLEAN GATE (the law): the proposal's
+     state is enum-prechecked (precheckProposalState — P2's own validator) and
+     then offscreen-rendered in ALL 6 formats with captureAudit; any fail-severity
+     readiness finding (copy-volume tradeoffs excluded — a proposal carries no
+     real copy; the gate renders the __woBornCleanGuard sample profile) discards
+     the proposal: PATCH-declined with a note and logged kind:'proposal-render-fail',
+     never surfaced. The renders ride the SAME archOverride path the calibration
+     board and guards use — renderScene re-materializes the archetype exactly as
+     applyDesignTemplate will if accepted, so the thumbnail IS the accept outcome.
+     Graceful: cloud unconfigured / unmigrated → no popup, nothing breaks. */
+  // Copy-volume findings are user-content tradeoffs, not proposal defects (the
+  // exact exclusion __woBornCleanGuard uses) — everything else fail-severity blocks.
+  const PROPOSAL_GATE_EXCLUDED = new Set(["copy-dropped", "copy-caption-long", "thumb-legibility", "degradation-drops"]);
+  // Fixed sample copy (the guard's short profile) so the gate + preview show real
+  // type deterministically; the stored template's copy stays empty (placeholder convention).
+  const PROPOSAL_SAMPLE_COPY = { headline: "Open house", subtext: "This Saturday", attribution: "The White Orchid", dateText: "18 July" };
+  const proposalRenderGate = (state) => {
+    const pre = precheckProposalState(state || null);
+    if (!pre.ok) return { ok: false, reasons: pre.reasons };
+    const prev = auditRef.current, prevBounds = textBoundsRef.current;
+    const reasons = [];
+    try {
+      for (const d of DIMENSIONS) {
+        const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+        renderScene(c.getContext("2d"), d.w, d.h, {
+          dimensionId: d.id, live: false, captureAudit: true,
+          archOverride: state.archetypeId,
+          archVariant: Number.isInteger(state.archVariant) ? state.archVariant : 0,
+          calibrationContent: PROPOSAL_SAMPLE_COPY,
+        });
+        let signal = null;
+        try { signal = JSON.parse(JSON.stringify(auditRef.current)); } catch { signal = auditRef.current; }
+        const verdict = computeReadyChecklist([{ dimensionId: d.id, signal }]).formats[0];
+        for (const iss of (verdict.issues || [])) {
+          if (iss.severity === "fail" && !PROPOSAL_GATE_EXCLUDED.has(iss.id)) reasons.push(`${d.id}: ${iss.id}`);
+        }
+      }
+    } catch (e) { reasons.push("render-error: " + String(e?.message || e)); }
+    finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
+    return { ok: reasons.length === 0, reasons };
+  };
+  // The proposal's REAL portrait thumbnail — the same offscreen renderScene path,
+  // at ig_portrait, downscaled to a small JPEG for the modal.
+  const proposalThumb = (state) => {
+    try {
+      const d = DIMENSIONS.find(x => x.id === "ig_portrait") || DIMENSIONS[0];
+      const full = document.createElement("canvas"); full.width = d.w; full.height = d.h;
+      renderScene(full.getContext("2d"), d.w, d.h, {
+        dimensionId: d.id, live: false,
+        archOverride: state.archetypeId,
+        archVariant: Number.isInteger(state.archVariant) ? state.archVariant : 0,
+        calibrationContent: PROPOSAL_SAMPLE_COPY,
+      });
+      const tw = 480, th = Math.round(tw * d.h / d.w);
+      const t = document.createElement("canvas"); t.width = tw; t.height = th;
+      const x = t.getContext("2d"); x.imageSmoothingQuality = "high";
+      x.drawImage(full, 0, 0, tw, th);
+      return t.toDataURL("image/jpeg", 0.8);
+    } catch { return null; }
+  };
+  // Intake one proposal row: Later-check → born-clean gate → thumbnail + sources
+  // → show. `mock` (dev-only driver) never writes to the feedback pipe (M8 — no
+  // test pollution of the shared cloud); the real path logs + declines failures.
+  const intakeProposal = async (row, { mock = false } = {}) => {
+    if (!row || !row.id || !row.state || typeof row.state !== "object") return false;
+    try { if (sessionStorage.getItem(SK_PROPOSAL_LATER) === String(row.id)) return false; } catch { /* storage absent — show */ }
+    const gate = proposalRenderGate(row.state);
+    if (!gate.ok) {
+      // Born-clean law: "a proposal failing this is discarded and logged, never surfaced".
+      if (mock) {
+        // eslint-disable-next-line no-console
+        console.warn("[woMockProposal] failed the born-clean gate (mock — not logged to the pipe):", gate.reasons);
+      } else {
+        try {
+          logFeedbackClient({
+            turn_id: newTurnId(), session_id: null, kind: "proposal-render-fail",
+            user_message: "[proposal] failed the born-clean render gate",
+            verdict: { kind: "proposal-render-fail", proposalId: row.id, reasons: gate.reasons.slice(0, 12), ts: new Date().toISOString() },
+          });
+        } catch { /* never blocks */ }
+      }
+      // Decline with a note (rename rides the PATCH) so the declined row records why.
+      try {
+        await fetch("/api/templates", {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: row.id, action: "decline", name: `${row.name || "Proposal"} · failed render gate`.slice(0, 80) }),
+        });
+      } catch { /* graceful — it stays pending and re-gates next load */ }
+      return false;
+    }
+    const thumb = proposalThumb(row.state);
+    // The inspiring moodboard images — resolved by id against the moodboard list.
+    let sources = [];
+    try {
+      const ids = Array.isArray(row.source_moodboard_ids) ? row.source_moodboard_ids : [];
+      if (ids.length) {
+        const { items } = await listMoodboard();
+        const byId = new Map((items || []).map(i => [i.id, i]));
+        sources = ids.map(id => byId.get(id)).filter(i => i && i.image).slice(0, 6);
+      }
+    } catch { /* graceful — the modal shows without the strip */ }
+    setProposalErr("");
+    setProposal({ id: row.id, name: row.name || "Proposed template", rationale: row.rationale || "", state: row.state, thumb, sources, mock });
+    return true;
+  };
+  // Deferred callers (the load timer + the dev hook) go through the ref so they
+  // always run the CURRENT closure — never a stale renderScene (M1 discipline).
+  const intakeProposalRef = useRef(null); intakeProposalRef.current = intakeProposal;
+  const proposalCheckRan = useRef(false);
+  useEffect(() => {
+    if (!ready || !fontsLoaded || proposalCheckRan.current) return;
+    proposalCheckRan.current = true;
+    // Let the session restore + first paint settle before any offscreen sweep.
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/templates?status=proposed", { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (!j || j.configured === false || !Array.isArray(j.templates) || !j.templates.length) return;
+        await intakeProposalRef.current?.(j.templates[0]);   // one pending at a time (spec §5)
+      } catch { /* graceful — cloud absent/unreachable: no popup, nothing breaks */ }
+    }, 1800);
+    return () => clearTimeout(t);
+  }, [ready, fontsLoaded]);
+  // Dev-only driver: __woMockProposal(row) pushes a LOCAL row through the SAME
+  // intake (gate → thumb → modal) so the popup is verifiable without the cloud
+  // migration. Resolves true when shown, false when the gate discarded it.
+  useEffect(() => {
+    if (typeof window === "undefined" || !DEV_HOOKS) return;
+    window.__woMockProposal = (row) => intakeProposalRef.current?.(row, { mock: true });
+    return () => { try { delete window.__woMockProposal; } catch { /* already gone */ } };
+  }, []);
+  // The three actions — exactly these (spec §5).
+  const resolveProposal = async (action) => {   // 'accept' | 'decline'
+    const p = proposal; if (!p || proposalBusy) return;
+    setProposalBusy(action); setProposalErr("");
+    let j = null;
+    try {
+      const res = await fetch("/api/templates", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: p.id, action }),
+      });
+      j = await res.json().catch(() => null);
+    } catch { j = null; }
+    setProposalBusy(null);
+    if (p.mock) { setProposal(null); return; }   // dev driver: the PATCH went out (inspectable); no real row to gate
+    if (!j || j.ok !== true) {
+      // Law 6 — never a dead end: the row stays 'proposed' server-side, so the
+      // gesture stays retryable here and the popup returns next load if closed.
+      setProposalErr(j && j.unmigrated
+        ? "The template library hasn't been migrated for proposals yet — this will work after the database update runs."
+        : "Couldn't save that just now — please try again in a moment.");
+      return;
+    }
+    if (action === "accept") {
+      // Joins the Templates gallery. Persist the client-rendered thumb (the row
+      // was stored thumb-less server-side), then refresh the shared list.
+      try { if (p.thumb) await pushTemplate({ id: p.id, name: p.name, thumb: p.thumb, state: p.state }); } catch { /* thumb is cosmetic */ }
+      try {
+        const { configured, templates } = await fetchTemplates();
+        if (configured) setDesignTemplates(prev => mergeTemplates(prev, templates).merged);
+      } catch { /* list refreshes next mount */ }
+      setTplNotice(`“${p.name}” joined your templates.`);
+    }
+    setProposal(null);
+  };
+  const dismissProposalLater = () => {
+    const p = proposal; if (!p) return;
+    try { sessionStorage.setItem(SK_PROPOSAL_LATER, String(p.id)); } catch { /* storage absent */ }
+    setProposal(null);
+  };
+  // Escape = "Later" (dismiss until next session) — never an implicit decline.
+  useEffect(() => {
+    if (!proposal) return;
+    const onKey = (e) => { if (e.key === "Escape") dismissProposalLater(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposal]);
 
   /* ── (WP-W) SESSIONS — auto-save, restore, Posts list, open ──────────────────
      One session = one post. The design (currentTemplateState) + the chat
@@ -9391,11 +9664,14 @@ export default function App() {
     imgT.zoom !== 1 || imgT.cx !== 0.5 || imgT.cy !== 0.5 || (imgT.rotation||0) !== 0
   );
   // Unified entry for starter + saved templates: confirm only if work exists.
+  // Returns whether the template was applied — false when the user kept their
+  // work — so callers (startEditTemplate, spec §6) can gate follow-on state.
   const applyTemplateWithGuard = (template) => {
-    if (hasMeaningfulEdits && !window.confirm("Replace your current design with this template?")) return;
+    if (hasMeaningfulEdits && !window.confirm("Replace your current design with this template?")) return false;
     setActiveTemplateName(template?.name || "");
     setGalleryOpen(false);
     applyDesignTemplate(template);
+    return true;
   };
 
   const isOverride = (() => {
@@ -10240,6 +10516,34 @@ export default function App() {
       {sub && <div style={{fontSize:11,fontFamily:F.body,color:B.jet,lineHeight:1.5,marginTop:3}}>{sub}</div>}
     </div>
   );
+  /* ── (Moodboard→Templates spec §6) Per-card Edit + Remove row ────────────────
+     One affordance for EVERY gallery card. Remove is a two-tap inline confirm
+     (confirmRemoveTpl holds the armed id): user templates soft-delete server-side
+     (reversible in DB); starters hide on this device (Restore undoes). Edit rides
+     applyTemplateWithGuard, so unsaved work is protected by the same confirm the
+     apply path already uses. Buttons carry .wo-tpl-act for the 44px mobile floor. */
+  const renderTplActions = (template) => {
+    const starter = isStarterTemplate(template);
+    const armed = confirmRemoveTpl === template.id;
+    const act = {flex:"1 1 0",fontFamily:FU.subtitle,fontSize:9.5,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",background:"transparent",border:`1px solid ${B.ash}44`,borderRadius:7,padding:"5px 4px",cursor:"pointer",color:B.burnham,whiteSpace:"nowrap"};
+    if (armed) return (
+      <div style={{display:"flex",gap:5,marginTop:5,alignItems:"center"}}>
+        <button type="button" className="wo-tpl-act" onClick={()=>removeTemplate(template)}
+          title={starter?"Hide this built-in template on this device":"Remove this template for everyone (reversible by the studio owner)"}
+          style={{...act,color:"#fff",background:B.jet,border:`1px solid ${B.jet}`}}>Yes, remove</button>
+        <button type="button" className="wo-tpl-act" onClick={()=>setConfirmRemoveTpl(null)} style={act}>Keep</button>
+      </div>
+    );
+    return (
+      <div style={{display:"flex",gap:5,marginTop:5}}>
+        <button type="button" className="wo-tpl-act" onClick={()=>startEditTemplate(template)}
+          title={`Open “${template.name}” on the canvas to change it`} style={act}>Edit</button>
+        <button type="button" className="wo-tpl-act" onClick={()=>setConfirmRemoveTpl(template.id)}
+          title={starter?"Hide this built-in template":"Remove this template"} style={act}>Remove</button>
+      </div>
+    );
+  };
+
   const topMenuContent = () => {
     // (Feed gallery, ratified item 9) The Posts POPOVER is gone — clicking Posts
     // opens the full-canvas feed gallery instead (renderFeedGallery below).
@@ -10257,11 +10561,25 @@ export default function App() {
           </div>
         )}
         <MenuHead label="Templates" sub="Start from a finished design — everything stays editable." />
+        {/* (Moodboard→Templates spec §6) Every card — starter or saved — carries
+            Edit + Remove. Remove asks inline first (a two-tap confirm affordance,
+            never window.confirm for destruction); Edit opens the template as the
+            working design and arms the below-canvas save bar. */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
-          {STARTER_TEMPLATES.map(t=>(
-            <TemplateCard key={t.id} template={t} onClick={()=>{applyTemplateWithGuard(t);setTopMenu(null);}} />
+          {STARTER_TEMPLATES.filter(t=>!hiddenStarters.includes(t.id)).map(t=>(
+            <div key={t.id}>
+              <TemplateCard template={t} onClick={()=>{applyTemplateWithGuard(t);setTopMenu(null);}} />
+              {renderTplActions(t)}
+            </div>
           ))}
         </div>
+        {hiddenStarters.length>0&&(
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10,fontSize:11,fontFamily:F.body,color:B.ash,lineHeight:1.4}}>
+            <span style={{flex:"1 1 auto"}}>{hiddenStarters.length} built-in template{hiddenStarters.length>1?"s":""} hidden on this device.</span>
+            <button type="button" className="wo-tpl-act" onClick={()=>setHiddenStarters([])}
+              style={{fontFamily:FU.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.5,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}44`,borderRadius:999,padding:"5px 12px",cursor:"pointer"}}>Restore</button>
+          </div>
+        )}
         {designTemplates.length>0&&(
           <>
             <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",margin:"16px 0 8px",gap:8}}>
@@ -10278,9 +10596,10 @@ export default function App() {
                   {cloudTplConfigured&&(template.localOnly||template.unsynced)&&(
                     <span title={template.localOnly?"Too large to share — stays on this device":"Not yet synced — will retry"} style={{position:"absolute",top:4,left:4,fontSize:8,fontFamily:F.body,color:"#fff",background:B.jet+"cc",borderRadius:5,padding:"1px 4px",lineHeight:1.3}}>{template.localOnly?"This device":"Unsynced"}</span>
                   )}
-                  <button onClick={()=>deleteDesignTemplate(template.id)} title="Delete template"
-                    style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:9,border:"none",background:B.jet,color:"#fff",fontSize:12,lineHeight:"18px",cursor:"pointer",padding:0}}>×</button>
                   <div style={{fontSize:9,color:B.ash,marginTop:4,fontFamily:F.body,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"center"}}>{template.name}</div>
+                  {/* (spec §6) The instant × is gone — Remove now confirms inline
+                      like every other card, and Edit joins it. */}
+                  {renderTplActions(template)}
                 </div>
               ))}
             </div>
@@ -10733,6 +11052,74 @@ export default function App() {
       {/* (Ratified item 9) FULL-CANVAS FEED GALLERY — the Posts surface. */}
       {feedOpen && renderFeedGallery()}
 
+      {/* ── (Moodboard→Templates spec §5) PROPOSAL REVIEW MODAL — the human gate.
+            A calm overlay (the moodboard-enlarge treatment, never an alert): the
+            REAL rendered thumbnail (the exact accept outcome), the rationale in
+            the studio's own words, the inspiring moodboard images, and exactly
+            three actions. Tapping out / Escape = Later — dismissal is never an
+            implicit decline. Shown only AFTER the born-clean render gate passed. */}
+      {proposal && (
+        <div role="dialog" aria-modal="true" aria-label="A new template idea to review"
+          onClick={dismissProposalLater}
+          style={{position:"fixed",inset:0,zIndex:400,background:"rgba(37,45,40,0.72)",display:"grid",placeItems:"center",padding:16}}>
+          <div onClick={(e)=>e.stopPropagation()}
+            style={{background:"#fff",borderRadius:18,boxShadow:"0 24px 70px rgba(0,0,0,0.35)",
+              width:"min(94vw, 620px)",maxHeight:"88vh",overflowY:"auto",
+              padding:"22px 22px 18px",display:"flex",flexDirection:"column",gap:14}}>
+            <div>
+              <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.ash}}>A new template idea</div>
+              <div style={{fontFamily:F.title,fontSize:22,fontWeight:600,color:B.burnham,lineHeight:1.15,marginTop:4}}>{proposal.name}</div>
+            </div>
+            <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}}>
+              {proposal.thumb ? (
+                <img src={proposal.thumb} alt={`Preview of the proposed template “${proposal.name}”`}
+                  style={{width:200,maxWidth:"44%",flex:"0 0 auto",aspectRatio:"4 / 5",objectFit:"cover",borderRadius:12,border:`1px solid ${B.ash}33`,boxShadow:"0 6px 24px rgba(43,80,64,0.14)",display:"block"}} />
+              ) : (
+                <div style={{width:200,maxWidth:"44%",aspectRatio:"4 / 5",borderRadius:12,border:`1px solid ${B.ash}33`,display:"grid",placeItems:"center",fontSize:10,fontFamily:FU.subtitle,fontWeight:600,textTransform:"uppercase",color:B.ash}}>Preview unavailable</div>
+              )}
+              <div style={{flex:"1 1 220px",minWidth:200,display:"flex",flexDirection:"column",gap:12}}>
+                {proposal.rationale && (
+                  <div>
+                    <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase",color:B.ash,marginBottom:5}}>Why this idea</div>
+                    <p style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.55,margin:0}}>{proposal.rationale}</p>
+                  </div>
+                )}
+                {proposal.sources.length > 0 && (
+                  <div>
+                    <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase",color:B.ash,marginBottom:5}}>Inspired by your moodboard</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {proposal.sources.map(s=>(
+                        <img key={s.id} src={s.image} alt={s.note || "inspiration image"}
+                          style={{width:52,height:52,objectFit:"cover",borderRadius:8,border:`1px solid ${B.ash}33`,display:"block"}} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            {proposalErr && (
+              <div role="alert" style={{fontFamily:F.body,fontSize:12,color:B.burnham,background:`${B.wisteria}22`,border:`1px solid ${B.wisteria}66`,borderRadius:9,padding:"8px 11px",lineHeight:1.45}}>{proposalErr}</div>
+            )}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+              <button type="button" className="wo-tpl-act" disabled={!!proposalBusy} onClick={()=>resolveProposal("accept")}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"10px 18px",cursor:proposalBusy?"wait":"pointer",opacity:proposalBusy&&proposalBusy!=="accept"?0.6:1}}>
+                {proposalBusy==="accept"?"Adding…":"Add to templates"}
+              </button>
+              <button type="button" className="wo-tpl-act" disabled={!!proposalBusy} onClick={()=>resolveProposal("decline")}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}44`,borderRadius:999,padding:"10px 18px",cursor:proposalBusy?"wait":"pointer",opacity:proposalBusy&&proposalBusy!=="decline"?0.6:1}}>
+                {proposalBusy==="decline"?"Noting that…":"Not this one"}
+              </button>
+              <span style={{flex:1}} />
+              <button type="button" className="wo-tpl-act" disabled={!!proposalBusy} onClick={dismissProposalLater}
+                title="Ask me again next time I open the studio"
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.6,color:B.ash,background:"transparent",border:"none",borderRadius:999,padding:"10px 12px",cursor:"pointer"}}>
+                Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="generator-workspace" style={{display:"flex",flexWrap:"wrap"}}>
         {/* ── CHAT — THE PRIMARY RAIL (WP-V Stage 3, §2.1). A flex SIBLING of
               the canvas: docked LEFT on desktop, UNDER the canvas on mobile.
@@ -11067,6 +11454,42 @@ export default function App() {
                 style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Try again</button>
               <button type="button" aria-label="Dismiss" title="Dismiss" onClick={()=>setExportFail(null)}
                 style={{fontFamily:F.body,fontSize:16,lineHeight:1,color:B.ash,background:"transparent",border:"none",cursor:"pointer",padding:"0 2px"}}>×</button>
+            </div>
+          )}
+
+          {/* ── (Moodboard→Templates spec §6) TEMPLATE EDIT BAR ── While a template
+              is open for editing (startEditTemplate), this bar sits below the canvas
+              (same non-blocking surface as the toasts — nothing over the artwork):
+              Save changes updates the SAME template row after a confirmation;
+              Save as new forks; Done exits without writing. Built-ins can't be
+              updated in place, so their bar honestly offers only Save-as-new
+              (law 6 — never offer what we can't execute). */}
+          {editingTemplate && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:10,flexWrap:"wrap",
+              padding:"10px 14px",borderRadius:14,background:"#fff",
+              border:`1px solid ${B.wisteria}66`,boxShadow:"0 2px 10px rgba(43,80,64,0.10)"}}>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>
+                Editing template <strong style={{color:B.burnham,fontWeight:600}}>“{editingTemplate.name}”</strong>{editingTemplate.starter ? " — built-in, so save your version as a new template." : " — nothing changes until you save."}
+              </span>
+              {!editingTemplate.starter && (
+                <button type="button" className="wo-tpl-act" onClick={saveEditedTemplate}
+                  style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save changes</button>
+              )}
+              <button type="button" className="wo-tpl-act" onClick={saveEditedAsNew}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:editingTemplate.starter?"#fff":B.burnham,background:editingTemplate.starter?B.burnham:"transparent",border:editingTemplate.starter?"none":`1px solid ${B.burnham}44`,borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Save as new</button>
+              <button type="button" className="wo-tpl-act" aria-label="Stop editing this template" title="Stop editing — the template stays as it was"
+                onClick={()=>setEditingTemplate(null)}
+                style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.5,color:B.burnham,background:"transparent",border:`1px solid ${B.burnham}44`,borderRadius:999,padding:"7px 14px",cursor:"pointer",whiteSpace:"nowrap"}}>Done</button>
+            </div>
+          )}
+          {/* (spec §6) The save receipt — one quiet line, fades on its own. */}
+          {tplNotice && (
+            <div role="status" style={{width:"100%",maxWidth:820,marginTop:12,
+              display:"inline-flex",alignItems:"center",justifyContent:"center",gap:12,
+              padding:"10px 14px",borderRadius:14,background:"#fff",
+              border:`1px solid ${B.ash}44`,boxShadow:"0 2px 10px rgba(43,80,64,0.10)"}}>
+              <span style={{fontFamily:F.body,fontSize:12.5,color:B.jet,lineHeight:1.35}}>{tplNotice}</span>
             </div>
           )}
 
