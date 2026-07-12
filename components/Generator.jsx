@@ -4106,18 +4106,6 @@ export default function App() {
     setPhotoSel(false);
   };
 
-  // Legacy creative-plan (full-field) → route through the single apply path.
-  const applyCreativePlan = plan => {
-    applyDesignPatch({
-      postType: plan.postType, dimensionId: plan.dimensionId,
-      headline: plan.headline, subtext: plan.subtext,
-      attribution: plan.attribution, dateText: plan.dateText,
-      bgColor: plan.bgColor, textColorId: "auto",
-      logoId: plan.logoId, logoPosition: plan.logoPosition, logoSize: plan.logoSize,
-    });
-  };
-  const undoCreativePlan = () => undoLastAiChange();
-
   /* ── (WP-W0) RENDER TRUTH ── what is ACTUALLY on the canvas after the last
      live render: archetype, the drawn logo box/position, per-role drawn boxes
      and the silently-dead roles. The chat honesty check verifies the AI's
