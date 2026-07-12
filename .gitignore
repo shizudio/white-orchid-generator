@@ -16,3 +16,6 @@ generated/
 
 # Resident tester isolated production build
 .next-resident/
+
+# Isolated dev-server dist (wo-3210-iso launch config)
+.next-3210/

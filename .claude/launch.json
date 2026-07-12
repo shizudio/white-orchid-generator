@@ -19,6 +19,13 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "dev", "-p", "3210"],
       "port": 3210
+    },
+    {
+      "name": "wo-3210-iso",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "-p", "3210"],
+      "env": { "WO_DIST_DIR": ".next-3210" },
+      "port": 3210
     }
   ]
 }
