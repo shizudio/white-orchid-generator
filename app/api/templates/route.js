@@ -35,18 +35,59 @@ function isMissingConfig(err) {
     /not set|not configured|does not exist|schema cache/i.test(msg)
   );
 }
+// Distinct from a missing TABLE/env: an un-migrated DB has design_templates but not
+// the P2 `status`/`rationale`/`source_moodboard_ids` columns. A SELECT of a missing
+// column surfaces as Postgres 42703 (undefined_column); a missing column in an
+// UPDATE/INSERT payload surfaces as PostgREST PGRST204 ("Could not find the 'status'
+// column of 'design_templates' in the schema cache") — verified against the live
+// un-migrated DB 2026-07-12; 42703-only matching let PGRST204 fall through to
+// isMissingConfig's /schema cache/ pattern and mis-degrade PATCH to
+// {configured:false}. Match BOTH, and always check isMissingColumn first. We then
+// fall back to the legacy status-less query so the gallery keeps working before the
+// owner re-runs lib/schema.sql (graceful-degradation contract; docs §8 degraded path).
+function isMissingColumn(err) {
+  const msg = String(err?.message || err || '');
+  return err?.code === '42703' || err?.code === 'PGRST204'
+    || /column .* does not exist/i.test(msg)
+    || /could not find the '.+' column/i.test(msg);
+}
 
-export async function GET() {
+// GET /api/templates            → the working gallery (status:'official'/null;
+//                                  proposed + declined are NEVER shown — spec §4).
+// GET /api/templates?status=proposed → the pending proposal(s) for the review pop-up
+//                                  (P3), each carrying rationale + source_moodboard_ids.
+export async function GET(request) {
   let supabase;
   try { supabase = getAdminClient(); } catch { return unconfigured(); }
+  const wantStatus = new URL(request.url).searchParams.get('status');
+
   try {
-    const { data, error } = await supabase
+    // Prefer the status-aware select (P2 columns). Fall back to the legacy select on
+    // an un-migrated DB so the gallery still lists working templates.
+    let q = supabase
       .from('design_templates')
-      .select('id, name, thumb, state, created_at, updated_at')
+      .select('id, name, thumb, state, created_at, updated_at, status, rationale, source_moodboard_ids')
       .eq('brand_id', BRAND_ID)
       .eq('deleted', false)
       .order('updated_at', { ascending: false })
       .limit(LIST_CAP);
+    q = wantStatus
+      ? q.eq('status', wantStatus)                       // explicit filter (e.g. 'proposed')
+      : q.not('status', 'in', '("proposed","declined")'); // gallery: hide proposals + declines
+    let { data, error } = await q;
+
+    if (error && isMissingColumn(error)) {
+      // No status column yet: a proposal can't exist, so ?status=proposed is empty;
+      // the gallery is every non-deleted row (exactly today's behaviour).
+      if (wantStatus && wantStatus !== 'official') return Response.json({ templates: [], configured: true });
+      ({ data, error } = await supabase
+        .from('design_templates')
+        .select('id, name, thumb, state, created_at, updated_at')
+        .eq('brand_id', BRAND_ID)
+        .eq('deleted', false)
+        .order('updated_at', { ascending: false })
+        .limit(LIST_CAP));
+    }
     if (error) {
       if (isMissingConfig(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
@@ -101,6 +142,85 @@ export async function POST(request) {
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ template: data, configured: true }, { status: 201 });
+  } catch (err) {
+    if (isMissingConfig(err)) return unconfigured();
+    return Response.json({ error: String(err?.message || err) }, { status: 500 });
+  }
+}
+
+// PATCH /api/templates — the human gate (spec §5) + rename (spec §6).
+// Body: { id, action?: 'accept' | 'decline', name? }
+//   accept  → status 'proposed' → 'official' (joins the Templates gallery)
+//   decline → status 'proposed' → 'declined' (kept as evidence — the pattern
+//             ledger learns the decline; never hard-deleted here)
+//   name    → rename (any non-deleted template; may ride along with accept so
+//             an accepted proposal gets a real name in the same gesture)
+// Transitions are guarded server-side: accept/decline only ever move a row that
+// is CURRENTLY 'proposed' — a template can never be re-proposed or silently
+// re-statused by a stale client (nothing self-applies; the human gate is the
+// only path from 'proposed'). On an un-migrated DB (no status column, 42703)
+// proposals cannot exist, so accept/decline answer { ok:false, unmigrated:true }
+// — HTTP 200, never a 500 (graceful-degradation contract) — while rename still
+// works via the status-less update.
+export async function PATCH(request) {
+  if (isRateLimited(request)) {
+    return Response.json({ error: 'Too many changes — please wait a moment.' }, { status: 429 });
+  }
+  let supabase;
+  try { supabase = getAdminClient(); } catch { return unconfigured(); }
+
+  let body;
+  try { body = await request.json(); } catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+
+  const id = typeof body?.id === 'string' ? body.id.trim() : '';
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: 'id (uuid) is required' }, { status: 400 });
+
+  const action = body?.action == null ? null : String(body.action);
+  if (action !== null && action !== 'accept' && action !== 'decline') {
+    return Response.json({ error: "action must be 'accept' or 'decline'" }, { status: 400 });
+  }
+  const name = typeof body?.name === 'string' ? body.name.trim() : null;
+  if (name !== null && (!name || name.length > NAME_MAX)) {
+    return Response.json({ error: `name must be 1–${NAME_MAX} chars` }, { status: 400 });
+  }
+  if (!action && name === null) return Response.json({ error: 'nothing to change' }, { status: 400 });
+
+  const patch = { updated_at: new Date().toISOString() };
+  if (action) patch.status = action === 'accept' ? 'official' : 'declined';
+  if (name !== null) patch.name = name;
+
+  try {
+    let q = supabase
+      .from('design_templates')
+      .update(patch)
+      .eq('id', id)
+      .eq('brand_id', BRAND_ID)
+      .eq('deleted', false);
+    // The gate transition is only valid FROM 'proposed' (see contract above).
+    if (action) q = q.eq('status', 'proposed');
+    let { data, error } = await q.select('id, name, status, updated_at');
+
+    if (error && isMissingColumn(error)) {
+      // Un-migrated DB: no status column → no proposal can exist to gate.
+      if (action) return Response.json({ ok: false, configured: true, unmigrated: true });
+      ({ data, error } = await supabase
+        .from('design_templates')
+        .update({ name, updated_at: patch.updated_at })
+        .eq('id', id)
+        .eq('brand_id', BRAND_ID)
+        .eq('deleted', false)
+        .select('id, name, updated_at'));
+    }
+    if (error) {
+      if (isMissingConfig(error)) return unconfigured();
+      return Response.json({ error: error.message }, { status: 500 });
+    }
+    if (!Array.isArray(data) || data.length === 0) {
+      // No matching row: unknown id, deleted, or (for accept/decline) not
+      // currently 'proposed' — e.g. already gated from another tab.
+      return Response.json({ ok: false, configured: true, notFound: true }, { status: 404 });
+    }
+    return Response.json({ ok: true, configured: true, template: data[0] });
   } catch (err) {
     if (isMissingConfig(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
