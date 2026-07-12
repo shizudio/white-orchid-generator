@@ -20,6 +20,7 @@ A prompt-first social-media design studio for non-technical preschool staff (The
 | Feedback capture → learning loop | `docs/self-improvement-loop.md` (ratified) |
 | Tester cadence & guarantees | `docs/resident-tester/cadence.md` |
 | Taste evidence (likes vs moodboard) | `docs/composition-study-1.md` + `-2.md` (#2 overturns #1's separation conclusion) |
+| The generation pipeline, end to end (horizontal flow + vertical build + knobs board) | `docs/asset-pipeline.md` (points to `visual-language-spec.md` for archetype geometry, `format-design-spec.md` for per-format rules) |
 | Everything else in docs/ | history/reports — evidence, never law |
 
 `README.md` is **partly stale** (describes the dead Vite `src/App.jsx` layout). Trust `app/` + `components/`, not README.
