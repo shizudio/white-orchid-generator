@@ -7871,6 +7871,21 @@ export default function App() {
   // persistently-diverging state can't spin an infinite redraw loop). This turns a
   // silent broken card into a loud, self-correcting event.
   const fmtFitHealingRef = useRef(false);
+  // Shared one-shot corrective redraw — the ONLY way a fit divergence repaints.
+  // Reads refs exclusively (drawRef always draws the CURRENT format — trap M1);
+  // the per-cycle flag caps it at one in-flight heal no matter how many callers
+  // (dev poll + the event checks below) spot the same divergence. Schedule via a
+  // frame, but fall back to a timer so a backgrounded/throttled tab (where rAF
+  // is paused) still self-corrects. Returns true when THIS call scheduled it.
+  const scheduleFmtFitHeal = () => {
+    if (fmtFitHealingRef.current) return false;
+    fmtFitHealingRef.current = true;
+    let ran = false;
+    const heal = () => { if (ran) return; ran = true; drawRef.current?.("fmt-fit-heal"); fmtFitHealingRef.current = false; };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
+    setTimeout(heal, 32);
+    return true;
+  };
   useEffect(() => {
     if (typeof window === "undefined") return;
     const isDev = process.env.NODE_ENV !== "production";
@@ -7884,25 +7899,76 @@ export default function App() {
         // surface transient mis-fits even when the tab is backgrounded/throttled.
         if (isDev) { (window.__woFormatFitLog = window.__woFormatFitLog || []).push({ t: Date.now(), ...rec }); if (window.__woFormatFitLog.length > 50) window.__woFormatFitLog.shift(); }
         // Self-heal: a stale-dims buffer OR an unpainted ivory dead-strip is fixed by
-        // one fresh live redraw (drawRef.current always uses the CURRENT format). A
-        // css-aspect divergence is a layout/CSS issue a redraw can't fix, so we don't
-        // thrash the canvas for that one. Schedule via a frame, but fall back to a timer
-        // so a backgrounded/throttled tab (where rAF is paused) still self-corrects.
+        // one fresh live redraw. A css-aspect divergence is a layout/CSS issue a
+        // redraw can't fix, so we don't thrash the canvas for that one.
         const drawable = rec.diverged.some(d => d.startsWith("buffer") || d.startsWith("dead-strip"));
-        if (drawable && !fmtFitHealingRef.current) {
-          fmtFitHealingRef.current = true;
-          let ran = false;
-          const heal = () => { if (ran) return; ran = true; drawRef.current?.("fmt-fit-heal"); fmtFitHealingRef.current = false; };
-          if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
-          setTimeout(heal, 32);
-        }
+        if (drawable) scheduleFmtFitHeal();
       } else if (isDev) { window.__woFormatFitLast = null; }
     };
     // Dev-only steady interval so any regression is caught during real usage flows.
     if (isDev) timer = setInterval(run, 250);
     if (isDev) window.__woFmtFitCheck = () => checkFormatFit();   // dev-only (item 8)
-    return () => { if (raf) cancelAnimationFrame(raf); if (timer) clearInterval(timer); try { delete window.__woFmtFitCheck; } catch {} };
+    // Dev-only driver for the (A5) event-check below — lets verification inject a
+    // divergence and fire the exact event path deterministically (item 8).
+    if (isDev) window.__woFmtFitEventCheck = (o) => fmtFitEventCheckRef.current?.(o || "manual");
+    return () => { if (raf) cancelAnimationFrame(raf); if (timer) clearInterval(timer); try { delete window.__woFmtFitCheck; delete window.__woFmtFitEventCheck; } catch {} };
   }, [checkFormatFit]);
+
+  /* ── (A5) PRODUCTION-SAFE EVENT-DRIVEN FORMAT-FIT CHECKS ─────────────────────
+     The 250ms poll above is deliberately dev-only; production previously had NO
+     catch at all, so a mis-sized canvas could ship silently (ratified gap,
+     asset-pipeline Part V). Instead of polling in production, run ONE
+     checkFormatFit after each of the two event classes that historically
+     produce the divergence (the stale-closure repaint family — M1, ea52363):
+       (a) a dimensionId change settles;
+       (b) an async media load lands (imageObj/videoObj).
+     At most ONE corrective redraw per event — the shared scheduler's per-cycle
+     flag enforces it. Every deferred call routes through refs: the check fires
+     in a timer/rAF continuation, and a captured checkFormatFit would carry the
+     PREVIOUS render's (W,H) closure (trap M1). Production firings are logged
+     via logFeedback (kind:'format-fit-heal', fire-and-forget) so a prod heal —
+     previously invisible — leaves a trace in the learning loop. */
+  const fmtFitEventCheckRef = useRef(null);
+  fmtFitEventCheckRef.current = (origin) => {
+    const rec = checkFormatFit();
+    if (process.env.NODE_ENV !== "production") {   // dev breadcrumb (item 8)
+      (window.__woFmtFitEventLog = window.__woFmtFitEventLog || []).push({ origin, t: Date.now(), diverged: rec ? rec.diverged : null });
+      if (window.__woFmtFitEventLog.length > 50) window.__woFmtFitEventLog.shift();
+    }
+    if (!rec) return;
+    if (process.env.NODE_ENV !== "production") { /* eslint-disable-next-line no-console */ console.warn("[woFormatFit] event divergence", origin, rec); }
+    const drawable = rec.diverged.some(d => d.startsWith("buffer") || d.startsWith("dead-strip"));
+    if (!drawable) return;
+    if (scheduleFmtFitHeal()) {
+      // (self-improvement-loop §1) capture the heal — never blocks the UX.
+      try {
+        logFeedbackClient({
+          turn_id: newTurnId(), session_id: sessionId || null, kind: "format-fit-heal",
+          fit_heal: { origin, diverged: rec.diverged, state: rec.state, buffer: rec.buffer, source: rec.source },
+        });
+      } catch { /* never surface */ }
+    }
+  };
+  // One-shot settle-then-check per event: rAF-pair (post-commit, post-paint)
+  // raced against a plain timer so a backgrounded/throttled tab still checks
+  // (mirrors __woFormatFitGuard's settle). Cleanup cancels a superseded event
+  // (rapid format switches collapse to the LAST one) — ≤1 check, ≤1 heal each.
+  useEffect(() => {   // (a) dimensionId change settles
+    if (typeof window === "undefined") return;
+    let done = false;
+    const fire = () => { if (done) return; done = true; fmtFitEventCheckRef.current?.("dim-change"); };
+    const t = setTimeout(fire, 250);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(fire));
+    return () => { done = true; clearTimeout(t); };
+  }, [dimensionId]);
+  useEffect(() => {   // (b) an async media load lands
+    if (typeof window === "undefined" || (!imageObj && !videoObj)) return;
+    let done = false;
+    const fire = () => { if (done) return; done = true; fmtFitEventCheckRef.current?.("media-load"); };
+    const t = setTimeout(fire, 250);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(fire));
+    return () => { done = true; clearTimeout(t); };
+  }, [imageObj, videoObj]);
 
   /* ── FORMAT-FIT REGRESSION GUARD (__woFormatFitGuard) ─────────────────────────
      Programmatic end-to-end: renders a solid-brand design, switches through ALL
