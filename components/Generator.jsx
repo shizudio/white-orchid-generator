@@ -2355,8 +2355,11 @@ const LOGO_SIZES = [
 
 // Canvas dimensions per social channel. w/h are export pixels.
 const DIMENSIONS = [
-  { id:"ig_square",   label:"IG Square",   sub:"1:1",    w:1080, h:1080, purpose:"feed post" },
+  // (format order — client ask 2026-07-10) IG Portrait leads: it is the default
+  // for new posts, so it sits first in the strip + export list. Array order is
+  // presentational only — the layout cascade references MASTER_DIM by id.
   { id:"ig_portrait", label:"IG Portrait", sub:"4:5",    w:1080, h:1350, purpose:"feed post (tall)" },
+  { id:"ig_square",   label:"IG Square",   sub:"1:1",    w:1080, h:1080, purpose:"feed post" },
   { id:"story",       label:"Story / Reel",sub:"9:16",   w:1080, h:1920, purpose:"stories & reels" },
   { id:"twitter",     label:"Twitter / X", sub:"16:9",   w:1600, h:900,  purpose:"post image" },
   { id:"facebook",    label:"Facebook",    sub:"1.91:1", w:1200, h:630,  purpose:"link/post image" },
