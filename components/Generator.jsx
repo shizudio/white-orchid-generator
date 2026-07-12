@@ -2005,10 +2005,20 @@ function reflowEditorial(ctx, a){
       // R4 COMPOSE — centre the text ON the shape with ≥6% padding inside its bounds.
       const pad=0.06*Math.min(d.box.w,d.box.h);
       if(d.canCompose && box.w<=d.box.w-pad*2 && box.h<=d.box.h-pad*2){
-        const cx=d.box.x+(d.box.w-box.w)/2, cy=d.box.y+(d.box.h-box.h)/2;
-        // Only compose when the centred block stays inside the text-safe rect
-        // (born-clean: never composed into a platform action band).
-        if(cx>=safeL&&cy>=safeTop&&cx+box.w<=safeR&&cy+box.h<=safeBot){
+        // Ideal position: dead-centre on the shape. When the shape hugs a canvas
+        // edge that centre can spill the text-safe rect — so CLAMP the centred
+        // block back inside the safe rect first (born-clean: never composed into
+        // a platform action band). The clamped position must ALSO stay inside
+        // the shape's padded interior — a partial blob-clip is exactly what R4
+        // forbids. When even the clamp can't satisfy both, fall THROUGH to the
+        // C3 OBSTACLE branch below so this same shape nudges the role clear in
+        // this same pass: composed or avoided, never stranded off-centre
+        // (ratified gap, asset-pipeline Part V).
+        const cx=Math.max(safeL,Math.min(safeR-box.w, d.box.x+(d.box.w-box.w)/2));
+        const cy=Math.max(safeTop,Math.min(safeBot-box.h, d.box.y+(d.box.h-box.h)/2));
+        if(cx>=d.box.x+pad && cx+box.w<=d.box.x+d.box.w-pad &&
+           cy>=d.box.y+pad && cy+box.h<=d.box.y+d.box.h-pad &&
+           cx>=safeL && cy>=safeTop && cx+box.w<=safeR && cy+box.h<=safeBot){
           box={...box,x:cx,y:cy,composedOnShape:true};
           continue;
         }
