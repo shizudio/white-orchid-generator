@@ -3,6 +3,7 @@ import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/desig
 import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
+import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -502,6 +503,12 @@ const CAP_SELECTABLE = LANDING_ARCHETYPES.filter(a => !NON_FALLBACK.has(a.id));
 // enforced DETERMINISTICALLY server-side. Stateless clients can't be trusted to
 // vary; this shared ring across requests keeps petal ≤1-in-8, motif per spec, and
 // the combined dark share at 25–30%. Bounded so it never grows unboundedly.
+// (G1) DURABILITY: this ring is the in-memory CACHE + FALLBACK; its authoritative
+// copy lives in Supabase `brand_rotation` (per brand_id). The landing finalize path
+// hydrates it from cloud at the top of the turn and persists it after the pick, so
+// rhythm/anti-repeat survives deploys and is shared across serverless instances
+// (lib/rotation-state.js). No behaviour change to the cap/rhythm math — same
+// thresholds, same functions; only the state is now durable.
 const RECENT_PICKS = [];
 const RECENT_MAX = 12;
 function recordPick(id) {
@@ -1300,6 +1307,30 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   if (context === 'landing') {
     patch.removeOverlays = true;
 
+    // ── DURABLE ROTATION HYDRATION (G1) ──────────────────────────────────────
+    // The frequency-cap + anti-repeat ring is correctly GLOBAL PER BRAND but was
+    // module-level memory only, so it reset on every deploy and diverged across
+    // serverless instances (docs/asset-pipeline.md Part V). Hydrate it from the
+    // durable `brand_rotation` row BEFORE any cap/rhythm math reads it, so
+    // exceedsCap / resolveLandingArchetype / pickVariant see the shared history.
+    // Single, time-boxed read (≤~150ms budget, falls back to the in-memory ring on
+    // timeout/any failure) — never a latency cliff, never a throw. Adopt the cloud
+    // snapshot IN PLACE into the const ring arrays (mutate, never reassign); LAST_BG
+    // is a module `let` reassigned via closure.
+    const rotationDb = rotationClient(); // null when Supabase env is absent → memory-only
+    if (rotationDb) {
+      const loaded = await loadRotation(rotationDb, BRAND_ID, {
+        recentPicks: RECENT_PICKS, recentVKinds: RECENT_VKINDS, lastBg: LAST_BG,
+      });
+      if (loaded.recentPicks !== RECENT_PICKS) {
+        RECENT_PICKS.splice(0, RECENT_PICKS.length, ...loaded.recentPicks.slice(-RECENT_MAX));
+      }
+      if (loaded.recentVKinds !== RECENT_VKINDS) {
+        RECENT_VKINDS.splice(0, RECENT_VKINDS.length, ...loaded.recentVKinds.slice(-RECENT_MAX));
+      }
+      LAST_BG = loaded.lastBg;
+    }
+
     // (2.5 born-clean) Cap the model's generated copy so it doesn't floor/drop the
     // caption at render — the source of the ~1 advisor dot on live landing designs.
     for (const [f, max] of Object.entries(LANDING_COPY_MAX)) {
@@ -1368,6 +1399,16 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // deterministically. The client materializes this exact variant.
     // (item 11) Liked variants win ties inside the palette quotas.
     patch.archVariant = pickVariant(finalArchetype, likePrefs);
+    // (G1) Persist the updated ring durably. recordPick + pickVariant have now
+    // mutated RECENT_PICKS / RECENT_VKINDS / LAST_BG; write them to `brand_rotation`
+    // so the next turn on ANY instance (incl. after a deploy) reads this history.
+    // Fire-and-forget (not awaited beyond kickoff, never throws) — the cloud write
+    // adds no latency to the landing response; last-write-wins (lib/rotation-state.js).
+    if (rotationDb) {
+      saveRotation(rotationDb, BRAND_ID, {
+        recentPicks: RECENT_PICKS, recentVKinds: RECENT_VKINDS, lastBg: LAST_BG,
+      });
+    }
     // (Photo-first) Is the resolved archetype photo-led? Only those want a generated
     // background photo (scenePrompt); text-only archetypes stay solid-field.
     const archIsPhotoLed = PHOTO_ATTACH_ARCHETYPES.has(finalArchetype) || PHOTO_LED.has(finalArchetype);
