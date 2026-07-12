@@ -36,6 +36,20 @@ export default function Nav({ section }) {
             {label}
           </Link>
         ))}
+        {/* (Pipeline map — client ask 2026-07-12) A quiet reference link to the
+            living map of how the studio builds a post (the claude.ai artifact
+            twin of docs/asset-pipeline.md). Private to the owner's account —
+            staff without access simply see a login page. */}
+        <a className="app-nav-link" href="https://claude.ai/code/artifact/dce8aa7b-378b-4ab2-b91c-37b5873dda90"
+          target="_blank" rel="noopener noreferrer" title="How the studio builds a post — the pipeline map"
+          style={{
+            fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 400,
+            color: 'color-mix(in srgb, var(--tw-smoke) 70%, transparent)',
+            borderBottom: 'none', letterSpacing: 0, transition: 'color 140ms',
+            display: 'inline-flex', alignItems: 'center', gap: 5, minHeight: 44, padding: '0 4px',
+          }}>
+          How it works<span aria-hidden="true" style={{ fontSize: 10, opacity: 0.7 }}>↗</span>
+        </a>
         <QuickGuide />
       </div>
     </nav>
