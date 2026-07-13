@@ -1171,6 +1171,14 @@ const LOGO_FOCAL_RADIUS=0.22;
    identical to the pre-extraction pickLogoPlacement. */
 function placeElement(base, ctx){
   const { w, h, textBox, regions, focal, curBgColor, frameBox, safeZone, inkLum, cfg } = ctx;
+  // (P1 slice 1b) THE TEXT-CLASS SEAM — a measured-text-box element (the date line
+  // now; eyebrow / caption in later slices) carries cfg.escalate (the register
+  // ladder) plus a pre-built candidate list and dispatches to placeTextElement. The
+  // logo has NO register (no cfg.escalate) so it falls straight through to the
+  // square-box 9-grid loop below, byte-identical to slice 1a (0da2cd6). This is the
+  // seam 1a left open ("text classes add cfg.escalate … the logo passes no escalate
+  // hook and this solver runs the exact logo path").
+  if(cfg.escalate) return placeTextElement(base, ctx);
   const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
   const pad=Math.min(w,h)*cfg.pad;
   const exclText=textBox?{x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2}:null;
@@ -1273,6 +1281,112 @@ function logoElementClass(){
 // over placeElement — the logo is the solver's first element class.
 function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox,safeZone){
   return placeElement(base,{ w,h,textBox,regions,focal,curBgColor,frameBox,safeZone,inkLum:logoInkLum,cfg:logoElementClass() });
+}
+
+/* ── TEXT-CLASS PLACEMENT (docs/element-placement-spec.md §2; P1 slice 1b) ────────
+   The measured-text-box path of the universal solver. The caller (renderScene, at the
+   date site) hands it candidate ANCHORS in priority order + the shared hard-restraint
+   set; this walks each candidate through the ratified register-escalation ladder
+   (cfg.escalate.rungs — rung 0 is the ink-flip, then heavier sanctioned weight → the
+   most robust brand face → size up within range → band last resort) with a GUARDED
+   RE-MEASURE at every rung: a face/size change re-measures the box (text width shifts),
+   and a re-measured box that overflows its bounds or hits an obstacle is rejected. The
+   FIRST candidate that yields a legible, in-bounds, collision-free box wins — priority
+   order encodes the art-directed preference, so a clean archetype prior (candidate #1)
+   reproduces today's placement. Furniture is a SOFT obstacle (it yields to the element
+   downstream via the furniture avoid-list), so a candidate clearing the hard set but
+   sitting on furniture is used only if none clears both (two passes).
+   Returns { id, x, y, w, h, px, face, weight, ink, band } or null (an HONEST refusal —
+   the caller then leaves the role dead so the pendingOffer path fires as before). */
+function placeTextElement(base, ctx){
+  const { w, h, cfg, candidates, hardObstacles, softObstacles, safe, focalBox,
+          measure, surface, baseInk, inkPoles } = ctx;
+  const hit=(a,b)=>a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+  const tolX=safe.tolX||0, tolY=safe.tolY||0;
+  const inBounds=(box)=>box.x>=safe.x0-tolX && box.y>=safe.y0-tolY &&
+                        box.x+box.w<=safe.x1+tolX && box.y+box.h<=safe.y1+tolY;
+  const clears=(box,obs)=>!obs.some(o=>hit(box,o));
+  // rung 0 — ink-flip. On a photo the pole with the higher worst-cell contrast wins;
+  // on a SOLID field surface() returns null and the zone-resolved ink (baseInk) already
+  // contrasts the field, so no flip is forced (that ink stays, matching today's look).
+  const pickInk=(box)=>{
+    const s0=surface(box,baseInk);
+    if(!s0) return baseInk;
+    let best=baseInk, bestMin=s0.min;
+    for(const p of inkPoles){ if(p===baseInk) continue; const s=surface(box,p); if(s && s.min>bestMin){ bestMin=s.min; best=p; } }
+    return best;
+  };
+  const rungs=cfg.escalate.rungs;
+  const legible=(surf,rung)=>{
+    if(!surf) return true;   // solid field / no photo under the box → the light serif reads
+    // (Item D optical weight — 15a2680) a THIN register is forbidden RAW over photo
+    // texture (sqrt(maxV)>opticalMax) even at passing colour contrast; a heavy weight
+    // or a band survives the texture. Colour contrast must also clear the AA floor.
+    const opticalOK = Math.sqrt(surf.maxV||0)<=cfg.escalate.opticalMax || rung.weight>=cfg.escalate.heavyWeight || rung.band;
+    const contrastOK = surf.min>=cfg.escalate.contrastFloor || rung.band;
+    return opticalOK && contrastOK;
+  };
+  for(const requireSoft of [true,false]){
+    if(requireSoft && !(softObstacles&&softObstacles.length)) continue;   // no soft set → single pass
+    for(const cand of candidates){
+      for(let ri=0; ri<rungs.length; ri++){
+        const rung=rungs[ri];
+        const px=cfg.preferredPx*(rung.sizeMul||1);
+        const dim=measure(px,rung.face,rung.weight);
+        const at=cand.at(dim.w,dim.h);
+        const box={x:at.x,y:at.y,w:dim.w,h:dim.h};
+        if(!inBounds(box)) break;                               // position can't hold this box → next candidate
+        if(!clears(box,hardObstacles)) break;                   // hard collision → next candidate
+        if(focalBox && hit(box,focalBox)) break;                // on a face → next candidate
+        if(requireSoft && softObstacles && !clears(box,softObstacles)) break;   // save for the hard-only pass
+        const ink=pickInk(box);
+        const surf=surface(box,ink);
+        if(legible(surf,rung)) return { id:cand.id, x:box.x, y:box.y, w:box.w, h:box.h, px, face:rung.face, weight:rung.weight, ink, band:!!rung.band };
+        // illegible at this rung → escalate the register (next rung, same candidate).
+      }
+    }
+  }
+  return null;
+}
+
+// The DATE-LINE element class (docs/element-placement-spec.md §1; P1 slice 1b). The
+// secondary date is a MEASURED serif line; preferredPx is supplied per-render (it
+// tracks the hero size, the current draw's dSz). Its register escalates in the ratified
+// order — rung 0 ink-flip (pickInk), then heavier sanctioned WEIGHT → the most robust
+// brand FACE (the sans body) → SIZE up within range → BAND last resort. Faces/weights
+// reference F (brand fonts), so the class is built at call time (never at module-eval).
+function dateElementClass(preferredPx){
+  return {
+    preferredPx,
+    escalate: {
+      contrastFloor: 4.5,   // AA for a reading line (the caption's own escalate floor)
+      opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
+      heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
+      rungs: [
+        { face: F.title, weight: 300 },                 // the elegant light serif (today's default)
+        { face: F.title, weight: 700 },                 // rung: heavier SANCTIONED serif weight
+        { face: F.body,  weight: 600 },                 // rung: the most robust brand FACE (sans body)
+        { face: F.body,  weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
+        { face: F.body,  weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
+      ],
+    },
+  };
+}
+// Light approximate boxes for an archetype's authored furniture (rule / index /
+// underline / counterweight / badge), used as the date solver's SOFT obstacle set so a
+// placed date prefers a spot clear of the tells. Furniture yields to the date downstream
+// (the date box is added to drawFurniture's avoid-list), so these need only be roughly
+// right — precision here buys visual tidiness, never a gate assertion.
+function dateFurnitureObstacles(mat,w,h){
+  const list=[]; const f=mat&&mat.furniture; if(!Array.isArray(f)) return list;
+  for(const it of f){ if(!it) continue;
+    const x=(it.x||0)*w, y=(it.y||0)*h;
+    if(it.type==="rule"||it.type==="underline"){ const ww=(it.w||0.1)*w; list.push({x, y:y-0.015*h, w:ww, h:0.03*h}); }
+    else if(it.type==="index"){ list.push({x:it.align==="right"?x-0.24*w:x, y:y-0.03*h, w:0.24*w, h:0.05*h}); }
+    else if(it.type==="counterweight"){ list.push({x:x-0.02*w, y:y-0.02*h, w:0.12*w, h:0.05*h}); }
+    else if(it.type==="badge"){ list.push({x:it.align==="right"?x-0.24*w:x, y:y-0.01*h, w:0.26*w, h:0.06*h}); }
+  }
+  return list;
 }
 
 /* ── Per-zone text-COLOUR + backdrop decision (spec §2/§3/§5) ──
@@ -6493,16 +6607,21 @@ export default function App() {
         setTextBounds(hr.usedH);
         if(_roleB) _roleB.hero={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(hr.usedH,hr.size||0)};
       }
-      // ── PROMINENT DATE LINE (photo-first c) ──────────────────────────────────
-      // Dated events on PHOTO-LED archetypes used to DROP dateText entirely (only
-      // usesDateAsHero tiles rendered it). Render the date as a light serif line
-      // directly under the hero at ~0.55× the hero size, in the hero's ink/align,
-      // so "18 July" stays prominent beside the photo. It extends usedH, so the
-      // surgical caption nudge below pushes the support clear of it — and it never
-      // draws past the bottom safe margin (skipped when there is no room).
+      // ── THE DATE LINE ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 1b) ──
+      // The date is no longer a PHOTO-LED-only line. When a date is present (ccDateText)
+      // it is placed by the universal solver on ANY archetype: the CURRENT photo-led
+      // draw (below-hero, then the full-bleed above-hero overlay) is tried FIRST as the
+      // top-priority candidate — so wherever it is clean today, today's placement is kept
+      // byte-for-byte — and only when it can't land there does the solver walk the
+      // relational (below-support / above-hero) and grid-anchor candidates through the
+      // register-escalation ladder. A clean landing sets dateDrawn (→ roleBounds carries
+      // the date → no dead-role publish); a genuine refusal leaves dateDrawn null so the
+      // existing dead-role + honest pendingOffer path fires exactly as before. The solver
+      // fires ONLY when a date is present, so autonomous no-date generations never sprout
+      // one (the born-clean invariant). big_number (usesDateAsHero) still paints the date
+      // AS the hero and is untouched here (!isBigNum).
       let dateDrawn=null, dateExtH=0;   // the date line's own drawn rect + usedH extension (audit)
-      if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox &&
-         (mat.photoRegion || mat.fullBleed || (cardBox||maskBox))){
+      if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox){
         const _safeTopD=sm.t*h, _safeBotD=(1-sm.b)*h;
         const heroSz=fontMeta.headline||heroBox.h*0.4;
         const dTxt=stripHeroMarkers(ccDateText);
@@ -6537,17 +6656,87 @@ export default function App() {
         const drawDate=(dy)=>{ beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
           drawTextLines(ctx,[dTxt],heroBox.x+_dOff.dx,dy+dSz+_dOff.dy,heroBox.w,dSz*1.05,dAlign);
           fontMeta.date=dSz; endText(); };
-        const belowTop=heroBox.y+usedH+dGap;
-        const belowRect={x:dX+_dOff.dx,y:belowTop+_dOff.dy,w:dTextW,h:dSz*1.28};
-        if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
-          drawDate(belowTop);
-          dateDrawn=belowRect; dateExtH=dH;
-          usedH+=dH; // the caption nudge sees the date; the audit tracks its own rect
-        }else if(mat.fullBleed && heroBox.y-_safeTopD>=dSz*1.6){
-          // Full-bleed whisper tiles keep their caption low — overlay the date ABOVE
-          // the hero on the photo instead (the reference "date overlay" treatment).
-          drawDate(heroBox.y-dSz*1.6);
-          dateDrawn={x:dX+_dOff.dx,y:heroBox.y-dSz*1.6+_dOff.dy,w:dTextW,h:dSz*1.28};
+        // ── CANDIDATE #1/#2 — THE PHOTO-LED PRIOR (unchanged; byte-identical when clean).
+        // On a photo-led archetype the date's art-directed prior is the line just under
+        // the hero (extends usedH so the caption nudge sees it), then the full-bleed
+        // above-hero overlay. These are exactly today's placements — preserved verbatim so
+        // documentary / editorial_split / full-bleed dates never move.
+        const photoLed=(mat.photoRegion || mat.fullBleed || (cardBox||maskBox));
+        if(photoLed){
+          const belowTop=heroBox.y+usedH+dGap;
+          const belowRect={x:dX+_dOff.dx,y:belowTop+_dOff.dy,w:dTextW,h:dSz*1.28};
+          if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
+            drawDate(belowTop);
+            dateDrawn=belowRect; dateExtH=dH;
+            usedH+=dH; // the caption nudge sees the date; the audit tracks its own rect
+          }else if(mat.fullBleed && heroBox.y-_safeTopD>=dSz*1.6){
+            // Full-bleed whisper tiles keep their caption low — overlay the date ABOVE
+            // the hero on the photo instead (the reference "date overlay" treatment).
+            drawDate(heroBox.y-dSz*1.6);
+            dateDrawn={x:dX+_dOff.dx,y:heroBox.y-dSz*1.6+_dOff.dy,w:dTextW,h:dSz*1.28};
+          }
+        }
+        // ── THE SOLVER — reached when the prior can't hold the date (every NON-photo
+        // archetype, and photo-led cases where the below/above prior refused). Walks the
+        // relational + grid candidates through the register-escalation ladder; a clean
+        // landing sets dateDrawn, a refusal leaves it null (honest dead-role → offer).
+        if(!dateDrawn){
+          const alignX=(bw)=> dAlign==="center"?heroBox.x+(heroBox.w-bw)/2 : dAlign==="right"?heroBox.x+heroBox.w-bw : heroBox.x;
+          const heroObsBox={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||heroBox.h*0.4)};
+          // Project the support's ACTUAL drawn bottom: it paints AFTER the date and its
+          // reflow box can be shorter than the fitted (possibly multi-line) caption, so a
+          // below-support date must clear the caption it REALLY draws — mirror the union-box
+          // caption prediction (300 F.body, the support draw's own primary register).
+          let supBottom = supBox ? supBox.y+supBox.h : 0;
+          if(supportText && supBox){
+            const _spf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+            supBottom = supBox.y + Math.max(supBox.h, _spf.lines.length*_spf.lineHeight + _spf.size*0.3);
+          }
+          const supObsBox=(supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:supBottom-supBox.y}:null;
+          const eyeObsBox=(_roleB&&_roleB.eyebrow)?_roleB.eyebrow:((eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelBox.h}:null);
+          const photoObsBox=(!mat.fullBleed)?(cardBox||maskBox||(mat.photoRegion?bleedBox(mat.photoRegion):null)):null;
+          const hardObstacles=[heroObsBox,supObsBox,eyeObsBox,photoObsBox,...decorObstacles.map(d=>d&&d.box).filter(Boolean)].filter(Boolean);
+          const softObstacles=dateFurnitureObstacles(mat,w,h);
+          // Focal (face) avoidance for a date that might land on the photo (photo-led dead
+          // cases). Mirrors the message-pill saliency dodge; advisory (skip on failure).
+          let _focalBox=null;
+          if(mediaObj){ try{ const _f=estimateFocalPoint(mediaObj); const _g=photoGeom(mediaObj,w,h,effImgTFor(w,h,false));
+            if(_f&&_g&&_f.confidence>=0.35){ const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh, _fr=0.18*Math.min(w,h); _focalBox={x:fxC-_fr,y:fyC-_fr,w:_fr*2,h:_fr*2}; } }catch(_){}
+          }
+          // The date's clean area is the format's safe margin TIGHTENED by the platform's
+          // own UI action zone (PLATFORM_SAFE — Story's top/bottom button bands): a text
+          // role landing there trips safe-area-text, so a corner date must clear it too
+          // (the same zone logoCenter shifts the logo out of).
+          const _ps=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
+          const safL=_ps?Math.max(sm.l,_ps.left):sm.l, safR=_ps?Math.max(sm.r,_ps.right):sm.r,
+                safT=_ps?Math.max(sm.t,_ps.top):sm.t,  safB=_ps?Math.max(sm.b,_ps.bottom):sm.b;
+          const cands=[];
+          cands.push({id:"below-hero", at:(bw)=>({x:alignX(bw), y:heroBox.y+usedH+dGap})});
+          if(supBelow) cands.push({id:"below-support", at:(bw)=>({x:alignX(bw), y:supBottom+dGap})});
+          cands.push({id:"above-hero", at:(bw,bh)=>({x:alignX(bw), y:heroBox.y-dGap-bh})});
+          cands.push({id:"corner-bl", at:(bw,bh)=>({x:safL*w, y:(1-safB)*h-bh})});
+          cands.push({id:"corner-br", at:(bw,bh)=>({x:(1-safR)*w-bw, y:(1-safB)*h-bh})});
+          cands.push({id:"corner-tl", at:()=>({x:safL*w, y:safT*h})});
+          cands.push({id:"corner-tr", at:(bw)=>({x:(1-safR)*w-bw, y:safT*h})});
+          cands.push({id:"bottom-center", at:(bw,bh)=>({x:(w-bw)/2, y:(1-safB)*h-bh})});
+          const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
+          const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
+          const sol=placeElement({align:dAlign},{
+            w,h, cfg:dateElementClass(dSz),
+            candidates:cands, hardObstacles, softObstacles,
+            safe:{x0:safL*w,y0:safT*h,x1:(1-safR)*w,y1:(1-safB)*h,tolX:0,tolY:0},
+            focalBox:_focalBox, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
+          });
+          if(sol){
+            beginText();
+            if(sol.band){ const bandCol=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; drawSolidBand(ctx,w,h,{x:sol.x,y:sol.y,w:sol.w,h:sol.h},bandCol); }
+            ctx.fillStyle=sol.ink; ctx.font=`${sol.weight} ${sol.px}px ${sol.face}`;
+            drawTextLines(ctx,[dTxt],sol.x+_dOff.dx,sol.y+sol.px+_dOff.dy,sol.w,sol.px*1.05,"left");
+            fontMeta.date=sol.px; endText();
+            // The solver places AWAY from the hero flow (grid/relational), so usedH is NOT
+            // extended — only the below-hero PRIOR extends it (handled in the photo-led path).
+            dateDrawn={x:sol.x+_dOff.dx,y:sol.y+_dOff.dy,w:sol.w,h:sol.px*1.28};
+          }
         }
       }
       const reflowSupStart=reflow.supStart, reflowSupMin=reflow.supMin;
@@ -6726,6 +6915,7 @@ export default function App() {
           (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
           cardBox, maskBox,
           (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
+          dateDrawn,   // (P1 1b) the placed date is a real role — furniture yields to it
         ].filter(Boolean);
         // (WP-U fix #1) A user-edited pill label overrides the archetype's authored
         // badge text; drawFurniture reports each drawn text piece so the pill becomes
@@ -6758,6 +6948,7 @@ export default function App() {
         heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
         (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)*1.15}:null,
         (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
+        dateDrawn,   // (P1 1b) the placed date joins the text envelope so the logo dodges it too
       ].filter(Boolean);
       const textEnvelope = _txtBoxes.length ? {
         x:Math.min(..._txtBoxes.map(b=>b.x)),
