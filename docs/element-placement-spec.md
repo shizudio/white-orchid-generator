@@ -53,6 +53,10 @@ A placement is claimed only after render truth confirms the element painted (the
 - Born-clean, pins, one-voice, only-real-assets: all laws hold; the solver is layout-time machinery.
 - The first-shot blocker gate still verifies every autonomous result end-to-end.
 
+## 6a · The shape–band exclusion (RATIFIED 2026-07-13)
+
+*"When we are using a shape, we don't use the text band by default — they are conflicting visually."* On any design with an active shape (an archetype mask/cutout, or free shapes intersecting a text zone), the **band rung of the legibility ladder is disabled by default**. The solver must resolve legibility through its other free variables — placement clear of the shape (the shape is a first-class obstacle for every text role, including the hero), ink flip, weight, robust face, size. A band may appear on a shape design only by the owner's explicit ask. A band must never clip, overlap, or slice a shape's silhouette.
+
 ## 7 · Knobs
 
 | Knob | Default | Effect |
