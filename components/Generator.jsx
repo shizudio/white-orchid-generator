@@ -1397,6 +1397,22 @@ function eyebrowElementClass(preferredPx){
     },
   };
 }
+// The BADGE (accent pill) element class (docs/element-placement-spec.md §1; P1 slice
+// 2b-ii). Unlike the date/eyebrow, the badge is an OPAQUE filled lozenge — self-legible
+// against its own fill (the label ink is pole-flipped against the pill at draw time), so
+// NO register-escalation ladder applies: a single rung, and the caller's surface() returns
+// null so placeTextElement's legibility test passes immediately and the solver just walks
+// the candidate anchors for a clean (in-bounds, collision-free) spot. preferredPx = the
+// pill's font basis (bs); the caller's measure() returns the pill geometry from it.
+function badgeElementClass(preferredPx){
+  return {
+    preferredPx,
+    escalate: {
+      contrastFloor: 0, opticalMax: 1, heavyWeight: 0,   // opaque pill → self-legible, ladder never fires
+      rungs: [ { face: F.subtitle, weight: 600 } ],
+    },
+  };
+}
 // Light approximate boxes for an archetype's authored furniture (rule / index /
 // underline / counterweight / badge), used as the date solver's SOFT obstacle set so a
 // placed date prefers a spot clear of the tells. Furniture yields to the date downstream
@@ -2038,11 +2054,15 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offset
     const _off=offOf(it0);
     const it=_off?{...it0,x:it0.x+_off.dx,y:it0.y+_off.dy}:it0;
     const _freePlaced=!!_off;
+    // (P1 2b-ii) A solver-PLACED badge already cleared the safe rect + obstacle set upstream
+    // (the badge solver), so it bypasses the auto-clutter skip like a user-dragged piece —
+    // otherwise the redundant test could re-drop a spot the solver deliberately chose.
+    const _solverPlaced=!!it.__placed || !!it._placed;
     const bx=boxOf(it);
     // Keep AUTO furniture inside the safe rect and off the text/photo it would clutter.
-    // A user-dragged piece bypasses both (it may sit literally anywhere).
-    if(!_freePlaced && (bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2)) continue;
-    if(!_freePlaced && clash(bx)) continue;
+    // A user-dragged / solver-placed piece bypasses both (it may sit where it was pinned).
+    if(!_freePlaced && !_solverPlaced && (bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2)) continue;
+    if(!_freePlaced && !_solverPlaced && clash(bx)) continue;
     if(it.type==="rule"||it.type==="underline"){
       ctx.globalAlpha=it.alpha==null?(it.type==="underline"?0.55:0.32):it.alpha;
       ctx.fillStyle=it.colorOverride||ink;
@@ -7070,6 +7090,60 @@ export default function App() {
         // resolver returns the user's stored delta (in fractions) for that same key so a
         // dragged pill / rule / index sits exactly where it was dropped (free placement).
         const _furnRoleKey = (it) => (it && (it.type==="badge" ? (it._role||"pill") : (it._role||it._key||`furn_${it.type}`))) || "";
+        // ── THE BADGE ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 2b-ii) ──
+        // A badge (accent pill) — the archetype's authored prior, or the default spot a
+        // user-added pill (pillText) lands at — is DROPPED by drawFurniture today (a silent
+        // skip when it clashes with a drawn role or leaves the safe rect → dead "pill" role
+        // → "Not shown in this layout"). Instead the universal solver makes it addable on ANY
+        // design: the badge's CURRENT position is candidate #1 (kept byte-identical — the
+        // solver runs ONLY when that position would drop, so declared badges that already
+        // land never move), else it walks relational + grid anchors (bottom corners/centre —
+        // a CTA pill's home — then below-support, then top corners) and pins the badge to the
+        // first clean spot. The pill is OPAQUE (self-legible: surface→null), so no register
+        // ladder fires; the solver just finds clean placement. A solved badge carries _placed
+        // so drawFurniture draws it there instead of re-skipping; onDrawn("pill") then clears
+        // the dead role. A user-DRAGGED pill is never auto-moved (law 5 — skipped here).
+        {
+          const _psB=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
+          const bSafL=_psB?Math.max(sm.l,_psB.left):sm.l, bSafR=_psB?Math.max(sm.r,_psB.right):sm.r,
+                bSafT=_psB?Math.max(sm.t,_psB.top):sm.t,  bSafB=_psB?Math.max(sm.b,_psB.bottom):sm.b;
+          const _bIx=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
+          // Pill geometry, mirroring drawFurniture's badge draw exactly (600 subtitle, 0.10
+          // tracking, padX=0.9·bs, padY=0.55·bs) so the placed box matches the painted pill.
+          const badgePillDim=(txt,bs)=>{ ctx.save(); ctx.font=`600 ${bs}px ${F.subtitle}`; ctx.letterSpacing=`${0.10*bs}px`;
+            const _t=String(txt).toUpperCase(); const tw=ctx.measureText(_t).width+0.10*bs*Math.max(0,_t.length-1); ctx.letterSpacing="0px"; ctx.restore();
+            const padX=bs*0.9, padY=bs*0.55; return { w:tw+padX*2, h:bs+padY*2 }; };
+          for(const it of furnItems){
+            if(!it || it.type!=="badge") continue;
+            const _o=roleOff(_furnRoleKey(it)); if(_o.dx||_o.dy) continue;   // user-dragged pin — never auto-move (law 5)
+            const bs=(it.size||0.024)*h;
+            const txt=String(it.text==null?DEFAULT_FURNITURE_TEXT.badge:it.text);
+            const dim=badgePillDim(txt,bs);
+            const priorLeft=it.align==="right"?it.x*w-dim.w : it.align==="center"?it.x*w-dim.w/2 : it.x*w;
+            const priorBox={x:priorLeft, y:it.y*h-dim.h/2, w:dim.w, h:dim.h};
+            const inSafe=(bx)=>bx.x>=bSafL*w-2 && bx.y>=bSafT*h-2 && bx.x+bx.w<=(1-bSafR)*w+2 && bx.y+bx.h<=(1-bSafB)*h+2;
+            // Candidate #1 clean by drawFurniture's own standard (in-safe + no clash) → leave
+            // it verbatim (byte-identical; drawFurniture paints it exactly as today).
+            if(inSafe(priorBox) && !avoid.some(a=>_bIx(priorBox,a))) continue;
+            const candsB=[];
+            candsB.push({id:"bl", at:(bw,bh)=>({x:bSafL*w,          y:(1-bSafB)*h-bh})});
+            candsB.push({id:"br", at:(bw,bh)=>({x:(1-bSafR)*w-bw,   y:(1-bSafB)*h-bh})});
+            candsB.push({id:"bc", at:(bw,bh)=>({x:(w-bw)/2,          y:(1-bSafB)*h-bh})});
+            if(supportText&&supBox) candsB.push({id:"below-sup", at:(bw)=>({x:supBox.x, y:supBox.y+Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)+0.02*h})});
+            candsB.push({id:"tl", at:()=>({x:bSafL*w,               y:bSafT*h})});
+            candsB.push({id:"tr", at:(bw)=>({x:(1-bSafR)*w-bw,      y:bSafT*h})});
+            const solB=placeElement({align:"left"},{
+              w,h, cfg:badgeElementClass(bs),
+              candidates:candsB, hardObstacles:avoid.filter(Boolean), softObstacles:[],
+              safe:{x0:bSafL*w,y0:bSafT*h,x1:(1-bSafR)*w,y1:(1-bSafB)*h,tolX:0,tolY:0},
+              focalBox:null, measure:(px)=>badgePillDim(txt,px), surface:()=>null,
+              baseInk:B.burnham, inkPoles:[B.burnham,B.whiteSmoke],
+            });
+            if(solB){ it.x=solB.x/w; it.y=(solB.y+solB.h/2)/h; it.align="left"; it._placed=true; }
+            // No solution → leave the badge as-is: drawFurniture's existing skip drops it,
+            // and the dead "pill" role surfaces honestly, exactly as before.
+          }
+        }
         drawFurniture(ctx, furnItems, w, h, sm, heroInk, avoid, accentInk,
           _roleB ? (role, box) => { _roleB[role] = box; } : null,
           (it) => { const o=roleOff(_furnRoleKey(it)); return (o.dx||o.dy)?{dx:o.dx/w,dy:o.dy/h}:null; });
