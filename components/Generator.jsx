@@ -1372,6 +1372,31 @@ function dateElementClass(preferredPx){
     },
   };
 }
+// The EYEBROW (micro-label) element class (docs/element-placement-spec.md §1; P1 slice
+// 2b-i). The eyebrow is a small tracked ALL-CAPS line; preferredPx is supplied per-render
+// and floored at the dateLabel class floor (MIN_FONT_PX.dateLabel — a caption-legible
+// caps token, never microscopic). Its register escalates in the ratified order — rung 0
+// ink-flip (pickInk), then a heavier sanctioned caps WEIGHT within the subtitle face → the
+// most robust brand FACE (the sans body, still drawn caps+tracked) → SIZE up within range
+// → BAND last resort. The caller draws the winning rung via drawMicroLabel(face,weight),
+// so the ladder and the paint never diverge. Built at call time (F references brand fonts).
+function eyebrowElementClass(preferredPx){
+  return {
+    preferredPx,
+    escalate: {
+      contrastFloor: 4.5,   // AA for a small reading label (mirrors the date's floor)
+      opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
+      heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
+      rungs: [
+        { face: F.subtitle, weight: 400 },                 // the light tracked eyebrow (today's default register)
+        { face: F.subtitle, weight: 700 },                 // rung: heavier SANCTIONED caps weight (Syne 700)
+        { face: F.body,     weight: 600 },                 // rung: the most robust brand FACE (sans body, caps)
+        { face: F.body,     weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
+        { face: F.body,     weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
+      ],
+    },
+  };
+}
 // Light approximate boxes for an archetype's authored furniture (rule / index /
 // underline / counterweight / badge), used as the date solver's SOFT obstacle set so a
 // placed date prefers a spot clear of the tells. Furniture yields to the date downstream
@@ -1915,11 +1940,17 @@ function drawHeroText(ctx, str, opts){
 function drawMicroLabel(ctx, str, x, y, size, opts={}){
   const tracking=Math.max(0.05,Math.min(0.12,opts.tracking==null?0.08:opts.tracking));
   const txt=stripHeroMarkers(str).toUpperCase();
+  // (P1 2b-i) The register-escalation ladder may hand the eyebrow a heavier weight or the
+  // robust brand FACE (the sans body) on a busy surface; honour opts.face / opts.weight so
+  // the drawn glyphs match the rung the solver validated. Existing callers pass neither →
+  // the light Syne caps default (byte-identical to the pre-2b eyebrow).
+  const face=opts.face||F.subtitle;
+  const weight=opts.weight||400;
   ctx.save();
   // (Crops ext) FIT-OR-DROP: when opts.maxW is given, shrink the tracked caps line
   // until it fits its panel width; if it still can't fit at opts.minSize, draw
   // NOTHING and return null — an eyebrow never crosses its panel/photo seam.
-  const wAt=(s)=>{ctx.font=`400 ${s}px ${F.subtitle}`;ctx.letterSpacing=`${(tracking+0.01)*s}px`;const m=ctx.measureText(txt).width+tracking*s*Math.max(0,txt.length-1);ctx.letterSpacing="0px";return m;};
+  const wAt=(s)=>{ctx.font=`${weight} ${s}px ${face}`;ctx.letterSpacing=`${(tracking+0.01)*s}px`;const m=ctx.measureText(txt).width+tracking*s*Math.max(0,txt.length-1);ctx.letterSpacing="0px";return m;};
   let sz=size;
   if(opts.maxW){
     const min=opts.minSize||Math.max(10,size*0.6);
@@ -1928,7 +1959,7 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
   }
   // (R1) THINNER micro-caption — Syne variable floors at 400, so drop 600→400 (its
   // lightest weight) to lighten the eyebrow; +0.01em added to the caps tracking below.
-  ctx.font=`400 ${sz}px ${F.subtitle}`;
+  ctx.font=`${weight} ${sz}px ${face}`;
   ctx.letterSpacing=`${(tracking+0.01)*sz}px`;
   ctx.textAlign=opts.align||"left";
   ctx.textBaseline="alphabetic";
@@ -4636,6 +4667,23 @@ export default function App() {
         });
         return sol ? { face: sol.face, weight: sol.weight, band: sol.band, px: +sol.px.toFixed(2) } : null;
       };
+      // (P1 2b-i) EYEBROW-LADDER PROBE — the sibling of __woDateLadderProbe over the eyebrow
+      // register class. Drives the REAL placeElement→placeTextElement seam with a synthetic
+      // surface so the caps eyebrow's register-escalation ladder (subtitle 400 → subtitle 700
+      // → robust sans → size-up → band) can be exercised deterministically. opts={maxV,min}.
+      window.__woEyebrowLadderProbe = (opts) => {
+        const o = opts || {};
+        const cands = [{ id: "probe", at: () => ({ x: 100, y: 100 }) }];
+        const measure = (px) => ({ w: 200, h: px * 1.4 });          // fixed-width box (fits bounds)
+        const surface = () => ({ min: o.min ?? 6, maxV: o.maxV ?? 0 });
+        const sol = placeElement({ align: "left" }, {
+          w: 1080, h: 1080, cfg: eyebrowElementClass(44),
+          candidates: cands, hardObstacles: [], softObstacles: [],
+          safe: { x0: 0, y0: 0, x1: 1080, y1: 1080, tolX: 0, tolY: 0 },
+          focalBox: null, measure, surface, baseInk: B.burnham, inkPoles: [B.burnham, B.whiteSmoke],
+        });
+        return sol ? { face: sol.face, weight: sol.weight, band: sol.band, px: +sol.px.toFixed(2) } : null;
+      };
     }
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
@@ -6419,6 +6467,10 @@ export default function App() {
         if(eyebrowDrawnW==null){ dropped.push("Eyebrow"); labelBox=null; }
         else if(_roleB) _roleB.eyebrow={x:labelBox.x,y:labelBox.y-lblSize*0.5,w:Math.max(eyebrowDrawnW||0,labelBox.w*0.4),h:lblSize*1.8};
       }
+      // (P1 2b-i) The solver-placed eyebrow's own drawn rect (null until the rescue below
+      // lands one). Declared here so the date solver, the furniture avoid-list, and the
+      // logo text-envelope below can all dodge a rescued eyebrow (mirrors dateDrawn).
+      let eyebrowDrawn=null;
       // (P2 §2.17) SCHEDULE ROWS — serif time + light-sans activity separated by hairline
       // rules (grid #2 "A DAY HERE"). Rows come from the subtext as "time  activity" pairs
       // split on " | " (or newlines). Renders inside the hero box zone; skips the normal
@@ -6626,6 +6678,78 @@ export default function App() {
         setTextBounds(hr.usedH);
         if(_roleB) _roleB.hero={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(hr.usedH,hr.size||0)};
       }
+      // ── THE EYEBROW ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 2b-i) ──
+      // The eyebrow (micro-label) is no longer DROP-only. Its archetype-prior box (drawn
+      // ABOVE as candidate #1 — byte-identical when it lands, eyebrowDrawnW!=null) is tried
+      // first; when it can't hold the caps line (reflow lifted it off the top safe margin, or
+      // the tracked line won't fit its panel — eyebrowDrawnW==null), the universal solver
+      // walks relational + grid anchors through the register-escalation ladder and lands it
+      // as a quiet corner/edge eyebrow instead of dropping. Runs AFTER the hero (needs its
+      // real usedH) and BEFORE the date (higher priority — the date then dodges it). A clean
+      // landing sets _roleB.eyebrow (→ no dead-role → "Not shown in this layout" retired for
+      // the eyebrow); a genuine refusal leaves it unset so the honest dead-role path fires
+      // exactly as before. Fires ONLY when eyebrow content is present (born-clean: autonomous
+      // no-eyebrow generations never sprout one). eyebrowDrawnW is a live-independent signal,
+      // so the offscreen audit sweeps see the same placement the live canvas does.
+      if(eyebrow && !isSchedule && heroBox && eyebrowDrawnW==null){
+        const ebAlign=mat.roles?.microLabel?.align||"left";
+        const ebTxt=stripHeroMarkers(eyebrow).toUpperCase();
+        const ebPref=Math.max(MIN_FONT_PX.dateLabel(h), 0.026*h);
+        const ebGap=Math.max(0.012*h,(fontMeta.headline||heroBox.h*0.4)*0.12);
+        // measure mirrors drawMicroLabel's tracked-caps width (letter-spacing IS included in
+        // measureText once set); a touch generous so inBounds stays conservative (no overflow).
+        const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; ctx.letterSpacing=`${0.09*px}px`;
+          const wpx=ctx.measureText(ebTxt).width; ctx.letterSpacing="0px"; return { w:wpx, h:px*1.4 }; };
+        const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
+        // Obstacles: hero (real height), the projected caption bottom, the photo/card/mask,
+        // decor. (The date isn't placed yet — the eyebrow has priority, so it need not dodge it.)
+        const heroObsBoxE={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||heroBox.h*0.4)};
+        let supBottomE=supBox?supBox.y+supBox.h:0;
+        if(supportText&&supBox){ const _spf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+          supBottomE=supBox.y+Math.max(supBox.h,_spf.lines.length*_spf.lineHeight+_spf.size*0.3); }
+        const supObsBoxE=(supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:supBottomE-supBox.y}:null;
+        const photoObsBoxE=(!mat.fullBleed)?(cardBox||maskBox||(mat.photoRegion?bleedBox(mat.photoRegion):null)):null;
+        const hardObstaclesE=[heroObsBoxE,supObsBoxE,photoObsBoxE,...decorObstacles.map(d=>d&&d.box).filter(Boolean)].filter(Boolean);
+        const softObstaclesE=dateFurnitureObstacles(mat,w,h);
+        let _focalBoxE=null;
+        if(mediaObj){ try{ const _f=estimateFocalPoint(mediaObj); const _g=photoGeom(mediaObj,w,h,effImgTFor(w,h,false));
+          if(_f&&_g&&_f.confidence>=0.35){ const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh, _fr=0.18*Math.min(w,h); _focalBoxE={x:fxC-_fr,y:fyC-_fr,w:_fr*2,h:_fr*2}; } }catch(_){}
+        }
+        const _psE=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
+        const safLE=_psE?Math.max(sm.l,_psE.left):sm.l, safRE=_psE?Math.max(sm.r,_psE.right):sm.r,
+              safTE=_psE?Math.max(sm.t,_psE.top):sm.t,  safBE=_psE?Math.max(sm.b,_psE.bottom):sm.b;
+        const alignXE=(bw)=> ebAlign==="center"?heroBox.x+(heroBox.w-bw)/2 : ebAlign==="right"?heroBox.x+heroBox.w-bw : heroBox.x;
+        const candsE=[];
+        // The eyebrow's art-directed home is ABOVE the hero; then the top edge corners /
+        // centre; then below the hero / caption; then the bottom corners (a quiet footer eyebrow).
+        candsE.push({id:"above-hero", at:(bw,bh)=>({x:alignXE(bw), y:heroBox.y-ebGap-bh})});
+        candsE.push({id:"corner-tl", at:()=>({x:safLE*w, y:safTE*h})});
+        candsE.push({id:"corner-tr", at:(bw)=>({x:(1-safRE)*w-bw, y:safTE*h})});
+        candsE.push({id:"top-center", at:(bw)=>({x:(w-bw)/2, y:safTE*h})});
+        candsE.push({id:"below-hero", at:(bw)=>({x:alignXE(bw), y:heroBox.y+usedH+ebGap})});
+        if(supportText&&supBox) candsE.push({id:"below-support", at:(bw)=>({x:alignXE(bw), y:supBottomE+ebGap})});
+        candsE.push({id:"corner-bl", at:(bw,bh)=>({x:safLE*w, y:(1-safBE)*h-bh})});
+        candsE.push({id:"corner-br", at:(bw,bh)=>({x:(1-safRE)*w-bw, y:(1-safBE)*h-bh})});
+        const _ebOff=roleOff("eyebrow");
+        const solE=placeElement({align:ebAlign},{
+          w,h, cfg:eyebrowElementClass(ebPref),
+          candidates:candsE, hardObstacles:hardObstaclesE, softObstacles:softObstaclesE,
+          safe:{x0:safLE*w,y0:safTE*h,x1:(1-safRE)*w,y1:(1-safBE)*h,tolX:0,tolY:0},
+          focalBox:_focalBoxE, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
+        });
+        if(solE){
+          ctx.save();
+          if(solE.band){ const bandCol=hexLuminance(solE.ink)>0.5?B.burnham:B.whiteSmoke; drawSolidBand(ctx,w,h,{x:solE.x,y:solE.y,w:solE.w,h:solE.h},bandCol); }
+          ctx.fillStyle=solE.ink;
+          drawMicroLabel(ctx,ebTxt,solE.x+_ebOff.dx,solE.y+_ebOff.dy,solE.px,{align:"left",tracking:0.08,face:solE.face,weight:solE.weight});
+          ctx.restore();
+          fontMeta.dateLabel=solE.px;
+          eyebrowDrawn={x:solE.x+_ebOff.dx,y:solE.y+_ebOff.dy,w:solE.w,h:solE.px*1.4};
+          if(_roleB) _roleB.eyebrow=eyebrowDrawn;
+          // Rescued — retract the "Eyebrow" dropHint the prior may have queued (it did land).
+          const _edi=dropped.indexOf("Eyebrow"); if(_edi>=0) dropped.splice(_edi,1);
+        }
+      }
       // ── THE DATE LINE ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 1b) ──
       // The date is no longer a PHOTO-LED-only line. When a date is present (ccDateText)
       // it is placed by the universal solver on ANY archetype: the CURRENT photo-led
@@ -6712,7 +6836,7 @@ export default function App() {
             supBottom = supBox.y + Math.max(supBox.h, _spf.lines.length*_spf.lineHeight + _spf.size*0.3);
           }
           const supObsBox=(supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:supBottom-supBox.y}:null;
-          const eyeObsBox=(_roleB&&_roleB.eyebrow)?_roleB.eyebrow:((eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelBox.h}:null);
+          const eyeObsBox=(_roleB&&_roleB.eyebrow)?_roleB.eyebrow:(eyebrowDrawn||((eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelBox.h}:null));
           const photoObsBox=(!mat.fullBleed)?(cardBox||maskBox||(mat.photoRegion?bleedBox(mat.photoRegion):null)):null;
           const hardObstacles=[heroObsBox,supObsBox,eyeObsBox,photoObsBox,...decorObstacles.map(d=>d&&d.box).filter(Boolean)].filter(Boolean);
           const softObstacles=dateFurnitureObstacles(mat,w,h);
@@ -6932,6 +7056,7 @@ export default function App() {
           // a 2-line caption on the short banner must fully block the enrolling pill.
           (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)*1.15}:null,
           (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
+          eyebrowDrawn,   // (P1 2b-i) the solver-placed eyebrow is a real role — furniture yields to it
           cardBox, maskBox,
           (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
           dateDrawn,   // (P1 1b) the placed date is a real role — furniture yields to it
@@ -6967,6 +7092,7 @@ export default function App() {
         heroBox?{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,heroBox.h*0.5)}:null,
         (supportText&&supBox)?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)*1.15}:null,
         (eyebrow&&labelBox)?{x:labelBox.x,y:labelBox.y-(reflow.labelSize||0)*0.4,w:labelBox.w,h:(reflow.labelSize||labelBox.h)*1.5}:null,
+        eyebrowDrawn,   // (P1 2b-i) the solver-placed eyebrow joins the text envelope so the logo dodges it too
         dateDrawn,   // (P1 1b) the placed date joins the text envelope so the logo dodges it too
       ].filter(Boolean);
       const textEnvelope = _txtBoxes.length ? {
