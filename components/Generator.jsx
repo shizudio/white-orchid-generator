@@ -2913,6 +2913,12 @@ export default function App() {
   const dropInfoRef = useRef(null);   // {dropped:[fieldLabels]} for the current live render (spec §6)
   const logoOverlapRef = useRef(false); // explicit logo placement overlaps the text zone on the live dim (Task 1 hint)
   const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
+  // (Item C) DRAW-COMMIT SIGNAL — a monotonic counter bumped at the top of every LIVE
+  // renderScene. The chat honesty corrector waits for this to advance past the value it
+  // captured before applying a patch (a real post-patch draw committed on the DISPLAYED
+  // dimension) instead of racing a fixed timer — so deadRoles/fontMeta it reads are the
+  // fresh live-dim truth, never a stale pre-patch draw (M1: refs, never a closure).
+  const drawSeqRef = useRef(0);
   // AI-audit signal snapshot for the CURRENT live render — populated by renderScene
   // so runLocalAudit() reads the engine's OWN deterministic decisions (resolved zone
   // contrast, per-role floor pins, drops, logo overlap/focal-band, safe-zone violation)
@@ -4269,7 +4275,10 @@ export default function App() {
   // State snapshot via a per-render ref: the chat calls renderTruth() from an
   // ASYNC continuation holding a stale prop closure — refs always read fresh.
   const truthStateRef = useRef({});
-  truthStateRef.current = { archetypeId, logoPosition, userLogoTouched, W, H };
+  // (Item C) dimensionId + fontSizes ride along so the corrector's honesty check is
+  // dimension-aware (the deadRoles it reads belong to the DISPLAYED format) and can
+  // compare the requested font step against the size actually rendered (fontMeta).
+  truthStateRef.current = { archetypeId, logoPosition, userLogoTouched, W, H, dimensionId, fontSizes };
   // (copy-fit Tier 2) Live authorship map for renderScene — a ref so the render (and
   // its async continuations) always read the fresh map, never a stale closure (M1).
   const copyAuthorsRef = useRef({});
@@ -4282,6 +4291,13 @@ export default function App() {
     roleBounds: roleBoundsRef.current ? JSON.parse(JSON.stringify(roleBoundsRef.current)) : null,
     deadRoles: [...(deadRolesRef.current || [])],
     canvas: { w: truthStateRef.current.W, h: truthStateRef.current.H },
+    // (Item C) draw-commit sequence + the displayed dimension + the drawn font px per
+    // role + the current step map — the corrector settles on drawSeq advancing and
+    // verifies "bigger/smaller" claims against fontMeta vs the requested fontSizes step.
+    drawSeq: drawSeqRef.current,
+    dimensionId: truthStateRef.current.dimensionId,
+    fontMeta: { ...(fontMetaRef.current || {}) },
+    fontSizes: { ...(truthStateRef.current.fontSizes || {}) },
   });
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
@@ -5145,6 +5161,11 @@ export default function App() {
     // shape boundary and prefers the clear solid-bg region (Commit 2c).
     let frameBox=null;
     if(live)logoOverlapRef.current=false;   // reset per live render; putLogo re-sets it (Task 1)
+    // (Item C) DRAW-COMMIT tick — bumped once per live render (before the draw). renderScene
+    // is synchronous, so once an async reader observes drawSeqRef advance, this render's
+    // deadRoles/fontMeta/logoBox are already written. The corrector keys its honesty check
+    // on this instead of a fixed settle timer.
+    if(live)drawSeqRef.current++;
     // (WP-W0) render-truth refs reset per live render; the paths that draw re-set them.
     if(live){logoBoxRef.current=null;deadRolesRef.current=[];}
     if(live)roleBoundsRef.current=null;     // (WP-U fix #1) reset per live render; editorial branch repopulates

@@ -115,8 +115,40 @@ const FULL_IMAGE_INTENT = new RegExp([
 ].map(s => `\\b(${s})\\b`).join('|'), 'i');
 const TINTED_INTENT = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i;
 const ROLE_OF_FIELD = { headline: 'hero', subtext: 'support', microLabel: 'eyebrow', dateText: 'date', pillText: 'pill' };
+const FIELD_OF_ROLE = { hero: 'headline', support: 'subtext', eyebrow: 'microLabel', date: 'dateText', pill: 'pillText' };
 const ROLE_LABELS = { hero: 'the title', support: 'the small text', eyebrow: 'the little label', date: 'the date', pill: 'the button' };
+// (Item C) A REPLY that claims a role was added/changed — lightweight per-role keyword
+// detection, paired with a change verb — so an honesty check can fire when the MODEL
+// narrates a role it never painted, even when the patch itself carried no such field.
+const CLAIM_VERB = /\b(added|add|adding|updated|update|changed|change|made|set|put|placed|included|now (shows|has|includes)|dropped in|popped)\b/i;
+const ROLE_CLAIM_KEYWORDS = {
+  date: /\b(date|date ?line|the day|when it'?s on)\b/i,
+  hero: /\b(title|headline|heading)\b/i,
+  support: /\b(caption|small text|detail line|line at the bottom|text at the bottom|subtext|body text|small line)\b/i,
+  eyebrow: /\b(eyebrow|kicker|little label|overline)\b/i,
+  pill: /\b(button|pill|badge|tag)\b/i,
+};
 const settle = (ms) => new Promise(r => setTimeout(r, ms));
+// (Item C) Resolve when a fresh LIVE draw has committed (renderTruth.drawSeq advanced
+// past baseSeq) on the displayed dimension, or the time cap elapses — replaces racing a
+// fixed timer, so the deadRoles / fontMeta the corrector reads are this format's fresh
+// truth, never a stale pre-patch draw. Falls back to the cap so a no-op turn can't hang.
+const waitDrawCommit = async (truthFn, baseSeq, maxMs = 1200) => {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const t = truthFn();
+    if (t && typeof t.drawSeq === 'number' && t.drawSeq > baseSeq) break;
+    await settle(40);
+  }
+  await settle(80); // let an immediate follow-up (debounced) draw land
+  return truthFn();
+};
+// (Item C) The step order for S/M/L/XS/XL so the corrector can tell the requested
+// DIRECTION of a font-size change (bigger vs smaller) from the applied step.
+const FONT_STEP_ORDER = { xs: 0, s: 1, m: 2, l: 3, xl: 4 };
+// Map a fontSizes category to the fontMeta key whose drawn px it controls, so a
+// "bigger/smaller" claim is checked against the size actually painted.
+const FONT_ROLE_META_KEY = { heading: 'headline', subheading: 'headline', content: 'subtext', highlight: 'headline' };
 
 /* ── (WP-Z) THE /feedback COMMAND ──────────────────────────────────────────────
    A client-ratified escape hatch: any message starting with "/feedback" (also
@@ -746,8 +778,9 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
 
       // ── (WP-W0) CLAIM-VS-RESULT VERIFICATION (render truth) ──────────────────
       if (truthBefore && typeof truthRef.current === 'function') {
-        await settle(650); // let the patched state render (draw effect commits)
-        const truthAfter = truthRef.current();
+        // (Item C) settle on a DRAW COMMIT on the displayed dimension, not a fixed timer.
+        const baseSeq = (typeof truthBefore.drawSeq === 'number') ? truthBefore.drawSeq : -1;
+        const truthAfter = await waitDrawCommit(truthRef.current, baseSeq);
         const reply = String(data.reply || '');
         const archChanged = truthAfter.archetypeId !== truthBefore.archetypeId;
 
@@ -808,6 +841,42 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           return;
         }
 
+        // 1b. (Item C·3) FONT-SIZE FIDELITY — "make the title bigger" (belt or model)
+        // must be backed by a real change in the DRAWN px. ROLE_OF_FIELD has no fontSizes
+        // entry, so compare the applied step against the size actually painted
+        // (truthBefore/After.fontMeta): if the step moved but the rendered size did not
+        // move in that direction (the hero is box/fit-bound — Item A subordinates the
+        // multiplier to the shrink-to-fit loop), the claim is false. Own it honestly.
+        if (patch.fontSizes && typeof patch.fontSizes === 'object'
+            && truthBefore.fontMeta && truthAfter.fontMeta) {
+          const beforeSteps = truthBefore.fontSizes || {};
+          for (const [fsRole, step] of Object.entries(patch.fontSizes)) {
+            if (typeof step !== 'string') continue;
+            const metaKey = FONT_ROLE_META_KEY[fsRole];
+            if (!metaKey) continue;
+            const prevStep = beforeSteps[fsRole] || 'm';
+            const dir = (FONT_STEP_ORDER[step] ?? 2) - (FONT_STEP_ORDER[prevStep] ?? 2);
+            if (dir === 0) continue; // the step didn't actually move
+            const before = truthBefore.fontMeta[metaKey];
+            const after = truthAfter.fontMeta[metaKey];
+            if (before == null || after == null) continue;
+            const grew = after > before + 0.5, shrank = after < before - 0.5;
+            const wantBigger = dir > 0;
+            if (wantBigger ? !grew : !shrank) {
+              verdict.honesty = 'corrected';
+              verdict.corrected = true;
+              verdict.contradictions.push('font-size-claim-unrendered');
+              const what = fsRole === 'content' ? 'the small text' : 'the title';
+              const note = wantBigger
+                ? `Actually — checking the canvas, ${what} is already as large as this layout can fit, so it didn't visibly grow. Try the “Try another layout” chip for one with more room, or tap it on the canvas to adjust by hand.`
+                : `Actually — checking the canvas, ${what} is already at the smallest readable size, so it didn't get smaller. Tap it on the canvas to adjust it by hand.`;
+              setMessages(prev => [...prev, { role: 'assistant', content: note }]);
+              setLoading(false);
+              return;
+            }
+          }
+        }
+
         // 2. TEXT ROLES: a field the patch filled that the layout genuinely can't
         // draw. The common legacy case — a caption on a photo_logo / texture_text —
         // now RENDERS in the legacy path (see renderScene), so it no longer trips
@@ -816,9 +885,30 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         // layout that shows the role (materialize — copy travels) so it's visible,
         // then confirm; fall back to an honest offer only if the promotion doesn't
         // cover it. This replaces the old dead-end "didn't change anything" no-op.
-        const deadFields = Object.entries(ROLE_OF_FIELD)
-          .filter(([field, role]) => typeof patch[field] === 'string' && patch[field].trim()
-            && (truthAfter.deadRoles || []).includes(role));
+        // (Item C·1) Two sources of a dead role:
+        //   (a) a field THIS patch filled that the layout can't draw (the original case);
+        //   (b) a role the REPLY CLAIMS it added/changed (keyword + change verb) whose
+        //       value is present in the CURRENT design but drew NO box on the live dim —
+        //       catches "Added a date line" / "added small text …" when the model narrates
+        //       a role it never painted (or that was already dead), even if the patch key
+        //       is absent. The current field value comes from the fresh design snapshot.
+        const curDesign = (typeof designState === 'function') ? (designState() || {}) : {};
+        const deadRolesNow = truthAfter.deadRoles || [];
+        const deadFieldMap = new Map();
+        for (const [field, role] of Object.entries(ROLE_OF_FIELD)) {
+          if (typeof patch[field] === 'string' && patch[field].trim() && deadRolesNow.includes(role)) {
+            deadFieldMap.set(field, role);
+          }
+        }
+        for (const [role, kw] of Object.entries(ROLE_CLAIM_KEYWORDS)) {
+          const field = FIELD_OF_ROLE[role];
+          if (!field || deadFieldMap.has(field)) continue;
+          const claimed = CLAIM_VERB.test(reply) && kw.test(reply);
+          const hasValue = typeof curDesign[field] === 'string' ? !!curDesign[field].trim()
+            : (typeof patch[field] === 'string' ? !!patch[field].trim() : false);
+          if (claimed && hasValue && deadRolesNow.includes(role)) deadFieldMap.set(field, role);
+        }
+        const deadFields = [...deadFieldMap.entries()];
         const deadHits = deadFields.map(([, role]) => ROLE_LABELS[role] || role);
         if (deadHits.length) {
           verdict.honesty = 'corrected';
@@ -827,14 +917,14 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           verdict.deadRoles = deadHits;
           const onLegacy = !truthAfter.archetypeId;
           const promoteTarget = designState?.hasImage ? 'editorial_split' : 'manifesto';
-          let promoted = false;
+          let promoted = false, promoteSeq = truthAfter.drawSeq ?? -1;
           if (onLegacy && truthAfter.archetypeId !== promoteTarget) {
+            promoteSeq = (truthRef.current().drawSeq ?? -1);
             const retryKeys = applyRef.current({ archetypeId: promoteTarget }) || [];
             promoted = retryKeys.includes('archetypeId');
           }
           if (promoted) {
-            await settle(650);
-            const t2 = truthRef.current();
+            const t2 = await waitDrawCommit(truthRef.current, promoteSeq);
             const stillDead = deadFields.some(([, role]) => (t2.deadRoles || []).includes(role));
             if (!stillDead) {
               verdict.retryTarget = promoteTarget;
@@ -863,8 +953,11 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           // async continuation — passing the values makes the reveal reliable).
           const carryCopy = {};
           for (const [field] of deadFields) {
-            const v = typeof patch[field] === 'string' ? patch[field] : undefined;
-            if (typeof v === 'string') carryCopy[field] = v;
+            // Prefer this turn's patch value; else the current design value (claim-based
+            // dead role whose copy was already present) so the reveal still carries it.
+            const v = typeof patch[field] === 'string' ? patch[field]
+              : (typeof curDesign[field] === 'string' ? curDesign[field] : undefined);
+            if (typeof v === 'string' && v.trim()) carryCopy[field] = v;
           }
           const offer = offerTarget !== truthAfter.archetypeId
             ? { id: newTurnId(), kind: 'patch', patch: { archetypeId: offerTarget, ...carryCopy }, revealRoles,
