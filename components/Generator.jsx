@@ -2597,6 +2597,8 @@ function fitCopyClient(s, max){
   const cut = t.slice(0, max).replace(/\s+\S*$/, '').trim();
   return cut || t.slice(0, max).trim();
 }
+// (copy-fit spec) The copy fields authorship keys off (Tier 2 authorship map + fits).
+const COPY_AUTHOR_FIELDS = ['headline','subtext','attribution','dateText','microLabel','pillText'];
 
 // Built-in brand overlay shapes (always available in the library). Fallback =
 // lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS (identical values — pixel-
@@ -3055,6 +3057,13 @@ export default function App() {
   // (WP-U fix #1) User override for the accent PILL/badge label (archetype furniture).
   // "" = the archetype's authored badge text; non-empty = the user's own label.
   const [pillText, setPillText] = useState(null); // null = archetype badge · "" = explicitly none · text = override (WP-V sentinel)
+  // (copy-fit spec, Tier 2) AUTHORSHIP MAP — which copy fields the SYSTEM wrote vs the
+  // owner. Fields set by a landing/caption/belt/AI patch are stamped 'ai' (the system's
+  // own free variable → silently fitted to the slot at layout time); ANY manual edit
+  // (inspector typing / canvas tap-edit) transfers the field to 'owner' PERMANENTLY —
+  // owner copy is never silently altered (pins law), it gets the Tier-3 remedy instead.
+  // A field absent from this map is treated as owner (never silently trimmed).
+  const [copyAuthors, setCopyAuthors] = useState({});
   const [heroRegister, setHeroRegister] = useState("");   // "" = legacy caps-sans hero
   const [typeLayouts, setTypeLayouts] = useState(freshTypeLayouts);
   // Per-dimension text-layout overrides {dimId:{postType:{...}}}. Written ONLY when
@@ -3497,6 +3506,7 @@ export default function App() {
     // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
     // patch that materializes an archetype reverts cleanly as one action.
     photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
+    copyAuthors: { ...copyAuthors },   // (copy-fit Tier 2) authorship rides undo/redo
     typeLayouts: JSON.parse(JSON.stringify(typeLayouts)),
     userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
     logoFreePos: logoFreePos ? { ...logoFreePos } : null,   // (Refinement 2) free-logo master pin
@@ -3948,6 +3958,24 @@ export default function App() {
         avoidLogoGeo: patch.logoPosition != null || patch.logoSize != null };
     }
 
+    // (copy-fit Tier 2) AUTHORSHIP. Stamp every copy field this patch actually changed:
+    // a UI-sourced edit (inspector typing / canvas tap-edit → opts.uiSource) is the
+    // OWNER; anything else (landing / caption / belt / AI chat patch) is the system.
+    // Owner is PERMANENT — a later system patch updates the value but never downgrades
+    // the field back to 'ai', so owner copy is never silently fitted (pins law).
+    const _touchedCopy = applied.filter(f => COPY_AUTHOR_FIELDS.includes(f));
+    if (_touchedCopy.length) {
+      const author = opts.uiSource ? "owner" : "ai";
+      setCopyAuthors(prev => {
+        const next = { ...prev };
+        for (const f of _touchedCopy) {
+          if (author === "owner") next[f] = "owner";
+          else if (next[f] !== "owner") next[f] = "ai";
+        }
+        return next;
+      });
+    }
+
     return applied;
   };
 
@@ -4169,6 +4197,9 @@ export default function App() {
     setSubtext(s.subtext);
     setAttribution(s.attribution);
     setDateText(s.dateText);
+    // (copy-fit Tier 2) restore authorship (undo/redo/reset). Absent → {} = owner-safe
+    // (no field is 'ai', so nothing is silently trimmed).
+    setCopyAuthors(s.copyAuthors && typeof s.copyAuthors === "object" ? { ...s.copyAuthors } : {});
     setBgColor(s.bgColor);
     setFieldColorOverride("fieldColorOverride" in s ? (s.fieldColorOverride ?? null) : null);
     if (typeof s.bgAlpha === "number") setBgAlpha(s.bgAlpha);
@@ -4221,6 +4252,10 @@ export default function App() {
   // ASYNC continuation holding a stale prop closure — refs always read fresh.
   const truthStateRef = useRef({});
   truthStateRef.current = { archetypeId, logoPosition, userLogoTouched, W, H };
+  // (copy-fit Tier 2) Live authorship map for renderScene — a ref so the render (and
+  // its async continuations) always read the fresh map, never a stale closure (M1).
+  const copyAuthorsRef = useRef({});
+  copyAuthorsRef.current = copyAuthors;
   const renderTruth = () => ({
     archetypeId: truthStateRef.current.archetypeId,
     logoPosition: truthStateRef.current.logoPosition,
@@ -6011,10 +6046,24 @@ export default function App() {
       let labelBox=clampText(mat.roles?.microLabel);
       const isBigNum=mat.usesDateAsHero;
       const cc=opts.calibrationContent||null;
-      const ccHeadline=cc&&cc.headline!=null?cc.headline:headline;
-      const ccSubtext=cc&&cc.subtext!=null?cc.subtext:subtext;
-      const ccAttribution=cc&&cc.attribution!=null?cc.attribution:attribution;
-      const ccDateText=cc&&cc.dateText!=null?cc.dateText:dateText;
+      // ── (copy-fit spec, Tier 2) SILENTLY FIT MACHINE-AUTHORED COPY ────────────
+      // The system's own words are its free variable: a landing/caption/belt/AI line
+      // that runs over its slot is trimmed on a sentence boundary (fitCopy semantics)
+      // BEFORE layout — so it renders whole (no dropped role, no advisor dot) instead
+      // of overflowing then dropping. OWNER copy is returned verbatim (pins law) → it
+      // keeps the complete-or-absent drop path and the Tier-3 remedy. Live renders only
+      // (calibration / born-clean-guard renders inject fixed content with no authorship).
+      let _fitBudgets=null;
+      const _fitAI=(val,field)=>{
+        if(cc || !live) return val;
+        if((copyAuthorsRef.current||{})[field]!=='ai') return val;
+        if(!_fitBudgets) _fitBudgets=computeCopyBudgets(archetypeId,dimId,postType,fontSizes);
+        return fitCopyClient(val,_fitBudgets[field]);
+      };
+      const ccHeadline=cc&&cc.headline!=null?cc.headline:_fitAI(headline,'headline');
+      const ccSubtext=cc&&cc.subtext!=null?cc.subtext:_fitAI(subtext,'subtext');
+      const ccAttribution=cc&&cc.attribution!=null?cc.attribution:_fitAI(attribution,'attribution');
+      const ccDateText=cc&&cc.dateText!=null?cc.dateText:_fitAI(dateText,'dateText');
       const heroFinal = isBigNum ? (ccDateText||ccHeadline||"") : (ccHeadline || "");
       const eyebrow = (mat.microLabelText != null) ? mat.microLabelText : (labelBox && mat.roles?.microLabel && ccAttribution && ccSubtext && ccAttribution.length<=28 ? ccAttribution : "");
       // support text: subtext, else attribution (if not already used as the eyebrow),
@@ -9312,6 +9361,10 @@ export default function App() {
     setSubtext(s.subtext || "");
     setAttribution(s.attribution || "");
     setDateText(s.dateText || "");
+    // (copy-fit Tier 2) A starter template's copy is a deliberate, pre-fit choice —
+    // restore its stored authorship, defaulting to owner-safe ({}) so it is never
+    // silently trimmed.
+    setCopyAuthors(s.copyAuthors && typeof s.copyAuthors === "object" ? { ...s.copyAuthors } : {});
     setSelectedLogoId(s.selectedLogoId || "p3-ivory");
     // A starter template is a starting point — let the render guarantee logo/field
     // contrast (Commit 3) rather than pinning the template's stored variant.
