@@ -4617,6 +4617,25 @@ export default function App() {
       window.__woApplyPatch = (patch, opts) => (applyPatchRef.current || (()=>{}))(patch, opts || { source: "ui", uiSource: true });
       // Open an element inspector panel from the console (verification of inspector UI).
       window.__woSelectElement = (kind, uid) => selectElement(kind, uid || null);
+      // (P1 1b) DATE-LADDER PROBE — drive the REAL placeElement→placeTextElement text
+      // seam with a synthetic surface so the register-escalation ladder (cfg.escalate)
+      // can be exercised deterministically (the natural photo path is byte-identical to
+      // 1a and rarely lands the solver on texture). opts={maxV,min} = the busyness /
+      // worst-cell contrast a candidate box reads; returns the winning register so a
+      // caller can watch the ladder step weight → face → band. Dev-only (item 8).
+      window.__woDateLadderProbe = (opts) => {
+        const o = opts || {};
+        const cands = [{ id: "probe", at: () => ({ x: 100, y: 100 }) }];
+        const measure = (px) => ({ w: 200, h: px * 1.28 });         // fixed-width box (fits bounds)
+        const surface = () => ({ min: o.min ?? 6, maxV: o.maxV ?? 0 }); // the synthetic surface
+        const sol = placeElement({ align: "left" }, {
+          w: 1080, h: 1080, cfg: dateElementClass(60),
+          candidates: cands, hardObstacles: [], softObstacles: [],
+          safe: { x0: 0, y0: 0, x1: 1080, y1: 1080, tolX: 0, tolY: 0 },
+          focalBox: null, measure, surface, baseInk: B.burnham, inkPoles: [B.burnham, B.whiteSmoke],
+        });
+        return sol ? { face: sol.face, weight: sol.weight, band: sol.band, px: +sol.px.toFixed(2) } : null;
+      };
     }
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
