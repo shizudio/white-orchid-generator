@@ -1,6 +1,6 @@
 # Element-placement spec — from slots to anchors + constraints
 
-**Status: DRAFT — awaiting client sign-off.** Written 2026-07-13 from the client's direction: *"I am sure all layouts can show these elements — it's just a matter of size and composition. How do I allow maximum freedom to put items in, with consistent restraints of where elements can land cleanly?"* Owner (once ratified) of: the universal element contract, the placement solver, and the density governor. Companion rulings already ratified elsewhere: copy-fit (docs/copy-fit-spec.md), register escalation ("the system should give me the most accessible font in the brand").
+**Status: RATIFIED 2026-07-13** ("The element-placement spec looks good, let's execute"). Written from the client's direction: *"I am sure all layouts can show these elements — it's just a matter of size and composition. How do I allow maximum freedom to put items in, with consistent restraints of where elements can land cleanly?"* Owner (once ratified) of: the universal element contract, the placement solver, and the density governor. Companion rulings already ratified elsewhere: copy-fit (docs/copy-fit-spec.md), register escalation ("the system should give me the most accessible font in the brand").
 
 ## The change in one sentence
 
