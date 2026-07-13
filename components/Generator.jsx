@@ -1355,20 +1355,27 @@ function placeTextElement(base, ctx){
 // order — rung 0 ink-flip (pickInk), then heavier sanctioned WEIGHT → the most robust
 // brand FACE (the sans body) → SIZE up within range → BAND last resort. Faces/weights
 // reference F (brand fonts), so the class is built at call time (never at module-eval).
-function dateElementClass(preferredPx){
+// (§6a shape–band exclusion — RATIFIED 2026-07-13) opts.noBand drops the BAND last-resort
+// rung: on a design with an active shape (archetype mask/cutout, or a free shape intersecting
+// the zone) the band rung is disabled by default, so the ladder resolves through ink→weight→
+// face→size only. If none passes, placeTextElement returns null (an HONEST refusal → the
+// solver relocates via another candidate, or the finding surfaces as a dot) — never a band.
+function dateElementClass(preferredPx, opts){
+  const noBand = !!(opts && opts.noBand);
   return {
     preferredPx,
     escalate: {
       contrastFloor: 4.5,   // AA for a reading line (the caption's own escalate floor)
       opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
       heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
+      noBand,               // (§6a) shape designs forbid the band rung
       rungs: [
         { face: F.title, weight: 300 },                 // the elegant light serif (today's default)
         { face: F.title, weight: 700 },                 // rung: heavier SANCTIONED serif weight
         { face: F.body,  weight: 600 },                 // rung: the most robust brand FACE (sans body)
         { face: F.body,  weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
         { face: F.body,  weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ],
+      ].filter(r => !(noBand && r.band)),               // (§6a) shape design → no band rung
     },
   };
 }
@@ -1380,20 +1387,22 @@ function dateElementClass(preferredPx){
 // most robust brand FACE (the sans body, still drawn caps+tracked) → SIZE up within range
 // → BAND last resort. The caller draws the winning rung via drawMicroLabel(face,weight),
 // so the ladder and the paint never diverge. Built at call time (F references brand fonts).
-function eyebrowElementClass(preferredPx){
+function eyebrowElementClass(preferredPx, opts){
+  const noBand = !!(opts && opts.noBand);   // (§6a) shape designs forbid the band rung
   return {
     preferredPx,
     escalate: {
       contrastFloor: 4.5,   // AA for a small reading label (mirrors the date's floor)
       opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
       heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
+      noBand,
       rungs: [
         { face: F.subtitle, weight: 400 },                 // the light tracked eyebrow (today's default register)
         { face: F.subtitle, weight: 700 },                 // rung: heavier SANCTIONED caps weight (Syne 700)
         { face: F.body,     weight: 600 },                 // rung: the most robust brand FACE (sans body, caps)
         { face: F.body,     weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
         { face: F.body,     weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ],
+      ].filter(r => !(noBand && r.band)),                  // (§6a) shape design → no band rung
     },
   };
 }
@@ -4680,7 +4689,9 @@ export default function App() {
         const measure = (px) => ({ w: 200, h: px * 1.28 });         // fixed-width box (fits bounds)
         const surface = () => ({ min: o.min ?? 6, maxV: o.maxV ?? 0 }); // the synthetic surface
         const sol = placeElement({ align: "left" }, {
-          w: 1080, h: 1080, cfg: dateElementClass(60),
+          // (§6a) opts.noBand exercises the shape-design path: the band last-resort rung is
+          // dropped, so a busy/low-contrast surface resolves without a band (or refuses honestly).
+          w: 1080, h: 1080, cfg: dateElementClass(60, { noBand: !!o.noBand }),
           candidates: cands, hardObstacles: [], softObstacles: [],
           safe: { x0: 0, y0: 0, x1: 1080, y1: 1080, tolX: 0, tolY: 0 },
           focalBox: null, measure, surface, baseInk: B.burnham, inkPoles: [B.burnham, B.whiteSmoke],
@@ -4697,7 +4708,7 @@ export default function App() {
         const measure = (px) => ({ w: 200, h: px * 1.4 });          // fixed-width box (fits bounds)
         const surface = () => ({ min: o.min ?? 6, maxV: o.maxV ?? 0 });
         const sol = placeElement({ align: "left" }, {
-          w: 1080, h: 1080, cfg: eyebrowElementClass(44),
+          w: 1080, h: 1080, cfg: eyebrowElementClass(44, { noBand: !!o.noBand }),   // (§6a) shape-design path
           candidates: cands, hardObstacles: [], softObstacles: [],
           safe: { x0: 0, y0: 0, x1: 1080, y1: 1080, tolX: 0, tolY: 0 },
           focalBox: null, measure, surface, baseInk: B.burnham, inkPoles: [B.burnham, B.whiteSmoke],
@@ -6018,6 +6029,36 @@ export default function App() {
       // __woArchStress (asserts _doubleBackdrop===0) catches any reintroduction.
       if(_bandColors.length>1)_doubleBackdrop++;
     };
+    // ── (§6a THE SHAPE–BAND EXCLUSION — RATIFIED 2026-07-13) ────────────────────
+    // "When we are using a shape, we don't use the text band by default — they are
+    // conflicting visually." On any design with an ACTIVE SHAPE (an archetype mask/
+    // cutout — photoFrame.type shapeMask/petalMask — or a free overlay shape that
+    // intersects a text zone) the BAND rung of the legibility ladder is disabled by
+    // default across EVERY legibility path. The remaining free variables (placement
+    // clear of the shape, ink flip, weight, robust face, size) do the work. A band may
+    // appear on a shape design ONLY by the owner's explicit ask (backdropMode:'band'),
+    // and even then a band must NEVER clip / overlap / slice a shape's silhouette.
+    // `_archShapeActive` is the archetype mask/cutout; `_activeShapeBoxes` collects the
+    // drawn silhouette boxes (the archetype mask + free decor shapes) for the overlap
+    // guard — populated where maskBox / decorObstacles are computed below, read here at
+    // band-paint time (bands always paint AFTER those are set). `_bandOverShape` counts
+    // any band the guard had to BLOCK because it would have overlapped a silhouette — it
+    // must stay 0 in normal operation; __woArchStress asserts it (sabotage-testable).
+    const _archShapeActive = !!(mat && mat.photoFrame && (mat.photoFrame.type==="shapeMask" || mat.photoFrame.type==="petalMask"));
+    let _activeShapeBoxes = [];
+    let _bandOverShape = 0;
+    const _rectsHit=(a,b)=>!!(a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y);
+    // The single choke point for every contrast band. Enforces §6a: auto band suppressed
+    // on shape designs; any band (auto OR explicit) that would overlap a silhouette is
+    // blocked and counted. Records the paint via _bandRole so the double-band assertion
+    // still holds. `explicit` = an owner backdropMode:'band' ask (the only sanctioned band
+    // on a shape design). Returns true when a band was actually painted.
+    const _paintBand=(box,color,op,explicit)=>{
+      if(_archShapeActive && !explicit) return false;                        // (§6a) auto band disabled on shape designs
+      if(box && _activeShapeBoxes.some(sb=>_rectsHit(box,sb))){ _bandOverShape++; return false; }  // (§6a) never over a silhouette
+      drawSolidBand(ctx,w,h,box,color,(op==null?0.92:op)); _bandRole(box,color);
+      return true;
+    };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
       if(frameBgTextColor)return;   // text is on flat solid bg (snapped clear of the frame) → no scrim needed
       if(!mediaObj)return;
@@ -6027,7 +6068,9 @@ export default function App() {
       if(mode==="none")return;                 // shadow-only (beginText adds it)
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
+        // (§6a) An EXPLICIT owner band is the one sanctioned band on a shape design —
+        // routed through _paintBand so it is still blocked if it would slice a silhouette.
+        _paintBand(box,bandColor,0.92,true);
         return;
       }
       // AUTO. The colour-flip already ran in resolveZoneTc (rung 1); placement/quiet
@@ -6039,12 +6082,16 @@ export default function App() {
         // deepening of the existing tint, not a new treatment. If it's still failing
         // at max, a band replaces the extra tint (last resort).
         if(!zoneFails(box))return;             // tint alone is legible
+        // (§6a) On a shape design the AUTO band last-resort is disabled — the deepened
+        // tint is the terminal treatment (the tint sits INSIDE the mask, never a band
+        // slicing the silhouette). Non-shape designs keep the band fallback.
         for(let step=0.04;step<=TINT_DEEPEN_MAX+1e-6;step+=0.03){
           drawSolidBand(ctx,w,h,box,(curBg?.color)||B.burnham,Math.min(step,TINT_DEEPEN_MAX));
           if(!zoneFails(box))return;           // deepened tint now legible
         }
-        // Tint at max still fails → drop a solid brand band as the last resort.
-        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
+        // Tint at max still fails → drop a solid brand band as the last resort (suppressed
+        // on shape designs by _paintBand; the deepened tint stands as the final treatment).
+        _paintBand(box,bandColor,0.92,false);
         return;
       }
       // Untinted (texture_text/photo_logo): quiet-region check under the zone,
@@ -6054,7 +6101,7 @@ export default function App() {
       // ⇒ light text + dark band; bright zone ⇒ dark text + ivory band.
       const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
+      _paintBand(box,bandColor,0.92,false);    // (§6a) suppressed on shape designs
     };
     const setTextBounds=used=>{if(live||opts.captureAudit)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -6236,6 +6283,7 @@ export default function App() {
           return {x:m0.x+(m0.w-mw)/2, y:m0.y+(m0.h-mh)/2, w:mw, h:mh};
         })() : null;
         maskBox=m;
+        if(m) _activeShapeBoxes.push(m);   // (§6a) the mask silhouette is a band-exclusion obstacle
         if(m && mediaObj && shapeImg){
           // (R2 ROOT CAUSE — partial-alpha silhouettes) Brand SVGs may carry a
           // partial fill opacity (shape-1 ships fill-opacity 0.4). The old code
@@ -6314,6 +6362,7 @@ export default function App() {
           canCompose=contrastRatio(hexLuminance(fill),hexLuminance(inkColor))>=4.5;
         }
         decorObstacles.push({box:dBox,canCompose});
+        _activeShapeBoxes.push(dBox);   // (§6a) a free shape is a band-exclusion obstacle — no band may slice it
         // Early (under-text) draw for solid overlay-mode decor.
         if((layer.mode||"frame")==="overlay"){
           if(layer.motif){ const tinted=tintedAccessory(img,fill); drawOverlayLayer(ctx,tinted||img,w,h,t); }
@@ -6752,14 +6801,14 @@ export default function App() {
         candsE.push({id:"corner-br", at:(bw,bh)=>({x:(1-safRE)*w-bw, y:(1-safBE)*h-bh})});
         const _ebOff=roleOff("eyebrow");
         const solE=placeElement({align:ebAlign},{
-          w,h, cfg:eyebrowElementClass(ebPref),
+          w,h, cfg:eyebrowElementClass(ebPref,{noBand:_archShapeActive}),   // (§6a) shape design → ladder resolves without a band
           candidates:candsE, hardObstacles:hardObstaclesE, softObstacles:softObstaclesE,
           safe:{x0:safLE*w,y0:safTE*h,x1:(1-safRE)*w,y1:(1-safBE)*h,tolX:0,tolY:0},
           focalBox:_focalBoxE, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
         });
         if(solE){
           ctx.save();
-          if(solE.band){ const bandCol=hexLuminance(solE.ink)>0.5?B.burnham:B.whiteSmoke; drawSolidBand(ctx,w,h,{x:solE.x,y:solE.y,w:solE.w,h:solE.h},bandCol); }
+          if(solE.band){ const bandCol=hexLuminance(solE.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:solE.x,y:solE.y,w:solE.w,h:solE.h},bandCol,0.92,false); }  // (§6a) guarded — never over a silhouette
           ctx.fillStyle=solE.ink;
           drawMicroLabel(ctx,ebTxt,solE.x+_ebOff.dx,solE.y+_ebOff.dy,solE.px,{align:"left",tracking:0.08,face:solE.face,weight:solE.weight});
           ctx.restore();
@@ -6885,14 +6934,14 @@ export default function App() {
           const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
           const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
           const sol=placeElement({align:dAlign},{
-            w,h, cfg:dateElementClass(dSz),
+            w,h, cfg:dateElementClass(dSz,{noBand:_archShapeActive}),   // (§6a) shape design → ladder resolves without a band
             candidates:cands, hardObstacles, softObstacles,
             safe:{x0:safL*w,y0:safT*h,x1:(1-safR)*w,y1:(1-safB)*h,tolX:0,tolY:0},
             focalBox:_focalBox, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
           });
           if(sol){
             beginText();
-            if(sol.band){ const bandCol=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; drawSolidBand(ctx,w,h,{x:sol.x,y:sol.y,w:sol.w,h:sol.h},bandCol); }
+            if(sol.band){ const bandCol=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:sol.x,y:sol.y,w:sol.w,h:sol.h},bandCol,0.92,false); }  // (§6a) guarded — never over a silhouette
             ctx.fillStyle=sol.ink; ctx.font=`${sol.weight} ${sol.px}px ${sol.face}`;
             drawTextLines(ctx,[dTxt],sol.x+_dOff.dx,sol.y+sol.px+_dOff.dy,sol.w,sol.px*1.05,"left");
             fontMeta.date=sol.px; endText();
@@ -7424,6 +7473,7 @@ export default function App() {
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
             seamStraddles, degeneratePhoto, logoDominant, logoLowContrast,
             doubleBackdrop:_doubleBackdrop,   // (single-owner) a role banded >1× per render
+            bandOverShape:_bandOverShape,     // (§6a) a band the guard BLOCKED because it would slice a shape silhouette — must be 0
             decorOverlapsText:_decorOverlapsText, decorInFocal:_decorInFocal,  // (item 4a) decor law
             frameMisalign:(()=>{               // (item 4b/4d) mask/outline/photo window must be ONE unit
               const fb=(frame.type==="card")?cardBox:(frame.type==="petalMask"||frame.type==="shapeMask")?maskBox:null;
@@ -8477,7 +8527,7 @@ export default function App() {
       };
       const fmts = DIMENSIONS.map(d => d.id);
       const prev = auditRef.current, prevBounds = textBoundsRef.current;
-      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0, dblband = 0, decortext = 0, decorfocal = 0, framemis = 0;
+      const rows = []; let overlaps = 0, crops = 0, midcuts = 0, seams = 0, degens = 0, logodoms = 0, logolows = 0, dblband = 0, decortext = 0, decorfocal = 0, framemis = 0, bandshape = 0;
       try {
         for (const id of ARCHETYPE_IDS) for (const dimId of fmts) {
           const dm = DIMENSIONS.find(d => d.id === dimId);
@@ -8489,13 +8539,14 @@ export default function App() {
             const sea = dr.seamStraddles || 0, dg = dr.degeneratePhoto ? 1 : 0, ld = dr.logoDominant ? 1 : 0;
             const ll = dr.logoLowContrast ? 1 : 0;   // (brand ruling) = illegible logo NOT flagged (never fabricate a backing; flag instead)
             const db = dr.doubleBackdrop || 0;        // (single-owner) a text role got >1 contrast band
+            const bs = dr.bandOverShape || 0;         // (§6a) a band was blocked from slicing a shape silhouette
             const dt = dr.decorOverlapsText || 0, df = dr.decorInFocal || 0, fm = dr.frameMisalign || 0;  // (item 4) decor law + frame geometry
-            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll; dblband += db; decortext += dt; decorfocal += df; framemis += fm;
-            if (o || cr || mc || sea || dg || ld || ll || db || dt || df || fm) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, doubleBackdrop: db, decorOverlapsText: dt, decorInFocal: df, frameMisalign: fm, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
+            overlaps += o; crops += cr; midcuts += mc; seams += sea; degens += dg; logodoms += ld; logolows += ll; dblband += db; decortext += dt; decorfocal += df; framemis += fm; bandshape += bs;
+            if (o || cr || mc || sea || dg || ld || ll || db || dt || df || fm || bs) rows.push({ archetype: id, dimId, boxOverlaps: o, outOfMargin: !!cr, midCut: mc, seamStraddles: sea, degeneratePhoto: !!dg, logoDominant: !!ld, logoLowContrast: !!ll, doubleBackdrop: db, bandOverShape: bs, decorOverlapsText: dt, decorInFocal: df, frameMisalign: fm, logoPhotoContrast: dr.logoPhotoContrast ?? null, diag: dr._diag || null });
           } catch (e) { rows.push({ archetype: id, dimId, error: String(e) }); }
         }
       } finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
-      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0 && dblband === 0 && decortext === 0 && decorfocal === 0 && framemis === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, totalDoubleBackdrop: dblband, totalDecorOverlapsText: decortext, totalDecorInFocal: decorfocal, totalFrameMisalign: framemis, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
+      const report = { pass: overlaps === 0 && crops === 0 && midcuts === 0 && seams === 0 && degens === 0 && logodoms === 0 && logolows === 0 && dblband === 0 && decortext === 0 && decorfocal === 0 && framemis === 0 && bandshape === 0, totalOverlaps: overlaps, totalCrops: crops, totalMidCuts: midcuts, totalSeamStraddles: seams, totalDegeneratePhotos: degens, totalLogoDominant: logodoms, totalLogoLowContrast: logolows, totalDoubleBackdrop: dblband, totalBandOverShape: bandshape, totalDecorOverlapsText: decortext, totalDecorInFocal: decorfocal, totalFrameMisalign: framemis, cells: ARCHETYPE_IDS.length * fmts.length, offenders: rows };
       // eslint-disable-next-line no-console
       console.log("[woArchStress]", JSON.stringify(report));
       return report;
@@ -8539,6 +8590,15 @@ export default function App() {
         // surfaces here (and via __woArchStress's doubleBackdrop assertion), not in prod.
         { headline: "Celebrating Art Week", subtext: "Join us for a week of creativity and expression",
           attribution: "The White Orchid", dateText: "18 July" },
+        // (§6a shape–band exclusion — RATIFIED 2026-07-13) A SHAPE archetype (shape_cutout /
+        // petal_window) with a LONG CAPS HEADLINE is the client's reported geometry: the caps
+        // headline dips toward the mask's busy crown. With the band rung disabled on shape
+        // designs the system must stay born-clean by PLACEMENT alone (the mask is a first-class
+        // obstacle) — this profile keeps that case in the deterministic sweep so a regression of
+        // the exclusion (a band manufactured behind the headline, or the headline slicing the
+        // silhouette) surfaces here and via __woArchStress's bandOverShape assertion, not in prod.
+        { headline: "WE'RE HIRING EARLY CHILDHOOD EDUCATORS", subtext: "Join our nurturing team this autumn",
+          attribution: "The White Orchid", dateText: "Autumn 2026" },
       ];
       const SYSTEM_FINDING_IDS = new Set(["safe-area-text", "safe-area-logo", "logo-legibility", "archetype-margin-crop", "archetype-box-overlap"]);
       const offenders = [];
