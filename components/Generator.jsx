@@ -2530,6 +2530,74 @@ function focalToImgT(img,w,h,focal,targetFx,targetFy,userZoom=1){
 /* ───────── OVERLAY ASSETS ───────── */
 const MASTER_DIM = "ig_square"; // square is the master; other formats cascade from it
 
+/* ── (copy-fit spec, docs/copy-fit-spec.md) THE MEASURED SLOT BUDGET ──────────
+   computeCopyBudgets(archetypeId, dimId, postType, fontSizes) → per-role character
+   budgets for the ACTIVE archetype × format. The budget is the slot's capacity:
+     budget ≈ (chars one line holds at the legibility FLOOR) × (lines the box holds)
+   derived from the materialized role box (fractions → px for THIS format), the per-
+   role MIN_FONT_PX floor, and the box's line/width capacity — the spec's "measured
+   slot box × floor size × max lines". Deliberately CONSERVATIVE (≈0.9×) so copy
+   written or trimmed to it renders WHOLE (born-clean), never floored-then-dropped.
+
+   This one number is used in all three copy-fit tiers: it rides chatDesignState →
+   compactDesignState so every server copy-writer sees it (Tier 1 prevention); the
+   render silently trims MACHINE-authored copy to it (Tier 2); and "Tighten it for me"
+   rewrites/trims OWNER copy to it (Tier 3). */
+function computeCopyBudgets(archetypeId, dimId, postType, fontSizes){
+  const dim = DIMENSIONS.find(d=>d.id===dimId) || DIMENSIONS.find(d=>d.id===MASTER_DIM) || DIMENSIONS[0];
+  const W = dim.w, H = dim.h;
+  // chars-per-line × lines for a role box, measured at its readable floor size.
+  const budgetFor = (box, floorRole, heavy, cap) => {
+    if(!box || !box.w || !box.h) return cap;
+    const floorPx = MIN_FONT_PX[floorRole] ? MIN_FONT_PX[floorRole](H) : 0.06*H;
+    const leading = heavy ? 1.06 : 1.28;
+    const lines = Math.max(1, Math.floor((box.h*H) / (floorPx*leading)));
+    // average glyph advance ≈ 0.52em body serif, ≈0.60em heavy-sans caps.
+    const perLine = Math.max(1, Math.floor((box.w*W) / (floorPx*(heavy?0.60:0.52))));
+    return Math.max(8, Math.min(cap, Math.round(lines*perLine*0.9)));
+  };
+  const arch = (archetypeId && archetypeId!=='none') ? ARCHETYPES_BY_ID[archetypeId] : null;
+  if(arch){
+    const m = materializeArchetypeLayout(arch, dimId, 0);
+    const heavy = m.register==='heavySans';
+    const hero = m.roles?.hero, support = m.roles?.support, micro = m.roles?.microLabel;
+    return {
+      headline:    budgetFor(hero, 'headline', heavy, 120),
+      subtext:     budgetFor(support || hero, 'body', false, 200),
+      attribution: budgetFor(support || micro || hero, 'body', false, 90),
+      dateText:    budgetFor(hero, 'date', heavy, 40),
+      microLabel:  budgetFor(micro || support, 'dateLabel', false, 28),
+    };
+  }
+  // Legacy / no-archetype: derive from the format's textZone + maxLines for this postType.
+  const fmt = formatLayoutFor(dimId, postType || 'text_post');
+  const tz = fmt.textZone || {x:0.08,y:0.2,width:0.84};
+  const maxLines = Math.max(1, fmt.maxLines || 3);
+  const bodyFloor = MIN_FONT_PX.body(H);
+  const line = Math.max(1, Math.floor((tz.width*W)/(bodyFloor*0.52)));
+  return {
+    headline:    Math.max(12, Math.min(90,  Math.round(line*Math.min(2,maxLines)*0.9))),
+    subtext:     Math.max(12, Math.min(200, Math.round(line*maxLines*0.9))),
+    attribution: Math.max(12, Math.min(90,  Math.round(line*0.9))),
+    dateText:    40,
+    microLabel:  28,
+  };
+}
+
+// (copy-fit spec) Deterministic sentence-boundary trim — the client mirror of the
+// server's fitCopy (app/api/assistant/route.js). Trims to a sentence end within
+// budget when one sits past halfway, else the last whole word (no ellipsis). The
+// Tier-2 silent fit and the Tier-3 guarantee both trim through here.
+function fitCopyClient(s, max){
+  const t = String(s||'').trim();
+  if(!Number.isFinite(max) || t.length <= max) return t;
+  const window = t.slice(0, max+1);
+  const sent = window.match(/^[\s\S]*[.!?](\s|$)/);
+  if(sent && sent[0].trim().length >= max*0.5) return sent[0].trim();
+  const cut = t.slice(0, max).replace(/\s+\S*$/, '').trim();
+  return cut || t.slice(0, max).trim();
+}
+
 // Built-in brand overlay shapes (always available in the library). Fallback =
 // lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS (identical values — pixel-
 // identity contract). Official brand-assets uploads are merged in at load
@@ -4178,6 +4246,9 @@ export default function App() {
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: overlayLayers.map(l => ({ assetId: l.assetId, mode: l.mode || "frame" })),
     hasImage: !!(imageObj || videoObj),
+    // (copy-fit Tier 1) The active slot's measured character budget, so every server
+    // copy-writer (editor prompt, caption writer) writes copy that fits by construction.
+    copyBudget: computeCopyBudgets(archetypeId, dimensionId, postType, fontSizes),
   });
 
   const localAuditCacheRef = useRef({ sig: null, findings: null });

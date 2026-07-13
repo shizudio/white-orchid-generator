@@ -762,6 +762,7 @@ Write for this platform — follow its conventions exactly:
 ${platform.rules}
 
 Use the design's ACTUAL copy as your source of facts. NEVER invent dates, prices, claims, offers, statistics, testimonials, or event details that are not present below. If a date appears in the design, you may mention it; if none is given, do not make one up.
+${designState.copyBudget ? `\nThe on-canvas copy slots hold about: headline ${designState.copyBudget.headline}, caption ${designState.copyBudget.subtext}, attribution ${designState.copyBudget.attribution} characters. Any copy you echo onto the design itself must fit within these; the off-post caption you write here follows the platform length rules above.\n` : ''}
 ${hasCopy
   ? 'This design has copy — build the caption around it faithfully.'
   : 'This design has NO copy (photo-led). Write sparingly from the post type and the fact that there is an image — a warm, simple line or two. Do not invent specifics.'}
@@ -978,7 +979,24 @@ function compactDesignState(raw) {
     // colour/mood belts compare against IT so a repeat colour ask doesn't no-op
     // (setting fieldColor to a value it already has). Optional / may be absent.
     fieldColor: (typeof raw.fieldColorOverride === 'string' && raw.fieldColorOverride) ? raw.fieldColorOverride : null,
+    // (copy-fit Tier 1) The client's measured per-role character budget for the ACTIVE
+    // archetype × format, so the copy-writing prompts below can inject it and generated
+    // copy fits the slot by construction. Absent on the landing flow (no design yet).
+    copyBudget: (raw.copyBudget && typeof raw.copyBudget === 'object') ? raw.copyBudget : null,
   };
+}
+
+// (copy-fit Tier 1) A human-readable budget block for the copy-writing prompts. Names
+// the character ceiling of each on-canvas slot so the model writes within it; copy that
+// still runs over is silently fitted (AI copy) or offered a one-tap tighten (owner copy).
+function copyBudgetBlock(b){
+  if(!b || typeof b !== 'object') return '';
+  const n = (v, d) => (Number.isFinite(v) ? v : d);
+  return `FIT THE SLOT (character budgets for the CURRENT layout + format — write copy that fits by construction; copy longer than this is tightened to fit, so be concise):
+- headline ≤ ${n(b.headline,48)} characters
+- subtext / caption ≤ ${n(b.subtext,120)} characters
+- attribution ≤ ${n(b.attribution,64)} characters
+- eyebrow (microLabel) ≤ ${n(b.microLabel,28)} characters`;
 }
 
 export async function POST(request) {
@@ -1088,6 +1106,7 @@ VARIETY (important — the studio has felt repetitive):
 - OVERLAYS / FRAMES: NEVER add an overlay (addOverlay) unless the user explicitly names the treatment — "frame", "petal", "orchid shape", "cut-out", "overlay". An invite, open house, celebration or festive post is NOT a reason to add one. Default is always NO overlay.
 - AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.
 - COPY LENGTH (important — long copy renders tiny and becomes unreadable as a feed thumbnail): keep the headline to ~6 words or fewer, and any caption/subtext to ONE short line (~14 words / ~110 characters max). Do not write a paragraph. If the request implies more detail, pick the single most important line and leave the rest out.
+- FIT THE SLOT (character budgets — write copy that fits by construction; anything longer is tightened to fit): headline ≤ ${LANDING_COPY_MAX.headline} characters, subtext / caption ≤ ${LANDING_COPY_MAX.subtext} characters, attribution ≤ ${LANDING_COPY_MAX.attribution} characters, dateText ≤ ${LANDING_COPY_MAX.dateText} characters.
 
 PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only brief. When the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
   • ONE scene, ONE subject with a concrete action, a setting, and lighting.
@@ -1096,7 +1115,7 @@ PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only b
   • HARD RULE: scenePrompt must contain NO brand name, NO tagline, NO copy, and NO design/layout words (never "poster", "text", "headline", "logo", "caption", "Instagram", "White Orchid"). It describes only a real photograph. The studio adds the grade, camera and "no text" rules itself.
   • Leave scenePrompt NULL for text-only archetypes (serif_word, manifesto, quote_margin, motif_field, stat_tile, brand_card, closing_card, schedule_tile) — those are solid-field designs with no photo.`
     : `This is an ongoing edit inside the studio. Change ONLY the fields the user asked about — send a minimal patch. Leave everything else untouched (omit it from the patch).
-
+${designState.copyBudget ? `\n${copyBudgetBlock(designState.copyBudget)}\nWhenever you write or rewrite a copy field, keep it within this budget for the design's current layout + format.\n` : ''}
 ARCHETYPE (layout): only set patch.archetypeId when the user asks for a LAYOUT or STYLE change — "make it a poster", "try a different layout", "make it a quote card", "use the split layout", "turn this into a big date". In that case pick a DIFFERENT suited archetype than the current one. For a plain copy/colour/logo tweak, leave archetypeId null (do not change the layout). Available archetype ids: ${LANDING_ARCHETYPES.map(a => a.id).join(', ')}.
 
 LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACTLY):
