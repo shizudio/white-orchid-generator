@@ -3065,6 +3065,12 @@ export default function App() {
   // the renderer NEVER forks on it.
   const [photoTreatment, setPhotoTreatment] = useState("none");
   const [photoFrame, setPhotoFrame] = useState({ type: "none" });
+  // (Item B) Shapes inspector — the archetype's baked layout shape (elements.mask →
+  // photoFrame shapeMask/petalMask) is not an overlayLayers entry, so it must surface
+  // as a read-only pseudo-layer row that scrolls to + flashes the Layout-shape variant
+  // picker above. Ref = the picker section; flash = a brief highlight ring on tap.
+  const layoutShapeSecRef = useRef(null);
+  const [layoutShapeFlash, setLayoutShapeFlash] = useState(false);
   const [microLabel, setMicroLabel] = useState(null); // null = unset (fallback allowed) · "" = explicitly none (WP-V sentinel)
   // (WP-U fix #1) User override for the accent PILL/badge label (archetype furniture).
   // "" = the archetype's authored badge text; non-empty = the user's own label.
@@ -4435,6 +4441,8 @@ export default function App() {
       // patch takes the exact path a human click/inspector control would (ownership
       // flags, per-dim overrides, materialization). Dev-only, like __woSetArchetype.
       window.__woApplyPatch = (patch, opts) => (applyPatchRef.current || (()=>{}))(patch, opts || { source: "ui", uiSource: true });
+      // Open an element inspector panel from the console (verification of inspector UI).
+      window.__woSelectElement = (kind, uid) => selectElement(kind, uid || null);
     }
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
@@ -10291,15 +10299,39 @@ export default function App() {
   const renderShapesHome = () => {
     const hasLayoutShapes = (ARCHETYPES_BY_ID[archetypeId]?.variants || []).some(v => v.shapeId);
     const selLayer = overlayLayers.find(l => l.uid === selOverlay);
+    // (Item B) The current design's DOMINANT element is a baked layout shape when the
+    // archetype materialized a mask (shape_cutout → shapeMask, petal_window → petalMask).
+    // It is geometry, not an overlayLayers entry — so surface it as a read-only pseudo
+    // row at the TOP of the list (no delete) that jumps to the Layout-shape picker above.
+    const layoutShapeActive = photoFrame?.type==="shapeMask" || photoFrame?.type==="petalMask";
+    const layoutShapeAsset = layoutShapeActive
+      ? overlays.find(o => o.id === (ARCHETYPES_BY_ID[archetypeId]?.variants?.[archVariant]?.shapeId))
+      : null;
+    const jumpToLayoutShape = () => {
+      try { layoutShapeSecRef.current?.scrollIntoView({ behavior:"smooth", block:"nearest" }); } catch {}
+      setLayoutShapeFlash(true);
+      setTimeout(()=>setLayoutShapeFlash(false), 1100);
+    };
     return (
       <>
-        {hasLayoutShapes && <div style={{marginBottom:16}}>
+        {hasLayoutShapes && <div ref={layoutShapeSecRef} style={{marginBottom:16,borderRadius:10,transition:"box-shadow 0.3s",boxShadow:layoutShapeFlash?`0 0 0 2px ${B.burnham}`:"none"}}>
           <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Layout shape</div>
           {renderShapeVariantPanel()}
         </div>}
         <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8,paddingTop:hasLayoutShapes?12:0,borderTop:hasLayoutShapes?`1px solid ${B.ash}22`:"none"}}>Shapes on this design</div>
+        {layoutShapeActive && <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:9,border:`1.5px solid ${B.ash}33`,background:`${B.celadonDeep}0a`,marginBottom:6}}>
+          <button onClick={jumpToLayoutShape} title={hasLayoutShapes?"This is the layout's own shape — tap to change it above":"This is the layout's own shape"} style={{flex:1,display:"flex",alignItems:"center",gap:8,background:"none",border:"none",cursor:hasLayoutShapes?"pointer":"default",padding:0,textAlign:"left"}}>
+            <span style={{width:30,height:30,borderRadius:7,background:`${B.celadonDeep}22`,display:"grid",placeItems:"center",flexShrink:0}}>
+              {(layoutShapeAsset?.dataUrl||layoutShapeAsset?.src)?<img src={layoutShapeAsset.dataUrl||layoutShapeAsset.src} alt="" style={{maxWidth:22,maxHeight:22,objectFit:"contain"}}/>:<span aria-hidden="true" style={{fontSize:14,color:B.burnham}}>◆</span>}
+            </span>
+            <span style={{display:"flex",flexDirection:"column",gap:2,minWidth:0}}>
+              <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{layoutShapeAsset?.name||"Shape"}</span>
+              <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.6,textTransform:"uppercase",color:B.celadonDeep}}>Layout shape</span>
+            </span>
+          </button>
+        </div>}
         {overlayLayers.length===0
-          ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No free shapes yet. Add one below — then drag, rotate and resize it on the preview. Add as many as you like.</div>
+          ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>{layoutShapeActive?"No free shapes yet — the shape above is part of the layout. Add a free one below to drag, rotate and resize it on the preview.":"No free shapes yet. Add one below — then drag, rotate and resize it on the preview. Add as many as you like."}</div>
           : <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
               {overlayLayers.map((l,i)=>{
                 const a=overlays.find(o=>o.id===l.assetId); const on=selOverlay===l.uid; const mode=l.mode||"frame";
