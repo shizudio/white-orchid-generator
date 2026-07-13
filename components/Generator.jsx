@@ -275,6 +275,10 @@ function measureZoneContrast(srcCtx,zone,tc){
       // solid brand region where a colour-flip — not a band — is the right fix.
       zoneMeanL,
       flat:maxV<0.015,
+      // (Item D) busiest-cell variance — the optical-weight ladder forbids the thinnest
+      // registers RAW over photo TEXTURE (sqrt(maxV)>0.14, the same busyness threshold
+      // the logo-legibility guard uses), even when colour contrast passes.
+      maxV,
     };
   }catch(_){return null;}
 }
@@ -6532,6 +6536,26 @@ export default function App() {
       if(!isSchedule && supportText && supBox){
         beginText(); ctx.fillStyle=heroInk;
         const supAlign=mat.roles?.support?.align||"left";
+        // (Item D — register-escalation legibility ladder) The caption's default register
+        // is the THINNEST the system paints (Fira Sans 300 Light). It must never sit RAW
+        // over photo TEXTURE. Sample the surface UNDER the caption AS ALREADY RENDERED
+        // (rung 1 ink-flip + any band already composited): if it is still busy
+        // (sqrt(maxV) > 0.14 — the same busyness threshold the logo-legibility guard uses),
+        // no band covered it, so escalate to a heavier SANCTIONED weight of the SAME brand
+        // body face (rung 2) — a lighter-touch remedy than forcing a band. A flat/banded/
+        // solid surface keeps the elegant light weight (born-clean unchanged). Weight is a
+        // system free variable (no user weight pin); a pinned text COLOUR still governs the
+        // colour and is never reverted — this only thickens the stroke.
+        // Weight is orthogonal to colour: escalate whenever the surface is textured and
+        // the user hasn't PINNED a text style (a pinned colour → advisor dot, not an
+        // auto-override). A non-pinned resolved ink (auto or a system-chosen token) is a
+        // free variable, so the stroke may thicken while the colour itself is untouched.
+        let _supWeight=300;
+        if(mediaObj && !pinnedProps?.textColorId){
+          const _zc=measureZoneContrast(ctx,{x:supBox.x,y:supBox.y,w:supBox.w,h:supBox.h,cw:w,ch:h},heroInk);
+          if(_zc && Math.sqrt(_zc.maxV||0)>0.14){ _supWeight=(_zc.min<4.5)?700:600; }
+        }
+        fontMeta.subtextWeight=_supWeight;   // (Item D) render-truth for the ladder verification
         if(mat.supportRegister==="serifItalic"){
           // (P2) BRAND/CLOSING TAGLINE — light italic serif ("a school led by children"),
           // matching the reference lockup taglines. Same ink as hero (§7 ink discipline).
@@ -6547,15 +6571,15 @@ export default function App() {
           const widest=rawLines.reduce((a,l)=>Math.max(a,l.length),1);
           let ssz=Math.min(supBox.h/(rawLines.length*1.5), supBox.w/(widest*0.56));
           ssz=Math.max(reflowSupMin||supBox.h*0.12, Math.min(ssz, reflowSupStart||supBox.h*0.3));
-          ctx.font=`300 ${ssz}px ${F.body}`; ctx.letterSpacing=`${0.01*ssz}px`;
+          ctx.font=`${_supWeight} ${ssz}px ${F.body}`; ctx.letterSpacing=`${0.01*ssz}px`;
           drawTextLines(ctx,rawLines,supBox.x,supBox.y+ssz,supBox.w,ssz*1.5,supAlign);
           ctx.letterSpacing="0px";
           fontMeta.subtext=ssz;
         }else{
           // (R1) THINNER CAPTION — Fira Sans 300 (Light, loaded via @font-face) with
           // +0.01em tracking for legibility at light weight (client r2: "thinner caption").
-          const sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflowSupStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflowSupMin);
-          ctx.font=`300 ${sf.size}px ${F.body}`;
+          const sf=fitText(ctx,supportText,s=>`${_supWeight} ${s}px ${F.body}`,reflowSupStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflowSupMin);
+          ctx.font=`${_supWeight} ${sf.size}px ${F.body}`;
           ctx.letterSpacing=`${0.01*sf.size}px`;
           // (Commit 1) MARGIN-BOUNDED LINE COUNT. fitText bottoms out at its min size and
           // can return MORE lines than fit — the old fixed slice(0,3) then drew glyphs past
