@@ -1389,7 +1389,11 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // is not lost relative to today (it was already being dropped); the member can still
     // add it via chat on a format/spot where it fits.
     const HEADLINE_LED_LONG_CAPTION_DROPS = new Set([
-      'editorial_split', 'floated_card', 'portrait_credential', 'full_bleed_duotone',
+      // (Item 5) documentary drops even a SHORT caption by geometry — its whisper-hero
+      // + post-hero nudge starve the support box — so a landing subtext on documentary
+      // leaks a copy-dropped dot on shot one. Clearing the subtext here lets renderScene
+      // fall back to the short attribution line, which fits, keeping shot one born-clean.
+      'editorial_split', 'floated_card', 'portrait_credential', 'full_bleed_duotone', 'documentary',
     ]);
     if (HEADLINE_LED_LONG_CAPTION_DROPS.has(finalArchetype) && typeof patch.subtext === 'string' && patch.subtext.trim()) {
       patch.subtext = '';
