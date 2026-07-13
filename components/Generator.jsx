@@ -1937,6 +1937,12 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offset
 function reflowEditorial(ctx, a){
   const { w, h, S, sm, register, caps, heroText, supportText, eyebrow,
           heroCapFrac, heroToSupport, cardBox, maskBox, photoRegion, motifLayers } = a;
+  // (Item A) User S/M/L font-size steps scale the START (target) size of the hero and
+  // support; the MIN_FONT_PX floors and the shrink-to-fit loop below still own the
+  // outcome (a bigger step can't crop; a smaller step never drops below the readable
+  // floor). Both default to 1 (born-clean), so a fresh design is unchanged.
+  const heroMult = a.heroMult || 1;
+  const supMult  = a.supMult  || 1;
   const safeTop=sm.t*h, safeBot=(1-sm.b)*h, safeL=sm.l*w, safeR=(1-sm.r)*w;
   const clampY=(y)=>Math.max(safeTop,Math.min(safeBot,y));
   const intersects=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
@@ -2074,7 +2080,7 @@ function reflowEditorial(ctx, a){
     if(heroBox.y+heroBox.h>heroBottomCap) heroBox.h=Math.max(0.06*h,heroBottomCap-heroBox.y);
   }
   // ── Measure the hero at its target size, shrink-to-fit W×H, MIN floored. ──
-  let heroStart=Math.max(24,(heroCapFrac||0.3)*h*1.35);
+  let heroStart=Math.max(24,(heroCapFrac||0.3)*h*1.35*heroMult);
   const heroMin=minFloor("headline",h,heroStart,38*S);
   let heroPx=heroMin, heroUsedH=0, heroLineH=0;
   if(heroText && heroBox){
@@ -2115,7 +2121,10 @@ function reflowEditorial(ctx, a){
       }
       if(oneW>0){
         const sizeForWidth=100*(a.heroWidthTarget*heroBox.w)/oneW;
-        size=Math.max(size, Math.min(sizeForWidth, 0.42*h));
+        // (Item A) the user's size step scales the fill floor too — otherwise a short
+        // headline on a photo-led archetype would always fill its width and never
+        // reflect S/M/L. The shrink-to-fit loop below still clamps to the box.
+        size=Math.max(size, Math.min(sizeForWidth, 0.42*h)*heroMult);
       }
     }
     let hitFloor=false;
@@ -2198,7 +2207,10 @@ function reflowEditorial(ctx, a){
   // 8–10× hierarchy still holds because the hero itself is far larger.
   const supTarget=(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8);
   const supFloor=MIN_FONT_PX.body(h);
-  let supStart=Math.max(0.02*h,supTarget,supFloor);
+  // (Item A) apply the support size step AFTER the readable floor so a bigger step
+  // grows the caption even when it sat at the floor; a smaller step is re-floored by
+  // supMin (below) so the caption never drops below legibility.
+  let supStart=Math.max(0.02*h,supTarget,supFloor)*supMult;
   // (born-clean 2026-07-06) The caption's RATIO target (heroPx/heroToSupport) was
   // OVERRIDDEN by the legibility floor — i.e. the archetype wanted a caption smaller
   // than the body floor, so the system raised it to stay readable. When this happens
@@ -4419,6 +4431,10 @@ export default function App() {
       window.__woArchFontMeta = () => fontMetaRef.current;
       window.__woArchTextBounds = () => textBoundsRef.current;
       window.__woArchetypeIds = ARCHETYPE_IDS;
+      // Drive the REAL applyPatch pipeline from the console (verification): a UI-source
+      // patch takes the exact path a human click/inspector control would (ownership
+      // flags, per-dim overrides, materialization). Dev-only, like __woSetArchetype.
+      window.__woApplyPatch = (patch, opts) => (applyPatchRef.current || (()=>{}))(patch, opts || { source: "ui", uiSource: true });
     }
 
     // ── BATCH BRAND-LIBRARY BUILDER (Commit 3) ──────────────────────────────
@@ -6144,6 +6160,14 @@ export default function App() {
         photoRegion: (mat.photoRegion&&!mat.fullBleed)?bleedBox(mat.photoRegion):null,
         heroText: heroFinal, supportText, eyebrow,
         heroCapFrac: mat.heroCapFrac, heroToSupport: mat.heroToSupport,
+        // (Item A — size controls drive the editorial render) The user's S/M/L font-size
+        // steps scale the hero + support START sizes here (floors + shrink-to-fit keep
+        // final say). Hero tracks the SAME role the primary Size control writes (heading,
+        // or highlight for overlay/caption types); support tracks "content". Calibration/
+        // stress renders stay at 1× so the born-clean board is deterministic (mirrors the
+        // effUserLogoTouched suppression above).
+        heroMult: _calibRender ? 1 : fm(["texture_text","photo_logo"].includes(postType) ? "highlight" : "heading"),
+        supMult:  _calibRender ? 1 : fm("content"),
         // (r3 fix #3) reflow must measure at the SAME hero leading the draw uses, else a
         // looser-than-default leading (closing card) overflows the box and clamps line 2.
         leading: mat.heroLeading || (register==="serif"?1.02:1.05), leadingBody: mat.leadingBody||1.32,
@@ -6653,7 +6677,11 @@ export default function App() {
       // orchid MARK in a subtle corner; brand_card = centred lockup; closing_card = centred
       // mark. Photo tiles stay logo-free (logoUse:"none"). The mark is the orchid-petal
       // glyph tinted to the field's readable ink — small, quiet, corner-anchored.
-      const markPos = provArch?.elements?.logo?.position || "bottom-right";
+      // (Item A — size/position drive the render) When the user has EXPLICITLY placed
+      // the logo for THIS dimension (logoBase.explicit — a per-dim override, or the
+      // master pin), the mark honours that position/size VERBATIM on every dimension;
+      // otherwise it falls back to the archetype's authored default (born-clean).
+      const markPos = logoBase.explicit ? logoBase.position : (provArch?.elements?.logo?.position || "bottom-right");
       // (Scope addendum) LOGO REMOVED — when the user pinned the logo off, draw NEITHER the
       // mark NOR the lockup on the LIVE design (the calibration board still shows the
       // archetype's own logo). logoBoxRef stays null → the "＋ add logo" ghost re-appears.
@@ -6664,7 +6692,14 @@ export default function App() {
       // instead of being dropped for the restraint mark. Fresh generations reset
       // logoVariantTouched=false (materializeArchetype), so the mark policy still governs
       // them → born-clean holds.
-      const wantMark = !_logoRemoved && logoUse==="mark" && !effUserLogoTouched && !logoVariantTouched;
+      // (Item A) The mark draws for a mark archetype in BOTH born-clean (archetype
+      // default size/pos) AND when the user has explicitly placed/sized the logo
+      // (logoBase.explicit → mark at the pinned size/pos, on any dimension). A logo
+      // VARIANT pick (logoVariantTouched) still short-circuits to the chosen lockup.
+      // The old gate on effUserLogoTouched made a non-master placement a visible no-op:
+      // placeLogo on ig_portrait writes logoByDim WITHOUT userLogoTouched, so the mark
+      // kept drawing the archetype default while the panel highlight moved (bug).
+      const wantMark = !_logoRemoved && logoUse==="mark" && !logoVariantTouched;
       const drawLockup = !_logoRemoved && (effUserLogoTouched || logoVariantTouched || logoUse==="lockup");
       // (Commit 2) DETERMINISTIC ROTATION SEED — stable for a given design, but varies
       // across archetype / palette variant / copy so consecutive designs don't repeat the
@@ -6690,8 +6725,11 @@ export default function App() {
         // corner mark ALTERNATES instead of always the same tinted orchid-petal glyph. Falls
         // back to the tinted orchid-petal when no mark image is cached (or the pick is a
         // green-only mark on a dark field, where the tinted glyph reads better).
-        const markSizeId=provArch?.elements?.logo?.sizeId||"s";
-        const mSz=w*(markSizeId==="m"?0.13:markSizeId==="l"?0.16:0.072);
+        // (Item A) explicit user size pins the mark; else the archetype default. The
+        // mark stays a QUIET corner glyph, so its step fractions are smaller than the
+        // full-lockup LOGO_SIZES pct — but it must visibly respond to every step.
+        const markSizeId = logoBase.explicit ? logoBase.sizeId : (provArch?.elements?.logo?.sizeId||"s");
+        const mSz=w*(markSizeId==="xl"?0.20:markSizeId==="l"?0.16:markSizeId==="m"?0.13:0.072);
         const isCentered=/center/.test(markPos);
         const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
         const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
