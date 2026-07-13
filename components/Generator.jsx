@@ -1147,59 +1147,75 @@ function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,glob
 // smart-crop focal point (fx,fy). 0.22×min(W,H) keeps the mark clear of a face
 // (spec §4 subject) even when the text zone is elsewhere. Comment per prompt.
 const LOGO_FOCAL_RADIUS=0.22;
-// Choose the final logo position/size for a specific render dimension, scoring the
-// 9-grid on contrast, excluding any position whose box overlaps the resolved TEXT
-// zone OR the focal band. Falls back to shrinking the logo (down to S) before
-// giving up. Operates purely on the CURRENT dimension's geometry (spec §1/§4).
-function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox,safeZone){
+/* ── UNIVERSAL ELEMENT PLACEMENT SOLVER (docs/element-placement-spec.md §2) ────
+   The logo's candidate→hard-filter→score→relocate loop, generalized so every
+   secondary element (logo now; date / eyebrow / badge in later P1 slices) shares
+   ONE constraint system instead of per-archetype whitelists. pickLogoPlacement is
+   a thin adapter (below); its behaviour is preserved byte-for-byte — the logo is
+   just the first element CLASS.
+
+   placeElement(base, ctx) where:
+     base = {position, sizeId, explicit?, free?}  (the prior / resolved anchor)
+     ctx  = { w, h, textBox, regions, focal, curBgColor, frameBox, safeZone,
+              inkLum,   // the element ink luminance (null → best-of-inkPoles)
+              cfg }     // the element-class config (LOGO_ELEMENT_CLASS et al.)
+   cfg fields: anchors (named-anchor map), anchorCenter(pos,w,h,sz,safeZone)→[cx,cy],
+     sizes ([{id,pct}]), sizeFloorId, pad, framePad, focalRadius, focalDefault{fx,fy},
+     minContrast, bornCleanFloor, corners (Set), cornerBonus, centerAnchorId,
+     centerPenalty, variancePenaltyK, inkPoles ([hex,...]), fallbackBg (hex).
+
+   SEAM (later slices): text classes add cfg.escalate — the register-escalation
+   ladder (rungs 2-4: heavier weight → most robust face → size-up) with GUARDED
+   RE-MEASURE. The logo has NO register, so it passes no escalate hook and this
+   solver runs the exact logo path. Scoring, filters and return shapes are
+   identical to the pre-extraction pickLogoPlacement. */
+function placeElement(base, ctx){
+  const { w, h, textBox, regions, focal, curBgColor, frameBox, safeZone, inkLum, cfg } = ctx;
   const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-  const pad=Math.min(w,h)*0.045;
+  const pad=Math.min(w,h)*cfg.pad;
   const exclText=textBox?{x:textBox.x-pad,y:textBox.y-pad,w:textBox.w+pad*2,h:textBox.h+pad*2}:null;
-  const fr=LOGO_FOCAL_RADIUS*Math.min(w,h);
-  const fx=(focal?.fx??0.5)*w, fy=(focal?.fy??0.42)*h;
+  const fr=cfg.focalRadius*Math.min(w,h);
+  const fx=(focal?.fx??cfg.focalDefault.fx)*w, fy=(focal?.fy??cfg.focalDefault.fy)*h;
   const exclFocal=focal?{x:fx-fr,y:fy-fr,w:fr*2,h:fr*2}:null;
-  // (BORN-CLEAN RULE, 2026-07-06 — corrected) Top/bottom logos are standard on Story/Reel,
-  // so we do NOT remove any named position. Instead the landing coordinates are shifted:
-  // logoCenter(...,safeZone) anchors top-row just below the top band and bottom-row just
-  // above the bottom band. Every named position stays available and is legal by
-  // construction. safeZone = {top,bottom,left,right} fractions (PLATFORM_SAFE for the dim).
-  // Frame-shape boundary exclusion (Commit 2c): treat the frame's bounding box,
-  // padded outward, as an area the auto logo should avoid — so the mark sits in the
-  // clear solid-bg region, not straddling the photo-frame edge. The whole box is
-  // excluded (the mark reads best on the calm bg outside the shape). Explicit user
-  // placements are still honoured verbatim below.
-  const framePad=Math.min(w,h)*0.03;
+  // (BORN-CLEAN RULE, 2026-07-06 — corrected) Top/bottom placements are standard on
+  // Story/Reel, so we do NOT remove any named position. Instead the landing coordinates
+  // are shifted: anchorCenter(...,safeZone) anchors top-row just below the top band and
+  // bottom-row just above the bottom band. Every named position stays available and is
+  // legal by construction. safeZone = {top,bottom,left,right} fractions (PLATFORM_SAFE).
+  // Frame-shape boundary exclusion (Commit 2c): treat the frame's bounding box, padded
+  // outward, as an area the auto element should avoid — so the mark sits in the clear
+  // solid-bg region, not straddling the photo-frame edge. Explicit user placements are
+  // still honoured verbatim below.
+  const framePad=Math.min(w,h)*cfg.framePad;
   const exclFrame=frameBox?{x:frameBox.x-framePad,y:frameBox.y-framePad,w:frameBox.w+framePad*2,h:frameBox.h+framePad*2}:null;
-  const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBgColor||B.burnham),variance:0};};
-  const boxFor=(pos,lSz)=>{const[cx,cy]=logoCenter(pos,w,h,lSz,safeZone);return{x:cx-lSz/2,y:cy-lSz/2,w:lSz,h:lSz};};
-  // Contrast of the ACTUAL logo ink against a region (Failure 3): an ivory logo over
+  const regionFor=pos=>{const row=pos.anchorY==="top"?0:pos.anchorY==="bottom"?2:1,col=pos.anchorX==="left"?0:pos.anchorX==="right"?2:1;return regions?.[row*3+col]||{mean:hexLuminance(curBgColor||cfg.fallbackBg),variance:0};};
+  const sizePx=sizeId=>{const pct=cfg.sizes.find(s=>s.id===sizeId)?.pct||0.12;const lSz=w*pct;return {w:lSz,h:lSz};};
+  const boxFor=(pos,sizeId)=>{const{w:bw,h:bh}=sizePx(sizeId);const[cx,cy]=cfg.anchorCenter(pos,w,h,bw,safeZone);return{x:cx-bw/2,y:cy-bh/2,w:bw,h:bh};};
+  // Contrast of the ACTUAL element ink against a region (Failure 3): an ivory mark over
   // a white shirt must score low so the guard relocates it. When ink luminance is
-  // unknown, fall back to the best-of-either-brand-colour (position-only) contrast.
-  const inkContrast=region=>logoInkLum!=null
-    ?contrastRatio(region.mean,logoInkLum)
-    :Math.max(contrastRatio(region.mean,hexLuminance(B.burnham)),contrastRatio(region.mean,hexLuminance(B.whiteSmoke)));
-  const LOGO_MIN_CONTRAST=1.8; // low bar — the mark is decorative, but must not vanish
+  // unknown, fall back to the best-of-brand-ink-poles (position-only) contrast.
+  const inkContrast=region=>inkLum!=null
+    ?contrastRatio(region.mean,inkLum)
+    :Math.max(...cfg.inkPoles.map(p=>contrastRatio(region.mean,hexLuminance(p))));
   const rank=sizeId=>{
-    const pct=LOGO_SIZES.find(s=>s.id===sizeId)?.pct||0.12,lSz=w*pct;
-    // (WP-U logo-on-photo) On a photo, CORNERS are strongly preferred — they are the
+    // (WP-U on-photo) On a photo, CORNERS are strongly preferred — they are the
     // lowest-detail candidates by construction (subjects live in the middle bands).
-    // A flat +1.2 corner bonus plus the existing variance penalty (detail = subject)
-    // means a busy corner still loses to a quiet edge, but a face-adjacent centre
-    // spot never outranks a clean corner.
-    const CORNERS=new Set(["top-left","top-right","bottom-left","bottom-right"]);
-    return Object.entries(LOGO_POSITIONS).map(([id,pos])=>{
-      const box=boxFor(pos,lSz),region=regionFor(pos);
+    // A flat corner bonus plus the existing variance penalty (detail = subject) means a
+    // busy corner still loses to a quiet edge, but a face-adjacent centre spot never
+    // outranks a clean corner.
+    return Object.entries(cfg.anchors).map(([id,pos])=>{
+      const box=boxFor(pos,sizeId),region=regionFor(pos);
       const overlapText=exclText&&intersects(exclText,box);
       const overlapFocal=exclFocal&&intersects(exclFocal,box);
       const overlapFrame=exclFrame&&intersects(exclFrame,box);
-      const cornerBonus=(regions&&CORNERS.has(id))?1.2:0;
-      return{id,sizeId,lSz,overlap:overlapText||overlapFocal||overlapFrame,score:inkContrast(region)-region.variance*8-(id==="center"?0.7:0)+cornerBonus};
+      const cornerBonus=(regions&&cfg.corners.has(id))?cfg.cornerBonus:0;
+      return{id,sizeId,overlap:overlapText||overlapFocal||overlapFrame,score:inkContrast(region)-region.variance*cfg.variancePenaltyK-(id===cfg.centerAnchorId?cfg.centerPenalty:0)+cornerBonus};
     }).filter(item=>!item.overlap).sort((a,b)=>b.score-a.score);
   };
   // Does the base placement already clear both exclusion zones AND read against the
-  // photo (ink contrast floor)? If so keep it (respects user/spec intent).
-  const basePct=LOGO_SIZES.find(s=>s.id===base.sizeId)?.pct||0.12,baseSz=w*basePct;
-  const basePos=LOGO_POSITIONS[base.position];
+  // surface (ink contrast floor)? If so keep it (respects user/spec intent).
+  const {w:baseSz}=sizePx(base.sizeId);
+  const basePos=cfg.anchors[base.position];
   if(basePos){
     // (Refinement 2) When a FREE pin is set the overlap/contrast read must test the box at
     // the FREE centre (where the mark actually draws), not the named anchor — so the
@@ -1207,32 +1223,56 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
     // placement is never relocated (explicit path returns verbatim below).
     const bb=(base.free && Number.isFinite(base.free.x) && Number.isFinite(base.free.y))
       ? {x:base.free.x*w-baseSz/2,y:base.free.y*h-baseSz/2,w:baseSz,h:baseSz}
-      : boxFor(basePos,baseSz);
+      : boxFor(basePos,base.sizeId);
     const clearsText=!exclText||!intersects(exclText,bb);
     const clearsFocal=!exclFocal||!intersects(exclFocal,bb);
     const clearsFrame=!exclFrame||!intersects(exclFrame,bb);
-    const reads=inkContrast(regionFor(basePos))>=LOGO_MIN_CONTRAST;
+    const reads=inkContrast(regionFor(basePos))>=cfg.minContrast;
     // Explicit user placement ALWAYS wins — return it verbatim, never relocate or
     // shrink (Task 1 fix). The named position's coordinates are already safe-zone-shifted
-    // by boxFor→logoCenter(safeZone), so a NAMED explicit pick ("bottom right") is legal
+    // by boxFor→anchorCenter(safeZone), so a NAMED explicit pick ("bottom right") is legal
     // by construction; only a raw pixel-DRAG can land in a band (handled downstream).
     if(base.explicit)return{position:base.position,sizeId:base.sizeId,free:base.free||null,overlapsText:!clearsText};
-    // (BORN-CLEAN) On a PHOTO, the spec-default base can "read" at the loose 1.8 bar yet
-    // still land on a busy region the logo-legibility finding (3:1 worst-case) would flag
-    // — the system would then manufacture a dot on its OWN placement. So when a photo is
-    // present and the base region is below a legibility-aligned floor (mean < 3:1) while a
-    // meaningfully clearer candidate exists, relocate to it. Uniform/panel bases (mean ≥
-    // 3:1) keep the spec default. This never fires for explicit placements (returned above).
+    // (BORN-CLEAN) On a PHOTO, the spec-default base can "read" at the loose min bar yet
+    // still land on a busy region the legibility finding (3:1 worst-case) would flag — the
+    // system would then manufacture a dot on its OWN placement. So when a photo is present
+    // and the base region is below a legibility-aligned floor (mean < bornCleanFloor) while
+    // a meaningfully clearer candidate exists, relocate to it. Uniform/panel bases keep the
+    // spec default. This never fires for explicit placements (returned above).
     const baseMeanCr=inkContrast(regionFor(basePos));
-    const bornCleanOk=!regions||baseMeanCr>=3;
+    const bornCleanOk=!regions||baseMeanCr>=cfg.bornCleanFloor;
     if(clearsText&&clearsFocal&&clearsFrame&&reads&&bornCleanOk)return{position:base.position,sizeId:base.sizeId};
   }
   // Relocate: best-scoring non-overlapping position at the base size, shrinking to
-  // the S floor (spec §6 step 4 — logo shrinks, never drops) if nothing fits.
+  // the class floor (spec §6 step 4 — the element shrinks, never drops) if nothing fits.
   let choices=rank(base.sizeId);
-  if(!choices.length&&base.sizeId!=="s")choices=rank("s");
+  if(!choices.length&&base.sizeId!==cfg.sizeFloorId)choices=rank(cfg.sizeFloorId);
   if(choices.length)return{position:choices[0].id,sizeId:choices[0].sizeId};
   return{position:base.position,sizeId:base.sizeId}; // last resort: honour base
+}
+
+// The logo element class (docs/element-placement-spec.md §1). Built at call time so
+// its references (LOGO_POSITIONS / logoCenter / LOGO_SIZES, defined later in source)
+// are resolved when pickLogoPlacement runs, never at module-eval (avoids the TDZ).
+const LOGO_CORNER_ANCHORS = new Set(["top-left","top-right","bottom-left","bottom-right"]);
+function logoElementClass(){
+  return {
+    anchors: LOGO_POSITIONS, anchorCenter: logoCenter, sizes: LOGO_SIZES, sizeFloorId: "s",
+    pad: 0.045, framePad: 0.03, focalRadius: LOGO_FOCAL_RADIUS, focalDefault: { fx: 0.5, fy: 0.42 },
+    minContrast: 1.8,       // low bar — the mark is decorative, but must not vanish
+    bornCleanFloor: 3,      // legibility-aligned mean floor (3:1 worst-case guard)
+    corners: LOGO_CORNER_ANCHORS, cornerBonus: 1.2,
+    centerAnchorId: "center", centerPenalty: 0.7, variancePenaltyK: 8,
+    inkPoles: [B.burnham, B.whiteSmoke], fallbackBg: B.burnham,
+  };
+}
+// Choose the final logo position/size for a specific render dimension, scoring the
+// 9-grid on contrast, excluding any position whose box overlaps the resolved TEXT
+// zone OR the focal band. Falls back to shrinking the logo (down to S) before giving
+// up. Operates purely on the CURRENT dimension's geometry (spec §1/§4). Thin adapter
+// over placeElement — the logo is the solver's first element class.
+function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,frameBox,safeZone){
+  return placeElement(base,{ w,h,textBox,regions,focal,curBgColor,frameBox,safeZone,inkLum:logoInkLum,cfg:logoElementClass() });
 }
 
 /* ── Per-zone text-COLOUR + backdrop decision (spec §2/§3/§5) ──
