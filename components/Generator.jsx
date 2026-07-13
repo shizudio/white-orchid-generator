@@ -3658,7 +3658,11 @@ export default function App() {
 
     if (inList(patch.logoId, "logoId") && patch.logoId !== selectedLogoId) {
       setSelectedLogoId(patch.logoId);
-      setLogoVariantTouched(true); // an explicit AI logo choice pins the variant
+      // (Item 1 — born-clean) A HUMAN Logo-panel pick pins the variant; the landing
+      // handoff's AI-chosen logoId is a SYSTEM free variable (systemFreeVariables),
+      // so it must NOT pin — leaving the ink-swap gate (!logoVariantTouched, ~5168)
+      // live to swap to the readable brand pole against the photo.
+      if (!opts.systemFreeVariables) setLogoVariantTouched(true);
       setMarkTab(patch.logoId.startsWith("s") ? "secondary" : "primary");
       applied.push("logoId");
     }
@@ -3679,7 +3683,17 @@ export default function App() {
     if (posChanged || sizeChanged) {
       const nextPos = posChanged ? patch.logoPosition : logoPosition;
       const nextSize = sizeChanged ? patch.logoSize : logoSize;
-      if (dimensionId === MASTER_DIM) {
+      if (opts.systemFreeVariables) {
+        // (Item 1 — born-clean, law 4/5) The landing handoff's logoPosition/logoSize
+        // are the AI's OWN placement pick, not human intent. Apply them as ordinary
+        // state WITHOUT pinning (userLogoTouched) and WITHOUT writing a per-dim
+        // explicit override — resolveLogoBase (~1136) then treats the base as
+        // NON-explicit, so pickLogoPlacement's born-clean busy-region relocation
+        // (~1216) stays live and the system moves the mark to a legible spot. A HUMAN
+        // pick (every other call site) still pins, below.
+        if (posChanged) setLogoPosition(nextPos);
+        if (sizeChanged) setLogoSize(nextSize);
+      } else if (dimensionId === MASTER_DIM) {
         setUserLogoTouched(true);
         if (posChanged) setLogoPosition(nextPos);
         if (sizeChanged) setLogoSize(nextSize);
@@ -4191,7 +4205,13 @@ export default function App() {
     // ENGINE composes. When a photo-led archetype was chosen and Higgsfield was
     // configured, the landing flow also GENERATED a bare on-brand photo and passes
     // it as imageUrl (a data URL); otherwise imageUrl may be a Library fallback photo.
-    if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true });
+    // (Item 1 — born-clean, law 4/5) The landing patch carries the AI's OWN
+    // logoId/logoPosition/logoSize (the route requires the model to emit them).
+    // Those are the SYSTEM's free variables on shot one, never human intent — apply
+    // them WITHOUT pinning (systemFreeVariables), so pickLogoPlacement's busy-region
+    // relocation and the ink-swap gate stay live and can move/swap the mark to a
+    // legible spot. Every other call site keeps today's pinning (a real human pick).
+    if (handoff?.patch) applyDesignPatch(handoff.patch, { harmonize: true, systemFreeVariables: true });
     // Remember the scene prompt + originating message so the chat's "Try another
     // design" chip can regenerate a fresh photo and rotate the archetype variant.
     if (handoff?.scenePrompt || handoff?.originalMessage) {
@@ -4219,6 +4239,30 @@ export default function App() {
     setGalleryOpen(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* ── (Item 4) FIRST-SHOT BLOCKER GATE — the forever mechanism ────────────────
+     On first paint the advisor is ADVISORY: it detected the client's illegible logo /
+     ghost caption and shipped anyway. This gate makes a landing shot self-heal BEFORE
+     the user sees it: after the landing patch + photo land, it re-gates the design and,
+     if BLOCKER-severity findings remain, deterministically RE-SOLVES the system's OWN
+     free variables (palette variant / ink pole; the auto logo re-places + ink-swaps
+     inside every render, unpinned after Item 1) in ≤3 bounded attempts, accepting the
+     first clean result (else the fewest-blocker one). It NEVER fights a pin (there are
+     none on shot one after Item 1) and NEVER spends photo credits (every re-solve reuses
+     the landed photo via the offscreen archOverride path). Defined near renderScene; the
+     ref keeps the deferred call on the CURRENT closure (M1). */
+  const firstShotResolveRef = useRef(null);
+  const firstShotGateRan = useRef(false);
+  useEffect(() => {
+    if (firstShotGateRan.current) return;
+    if (!landingPendingRef.current) return;   // landing shots only — never a restore
+    if (!fontsLoaded) return;                 // fonts change fitted geometry → gate after
+    if (image && !imageObj) return;           // wait for the landing photo to decode first
+    firstShotGateRan.current = true;
+    // One tick so the applied landing patch + photo have committed to a render.
+    const t = setTimeout(() => { try { firstShotResolveRef.current?.(); } catch { /* never breaks landing */ } }, 80);
+    return () => clearTimeout(t);
+  }, [imageObj, fontsLoaded, image]);
 
   /* ── Load fonts ── */
   useEffect(() => {
@@ -5522,6 +5566,11 @@ export default function App() {
     // `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
     const resolveZoneTc=(box)=>{
       if(frameBgTextColor){zoneTc=frameBgTextColor;return;}   // snapped onto flat bg → forced hi-contrast colour
+      // (Item 4) OFFSCREEN first-shot re-solve: the landing gate flips the ink pole by
+      // rendering with opts.tcOverride. Non-live only — never affects the live canvas or
+      // any existing offscreen render (guards/proposal never pass tcOverride). The band
+      // colour derives from zoneTc downstream, so pole + band stay in agreement.
+      if(!live && opts.tcOverride && B[opts.tcOverride]){ zoneTc=B[opts.tcOverride]; return; }
       if(!mediaObj||textColorId!=="auto")return;   // explicit colour honoured as-is
       const r=resolveZoneTextColor(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},textColorId);
       zoneTc=r.color;
@@ -5553,7 +5602,26 @@ export default function App() {
     // when live=true, for B2 pan hit-testing).
     let _photoWin=null;
     const _bandedRoles=new Map();
-    const _bandRole=(box)=>{ const k=`${Math.round(box.x)}.${Math.round(box.y)}.${Math.round(box.w)}`; const n=(_bandedRoles.get(k)||0)+1; _bandedRoles.set(k,n); if(n>1)_doubleBackdrop++; };
+    // (Item 3i) The old counter only caught the SAME box banded twice. The client's
+    // "double block" was TWO DIFFERENT boxes banded in OPPOSITE colours (hero burnham +
+    // support ivory). Track every band's colour: a second band of a DIFFERENT colour in
+    // one render is the defect — and after the Item 2 union fix the full-bleed text path
+    // paints exactly ONE band, so a second distinct-colour band there is a regression the
+    // stress sweep (__woArchStress asserts _doubleBackdrop===0) must catch.
+    const _bandColors=[];
+    const _bandRole=(box,color)=>{
+      const k=`${Math.round(box.x)}.${Math.round(box.y)}.${Math.round(box.w)}`;
+      const n=(_bandedRoles.get(k)||0)+1; _bandedRoles.set(k,n);
+      if(color) _bandColors.push(color);
+      if(n>1)_doubleBackdrop++;                       // same box banded twice (WP-U)
+      // (Item 3i) A single render draws AT MOST ONE contrast band: the editorial path
+      // returns before the legacy painters, and the legacy postType branches are mutually
+      // exclusive, and after the Item 2 union fix the full-bleed text block bands ONCE. So
+      // a SECOND band in one render — whatever its box or colour — is the "double block"
+      // regression (the client saw it as hero-burnham + support-ivory). Flag it so
+      // __woArchStress (asserts _doubleBackdrop===0) catches any reintroduction.
+      if(_bandColors.length>1)_doubleBackdrop++;
+    };
     const drawBackdrop=(box,anchorSide,tintedType)=>{
       if(frameBgTextColor)return;   // text is on flat solid bg (snapped clear of the frame) → no scrim needed
       if(!mediaObj)return;
@@ -5563,7 +5631,7 @@ export default function App() {
       if(mode==="none")return;                 // shadow-only (beginText adds it)
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
+        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
         return;
       }
       // AUTO. The colour-flip already ran in resolveZoneTc (rung 1); placement/quiet
@@ -5580,7 +5648,7 @@ export default function App() {
           if(!zoneFails(box))return;           // deepened tint now legible
         }
         // Tint at max still fails → drop a solid brand band as the last resort.
-        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
+        drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
         return;
       }
       // Untinted (texture_text/photo_logo): quiet-region check under the zone,
@@ -5590,7 +5658,7 @@ export default function App() {
       // ⇒ light text + dark band; bright zone ⇒ dark text + ivory band.
       const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box);
+      drawSolidBand(ctx,w,h,box,bandColor,0.92); _bandRole(box,bandColor);
     };
     const setTextBounds=used=>{if(live||opts.captureAudit)textBoundsRef.current={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
@@ -6138,10 +6206,45 @@ export default function App() {
           ctx.save(); ctx.fillStyle=g; ctx.fillRect(0,scrimTop,w,scrimH); ctx.restore();
           heroInk=B.whiteSmoke;   // label always ivory on the scrim
         }else{
-          // Text-over-photo (Now Enrolling etc.) → the Bug-B backdrop ladder (band).
-          if(heroFinal && heroBox){ resolveZoneTc(heroBox); drawBackdrop(heroBox,"bottom",false); }
-          if(supportText && supBox){ resolveZoneTc(supBox); drawBackdrop(supBox,"bottom",false); }
-          if(heroBox && (!textColorId||textColorId==="auto")){ resolveZoneTc(heroBox); heroInk=zoneTc; }
+          // (Item 2 — single-band invariant) Text-over-photo (Now Enrolling headline+
+          // caption, documentary, etc.). Hero + support are ONE contiguous text block:
+          // they must sit on ONE backdrop decision of ONE colour, and every role must be
+          // painted with the ink resolved for THAT single surface. The old ladder
+          // resolved+banded hero and support INDEPENDENTLY (two boxes → opposite band
+          // colours when the zones differ in luminance = the "double block"), then re-
+          // resolved heroInk against heroBox alone and painted BOTH roles with it
+          // (support's correctly-paired ink discarded = tone-on-tone "ghost caption").
+          // Fix (message_pill's single-card handling ~6054 is the reference): compute the
+          // UNION zone, decide the band ONCE, resolve the ink ONCE against that final
+          // surface, and hand every role the same ink. Complete-or-absent (invariant iii):
+          // the union only extends over the caption when it will actually draw — its band
+          // is never sized for a role that drops.
+          if(heroFinal && heroBox){
+            let ux=heroBox.x, uy=heroBox.y, ur=heroBox.x+heroBox.w, ub=heroBox.y+heroBox.h;
+            if(supportText && supBox){
+              // Predict whether the caption survives its complete-or-absent floor (mirrors
+              // the caption draw's fitText + floor + drop arithmetic below, and the pill's
+              // own prediction ~6083). Erring toward "willDraw" only over-sizes the band
+              // cosmetically (never undersizes it), matching the pill's oversized-not-
+              // undersized rule; the post-hero nudge below only makes a drop MORE likely,
+              // so an un-nudged prediction never under-covers a caption that really draws.
+              const _uf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
+              const _uFloor=_supFree?h:(1-sm.b)*h;
+              let _uRoom=Math.max(1,Math.floor((_uFloor-supBox.y-_uf.size*0.28)/_uf.lineHeight));
+              const _uBot=(n)=>supBox.y+_uf.size+(n-1)*_uf.lineHeight+_uf.size*0.28;
+              while(_uRoom>1 && _uBot(_uRoom)>_uFloor) _uRoom--;
+              const _uWillDraw=!(_uBot(_uRoom)>_uFloor+0.005*h || _uf.lines.length>Math.min(3,_uRoom));
+              if(_uWillDraw){
+                ux=Math.min(ux,supBox.x); uy=Math.min(uy,supBox.y);
+                ur=Math.max(ur,supBox.x+supBox.w);
+                ub=Math.max(ub,Math.min(_uBot(_uRoom),_uFloor));
+              }
+            }
+            const _unionBox={x:ux,y:uy,w:ur-ux,h:ub-uy};
+            resolveZoneTc(_unionBox);                 // ONE ink decision for the whole block
+            drawBackdrop(_unionBox,"bottom",false);   // ONE band for the whole block
+            if(!textColorId||textColorId==="auto") heroInk=zoneTc;  // every role uses this ink
+          }
         }
         // (fix #1 ASSERTION) the micro-label box MUST sit fully on-canvas inside safe
         // margins — the original crop bug. Clamp + record a drift flag if it ever escapes.
@@ -6532,8 +6635,25 @@ export default function App() {
       if(live)dropInfoRef.current=dropped.length?{dropped}:null;
       if(live)fontMetaRef.current=fontMeta;
       if(live||opts.captureAudit){
-        let contrast=null; const tb=textBoundsRef.current;
-        if(tb&&tb.w>0&&tb.h>0) contrast=measureZoneContrast(ctx,{x:tb.x,y:tb.y,w:tb.w,h:tb.h,cw:w,ch:h},heroInk);
+        // (Item 3ii) Measure contrast for EVERY drawn text role, not just the hero zone.
+        // textBoundsRef is only written by the hero draw (~6173) / schedule — the support
+        // caption never wrote it, so its (often WORST) zone was invisible to this check and
+        // a tone-on-tone "ghost caption" read clean. Measure the hero zone AND the support
+        // zone (its ACTUAL drawn box) against the ink each was painted with (both heroInk
+        // after the Item 2 single-ink fix) and surface the WORST (lowest min) — the zone
+        // the readiness contrast blocker should see.
+        let contrast=null;
+        const _cZones=[];
+        const tb=textBoundsRef.current;
+        if(tb&&tb.w>0&&tb.h>0) _cZones.push({x:tb.x,y:tb.y,w:tb.w,h:tb.h});           // hero zone (unchanged)
+        if(supportText&&supBox&&!dropped.includes("Details")){                          // + the caption's own zone
+          const _sh=Math.max(supUsedH,fontMeta.subtext||supBox.h*0.3);
+          _cZones.push({x:supBox.x,y:supBox.y,w:supBox.w,h:_sh});
+        }
+        for(const _z of _cZones){
+          const _m=measureZoneContrast(ctx,{x:_z.x,y:_z.y,w:_z.w,h:_z.h,cw:w,ch:h},heroInk);
+          if(_m&&(!contrast||_m.min<contrast.min)) contrast=_m;   // surface the WORST-reading role
+        }
         const heroPx=fontMeta.headline||0, supPx=fontMeta.subtext||0;
         const heroSupportRatio=(heroPx&&supPx)?heroPx/supPx:null;
         const heroCentroid=heroBox?{x:(heroBox.x+heroBox.w/2)/w,y:(heroBox.y+heroBox.h/2)/h}:null;
@@ -7690,6 +7810,13 @@ export default function App() {
           subtext: "Join our team of dedicated professionals shaping young minds every single day",
           attribution: "Apply at hello@thewhiteorchid.sg before the month ends",
           dateText: "18 September" },
+        // (Item 3iii) The CLIENT's reported class: a short headline + a real two-line
+        // caption over a full-bleed photo (the documentary / full_bleed_duotone double-
+        // block + ghost-caption geometry). This content-dependent geometry must be in the
+        // guard's samples so a regression of the single-band / per-role-contrast fix
+        // surfaces here (and via __woArchStress's doubleBackdrop assertion), not in prod.
+        { headline: "Celebrating Art Week", subtext: "Join us for a week of creativity and expression",
+          attribution: "The White Orchid", dateText: "18 July" },
       ];
       const SYSTEM_FINDING_IDS = new Set(["safe-area-text", "safe-area-logo", "logo-legibility", "archetype-margin-crop", "archetype-box-overlap"]);
       const offenders = [];
@@ -9282,6 +9409,89 @@ export default function App() {
     finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
     return { ok: reasons.length === 0, reasons };
   };
+
+  /* ── (Item 4) FIRST-SHOT GATE implementation ─────────────────────────────────
+     Blockers = the readiness BLOCKER_IDS + logo-legibility (copy-volume tradeoffs are
+     NOT system faults — excluded, exactly as the proposal gate + born-clean guard do).
+     A candidate is scored across ALL 6 formats offscreen via the archOverride path:
+     real archetype + real landing copy + real landed photo + spec-default (auto,
+     unpinned) logo — the born-clean "fresh system design" — with the candidate's palette
+     variant (archVariant) and optional ink pole (tcOverride). No credits: the photo is
+     the already-landed mediaObj; renderScene never calls a photo route. */
+  const LANDING_BLOCKER_IDS = new Set([
+    "contrast-fail", "logo-overlap-text", "logo-focal-band",
+    "safe-zone-violation", "archetype-margin-crop", "archetype-box-overlap",
+    "logo-legibility",
+  ]);
+  const firstShotGateScore = (archId, variant, tc, copy) => {
+    const prev = auditRef.current, prevBounds = textBoundsRef.current;
+    const perFormat = []; let blockers = 0;
+    try {
+      for (const d of DIMENSIONS) {
+        const c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+        renderScene(c.getContext("2d"), d.w, d.h, {
+          dimensionId: d.id, live: false, captureAudit: true,
+          archOverride: archId, archVariant: variant,
+          calibrationContent: copy, tcOverride: tc || null,
+        });
+        let signal = null;
+        try { signal = JSON.parse(JSON.stringify(auditRef.current)); } catch { signal = auditRef.current; }
+        const verdict = computeReadyChecklist([{ dimensionId: d.id, signal }]).formats[0];
+        const hits = (verdict.issues || []).filter(i => i.severity === "fail" && LANDING_BLOCKER_IDS.has(i.id)).map(i => i.id);
+        blockers += hits.length;
+        if (hits.length) perFormat.push({ dimId: d.id, findings: hits });
+      }
+    } catch (e) { blockers += 999; perFormat.push({ error: String(e?.message || e) }); }
+    finally { auditRef.current = prev; textBoundsRef.current = prevBounds; }
+    return { blockers, perFormat };
+  };
+  const firstShotResolve = () => {
+    // Only a materialized archetype has the archOverride re-solve path; a legacy
+    // (archetypeId-null) landing has no palette variants to sweep — skip cleanly.
+    if (!archetypeId || !ARCHETYPES_BY_ID[archetypeId]) return;
+    const copy = { headline, subtext, attribution, dateText };
+    const V0 = Number.isInteger(archVariant) ? archVariant : 0;
+    const base = firstShotGateScore(archetypeId, V0, null, copy);
+    if (base.blockers === 0) return;   // born clean by construction — nothing to heal
+    const count = ARCHETYPES_BY_ID[archetypeId]?.variants?.length || 1;
+    // Candidate free-variable settings, bounded to ≤3 attempts: sweep the NEXT distinct
+    // palette variants first (a whole-composition re-solve), then flip the ink pole on
+    // the current variant. The auto logo re-places/ink-swaps inside every render.
+    const candidates = [];
+    for (let k = 1; k < count && candidates.length < 3; k++) candidates.push({ variant: (V0 + k) % count, tc: null });
+    candidates.push({ variant: V0, tc: "whiteSmoke" });
+    candidates.push({ variant: V0, tc: "burnham" });
+    const tried = candidates.slice(0, 3);
+    let best = { variant: V0, tc: null, blockers: base.blockers };
+    const attempts = [{ attempt: 0, variant: V0, tc: null, blockers: base.blockers }];
+    for (let i = 0; i < tried.length; i++) {
+      const cand = tried[i];
+      const score = firstShotGateScore(archetypeId, cand.variant, cand.tc, copy);
+      attempts.push({ attempt: i + 1, variant: cand.variant, tc: cand.tc, blockers: score.blockers });
+      if (score.blockers < best.blockers) best = { variant: cand.variant, tc: cand.tc, blockers: score.blockers };
+      if (score.blockers === 0) break;   // accept the first clean result
+    }
+    // Commit the winning free-variable choice — only when it beats the baseline (never a
+    // no-op churn). materializeArchetype re-seeds the variant palette (same lever as the
+    // "Try another layout" chip); the ink pole is the system's own re-solve, not a pin.
+    if (best.blockers < base.blockers && (best.variant !== V0 || best.tc)) {
+      if (best.variant !== V0) materializeArchetype(archetypeId, { variant: best.variant, postType, attribution, subtext });
+      if (best.tc) setTextColorId(best.tc);
+    }
+    // Fire-and-forget telemetry (never blocks, never throws). Harness mode suppresses the
+    // cloud write during QA (M8); the shape mirrors proposal-render-fail.
+    try {
+      logFeedbackClient({
+        turn_id: newTurnId(), session_id: sessionId || null, kind: "first-shot-resolve",
+        user_message: "[first-shot] landing gate re-solve",
+        verdict: { kind: "first-shot-resolve", archetypeId, baseBlockers: base.blockers,
+                   chosen: { variant: best.variant, tc: best.tc, blockers: best.blockers },
+                   healed: best.blockers < base.blockers, attempts, ts: new Date().toISOString() },
+      });
+    } catch { /* never blocks the landing */ }
+  };
+  firstShotResolveRef.current = firstShotResolve;
+
   // The proposal's REAL portrait thumbnail — the same offscreen renderScene path,
   // at ig_portrait, downscaled to a small JPEG for the modal.
   const proposalThumb = (state) => {
