@@ -3526,7 +3526,10 @@ export default function App() {
     });
   };
   // UI photo reframes (drag / handles / keyboard / quick chips) emit patches
-  // through THE pipeline — same undo + harmonizer path as everything else.
+  // through THE pipeline — same undo + harmonizer path as everything else. The pin
+  // that makes an explicit reframe stick is applied inside applyDesignPatch's
+  // photoTransform handler (below), so EVERY reframe entry point (panel, keyboard,
+  // quick chips, chat) shares it — see the (b0d13d8 / Item 2) note there.
   const patchPhoto = (t) => applyPatch({ photoTransform: t }, { source: "ui" });
   // (B2) Pin the CURRENT dimension's photo transform as user-owned so effImgTFor
   // honours it verbatim over the auto focal crop (user is the boss). Seeds the pin's
@@ -4139,7 +4142,23 @@ export default function App() {
     if (patch.photoTransform && typeof patch.photoTransform === "object") {
       const t = {};
       for (const k of ["zoom", "cx", "cy", "rotation"]) if (typeof patch.photoTransform[k] === "number" && Number.isFinite(patch.photoTransform[k])) t[k] = patch.photoTransform[k];
-      if (Object.keys(t).length) { setPhotoT(prev => ({ ...prev, ...t })); applied.push("photoTransform"); }
+      if (Object.keys(t).length) {
+        // (b0d13d8 invariant / Item 2 — masked-photo zoom/pan) A photoTransform patch is
+        // ALWAYS an explicit reframe (autonomous generation never emits one), so PIN this
+        // dim's photo before applying the delta — exactly what the on-canvas drag does via
+        // pinPhotoTouched. Without the pin, effImgTFor's auto focal-crop wins on every
+        // windowed / cropDrama>1 archetype (shape_cutout & petal_window masks, editorial_
+        // split, floated_card, documentary, full_bleed): the panel/keyboard/quick-chip
+        // wrote imgT/imgTByDim but the render recomputed the crop from the focal point and
+        // IGNORED it — the client's "why can't I change the size of the photo?" no-op.
+        // Seeding from the transform ACTUALLY on screen (photoWindowRef.eff, incl. the
+        // cropDrama zoom + focal) keeps the edit continuous with what's drawn (no jump),
+        // and marking the dim touched means the auto focal-crop never overwrites it again
+        // (M3). Fresh generations stay on the auto-fit default (photoTouchedByDim empty
+        // until the first reframe → born-clean). Idempotent within a gesture.
+        pinPhotoTouched((photoWindowRef.current && photoWindowRef.current.eff) || photoT);
+        setPhotoT(prev => ({ ...prev, ...t })); applied.push("photoTransform");
+      }
     }
     if (patch.overlayUpdate && typeof patch.overlayUpdate === "object" && patch.overlayUpdate.uid) {
       const { uid, transform, mode, style } = patch.overlayUpdate;
