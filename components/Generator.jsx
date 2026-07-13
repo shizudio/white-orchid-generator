@@ -7620,38 +7620,99 @@ export default function App() {
   const chatSendRef = useRef(null);
   const FIELD_TO_FOCUS_ROLE = { headline: "hero", subtext: "support", attribution: "support", microLabel: "eyebrow", dateText: "date" };
   const FIELD_HUMAN = { headline: "headline", subtext: "caption", attribution: "supporting line", microLabel: "little label", dateText: "date" };
+
+  /* ── (copy-fit spec, Tier 3) "TIGHTEN IT FOR ME" — a contract, not a hope ──────
+     The guaranteed remedy for OWNER copy that overflows a slot. Steps, in order:
+       1. compute the role's measured budget,
+       2. ONE AI rewrite capped to that number → apply it only if it truly fits,
+       3. VERIFY against render truth (did the role actually paint?),
+       4. if still dead, a deterministic sentence-boundary trim to the budget that
+          ALWAYS fits (it is strictly shorter than the overflowing copy).
+     The button can therefore never no-op (M2): when a drop exists the copy is
+     always shortened. With the AI unavailable (key blanked / offline) step 2 is
+     skipped and the deterministic trim still lands — the guarantee holds. Applied
+     through applyPatch({source:"ui"}) so it is one owner-consented, undoable edit
+     (and keeps the field owner-authored — it is the owner's message, tightened). */
+  const tightenCopyForFinding = useCallback(async (issue) => {
+    const primary = Array.isArray(issue?.dropped) ? issue.dropped[0] : null;
+    const field = primary?.field;
+    if (!field || !["headline","subtext","attribution","dateText"].includes(field)) return;
+    const roleKey = { headline: "hero", subtext: "support", attribution: "support", dateText: "date" }[field];
+    const budget = computeCopyBudgets(archetypeId, dimensionId, postType, fontSizes)[field] || 60;
+    const current = ({ headline, subtext, attribution, dateText })[field] || String(primary.text || "");
+    if (!current) return;
+
+    // 1–2) One AI rewrite capped to the budget (best-effort; never throws).
+    let aiVal = null;
+    try {
+      const res = await fetch("/api/assistant", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context: "editor", stream: false,
+          messages: [{ role: "user", content: `Rewrite the ${FIELD_HUMAN[field] || "text"} so it is at most ${budget} characters and still fits this design. Keep the meaning and the brand voice. Current ${FIELD_HUMAN[field] || "text"}: "${String(current).slice(0, 200)}"` }],
+          designState: chatDesignState(),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const v = data && data.patch && typeof data.patch[field] === "string" ? data.patch[field].trim() : "";
+        if (v) aiVal = v;
+      }
+    } catch { /* AI unreachable → deterministic path below */ }
+
+    let usedAi = false;
+    if (aiVal && aiVal.length <= budget && aiVal !== current) { applyPatch({ [field]: aiVal }, { source: "ui" }); usedAi = true; }
+
+    // 3) Verify against render truth after the apply settles (two rafs).
+    const painted = await new Promise((resolve) => {
+      const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+      raf(() => raf(() => {
+        const t = renderTruth();
+        resolve(!!(t.roleBounds && t.roleBounds[roleKey]) && !(t.deadRoles || []).includes(roleKey));
+      }));
+    });
+
+    // 4) Guarantee: still not painted → deterministic sentence-boundary trim that fits.
+    if (!painted) {
+      const trimmed = fitCopyClient(current, budget);
+      if (trimmed && trimmed !== current) applyPatch({ [field]: trimmed }, { source: "ui" });
+      else if (usedAi) {
+        // AI value applied but the role is still dead → trim the applied value harder.
+        const t2 = fitCopyClient(aiVal, Math.max(8, Math.floor(budget * 0.8)));
+        if (t2 && t2 !== aiVal) applyPatch({ [field]: t2 }, { source: "ui" });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archetypeId, dimensionId, postType, fontSizes, headline, subtext, attribution, dateText]);
+
   const findingActions = useCallback((issue, onAck) => {
     if (!issue) return [];
     const acts = [];
     const ackAction = (label) => ({ label, kind: "ack", run: () => (onAck ? onAck(issue) : acknowledgeIssue(issue, dimensionId)) });
 
-    // COPY-DROPPED (loss-class): name the real words + offer every remedy as an action.
+    // COPY-DROPPED (loss-class, OWNER copy — AI copy is silently fitted upstream, Tier 2):
+    // the guaranteed remedy. (a) Tighten it for me — a contract, not a hope: budget →
+    // one AI rewrite → apply → verify against render truth → deterministic trim that
+    // always fits (never a no-op, M2). (b) Edit it myself, showing the live budget.
+    // (c) Leave it off. There is NO "switch to {format}" action — format is a
+    // precondition chosen by channel (copy-fit ruling 2); per-format fit lives ONLY in
+    // the Export checklist as status wording.
     if (issue.id === "copy-dropped" || issue.id === "degradation-drops") {
       const dropped = Array.isArray(issue.dropped) ? issue.dropped : [];
       const primary = dropped[0] || null;
-      // [Shorten it for me] — ai-fix: ask the assistant to trim the dropped role to fit.
-      if (primary) {
-        const human = FIELD_HUMAN[primary.field] || "text";
+      const budget = primary ? (computeCopyBudgets(archetypeId, dimensionId, postType, fontSizes)[primary.field]) : null;
+      // [Tighten it for me] — the guaranteed contract (see tightenCopyForFinding).
+      if (primary && ["headline","subtext","attribution","dateText"].includes(primary.field)) {
         acts.push({
-          label: "Shorten it for me", kind: "ai-fix",
-          run: () => {
-            const snippet = String(primary.text || "").slice(0, 120);
-            const prompt = `Shorten the ${human} so it fits this format without being cut off. Keep the meaning; make it about half as long. Current ${human}: "${snippet}"`;
-            if (chatSendRef.current) chatSendRef.current(prompt, { chip: "shorten-to-fit" });
-          },
+          label: "Tighten it for me", kind: "ai-fix",
+          run: () => { tightenCopyForFinding(issue); },
         });
       }
-      // [Switch to {named format}] — deterministic: the smallest format that fits.
-      if (issue.switchTo && issue.switchToLabel) {
-        acts.push({
-          label: `Switch to ${issue.switchToLabel}`, kind: "patch",
-          run: () => { if (issue.switchTo !== dimensionId) setDimensionId(issue.switchTo); },
-        });
-      }
-      // [Edit it myself] — deep-link: select the element + focus its inspector input.
+      // [Edit it myself] — deep-link + the LIVE budget so the owner knows the target.
       if (primary && FIELD_TO_FOCUS_ROLE[primary.field]) {
         acts.push({
           label: "Edit it myself", kind: "deep-link",
+          hint: Number.isFinite(budget) ? `Fits about ${budget} characters here` : undefined,
           run: () => { setAdvisorDot(null); focusTextField(FIELD_TO_FOCUS_ROLE[primary.field]); },
         });
       }
@@ -7692,7 +7753,7 @@ export default function App() {
     acts.push(ackAction(issue.lossClass ? "Leave it off" : "Keep it this way"));
     return acts;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [acknowledgeIssue, applyReadyFix, dimensionId]);
+  }, [acknowledgeIssue, applyReadyFix, dimensionId, archetypeId, postType, fontSizes, tightenCopyForFinding]);
 
   // Console-verifiable API (Commit 1): window.__runWoAudit() → findings[].
   // Also expose a per-format sweep for verification (window.__runWoAuditAll()).
@@ -12046,7 +12107,7 @@ function AdvisorPopover({ payload, onClose, actionsOf }) {
               {prov && <span style={{fontSize:9.5,color:B.ash,fontFamily:FU.subtitle,letterSpacing:0.5,textTransform:"uppercase"}}>{prov}</span>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 {(actionsOf ? actionsOf(iss) : []).map((a,ai)=>(
-                  <button key={ai} type="button" onClick={a.run} style={actionBtnStyle(a.kind)}>{a.label}</button>
+                  <button key={ai} type="button" onClick={a.run} title={a.hint||undefined} style={actionBtnStyle(a.kind)}>{a.label}</button>
                 ))}
               </div>
             </div>
@@ -12138,7 +12199,7 @@ function ReadyToPost({ check, expanded, setExpanded, actionsOf, onSwitchFormat, 
                             no dead grey labels; ai-fix/patch lead, deep-link + ack follow. */}
                         <div style={{display:"flex",gap:6,flexWrap:"wrap",alignSelf:"flex-start"}}>
                           {(actionsOf ? actionsOf(iss) : []).map((a,ai)=>(
-                            <button key={ai} type="button" onClick={a.run} style={actionBtnStyle(a.kind)}>{a.label}</button>
+                            <button key={ai} type="button" onClick={a.run} title={a.hint||undefined} style={actionBtnStyle(a.kind)}>{a.label}</button>
                           ))}
                         </div>
                       </div>
