@@ -6,7 +6,7 @@
 
 ## 1. What this is
 
-A prompt-first social-media design studio for non-technical preschool staff (The White Orchid), being scaled multi-tenant (brand #2: Perena). Next.js 14 App Router; the entire editor is **one client component, `components/Generator.jsx` (~10k lines)** — canvas render loop, layout engine, archetypes, advisor, export. `lib/` holds the contracts; `app/api/` the thin server routes; `scripts/resident-tester/` the only test suite (Playwright against a real build; there is **no** lint, typecheck, unit test, or CI).
+A prompt-first social-media design studio for non-technical preschool staff (The White Orchid), being scaled multi-tenant (brand #2: Perena). It uses the Next.js 14 App Router. The editor root in `components/Generator.jsx` is now a 1,500-line orchestrator over extracted canvas, inspector, template, export, readiness, feed, persistence, session, command, and verification surfaces. The legacy Canvas 2D renderer remains module-level in that file while editable state is owned by `DesignDocumentV1` and typed commands. `lib/` holds pure contracts, `hooks/` owns focused orchestration, `app/api/` contains thin server routes, `scripts/tests/` contains the pure unit suite, and `scripts/resident-tester/` runs Playwright journeys against a production build. `next build` performs lint/type validation; no separate CI workflow is currently documented.
 
 ## 2. Doc ownership (one source of truth per fact)
 
@@ -41,7 +41,7 @@ A prompt-first social-media design studio for non-technical preschool staff (The
 
 **Branch/deploy.** Trunk-based on `main`. **"push" means `git push origin main:staging`** (the deploy-gate branch; the pre-push hook runs deploy-smoke on staging pushes only, blocking only on build/boot failure). **Never push anywhere without the user's explicit word; production (`main` on the remote → shizudio.me pipeline equivalent here is the Vercel main deploy) only on an explicit "push to main/production".** Verify on localhost before any push.
 
-**Code style.** Match the file's voice: long explanatory block comments that cite the ratified decision and commit context (`// (Hearts — ratified) …`). Comments state *constraints and contracts*, not narration. Single-quotes in lib/, JSX inline styles in Generator.jsx, no new dependencies without an explicit decision.
+**Code style.** Match the file's voice: explanatory block comments cite the ratified decision and commit context (`// (Hearts — ratified) …`). Comments state *constraints and contracts*, not narration. Single-quotes in lib/, JSX inline styles in the editor surfaces, no new dependencies without an explicit decision. Keep leaf product components and single-responsibility orchestration boundaries at or below 1,500 lines; route editable mutations through `dispatchDesignCommand` rather than adding React state ownership.
 
 **The graceful-degradation contract** (follow it for anything cloud-touching): every cloud call is null-safe, never throws, returns `{configured}`; the API returns `{configured:false}` — never a 500 — when Supabase/env/table is absent; state always mirrors to localStorage; big dataURLs stay device-only. Known violator to not imitate: `app/api/brand/route.js` (returns 500s).
 

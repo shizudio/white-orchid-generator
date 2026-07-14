@@ -16,6 +16,19 @@ function summarizeKeys(keys) {
   return labels.join(', ');
 }
 
+function commandPathToPatchKey(path) {
+  const [family, field] = String(path || '').split('.');
+  if (family === 'content') return field === 'authorship' ? null : field;
+  if (family === 'palette') return ({ background:'bgColor', text:'textColorId', backdrop:'backdropMode', backgroundOpacity:'bgAlpha', field:'fieldColor' })[field] || null;
+  if (family === 'composition') return ({ archetypeVariant:'archVariant' })[field] || field;
+  if (family === 'typography') return field === 'fontSizes' ? 'fontSizes' : 'textLayout';
+  if (family === 'media') return field === 'source' ? 'imageSrc' : field === 'treatment' ? 'photoTreatment' : field === 'frame' ? 'photoFrameType' : 'photoTransform';
+  if (family === 'logo') return field === 'assetId' ? 'logoId' : field === 'hidden' ? 'hideLogo' : field === 'masterPlacement' || field === 'formatPlacements' ? 'logoPosition' : null;
+  if (family === 'shapes') return 'overlayUpdate';
+  if (family === 'furniture') return 'furnitureUpdate';
+  return null;
+}
+
 /* The Art Director — THE PRIMARY RAIL (WP-V Stage 3, ux-architecture §2.1).
 
    No longer a floating overlay: the chat is a permanent docked column.
@@ -711,7 +724,11 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       const truthBefore = typeof truthRef.current === 'function' ? truthRef.current() : null;
       let changeKeys = [];
       if (patchHasChanges(patch)) {
-        changeKeys = onApplyPatch(patch) || [];
+        const applyResult = onApplyPatch(patch) || [];
+        const resultPaths = Array.isArray(applyResult.changedPaths) ? applyResult.changedPaths : [];
+        changeKeys = resultPaths.length
+          ? [...new Set([...resultPaths.map(commandPathToPatchKey).filter(Boolean), ...applyResult.filter(key => key === 'dimensionId')])]
+          : applyResult;
       }
       loggedChangeKeys = changeKeys;
       // Image generation (Commit 4): if the server returned a generated image, ingest

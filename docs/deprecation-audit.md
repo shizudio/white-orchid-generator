@@ -1,8 +1,8 @@
 # Deprecation Audit — a calmer, cleaner Content Studio
 
-Status: DRAFT for client ratification (Shina). Read-only audit — no app code was
-changed. Companion to docs/ux-architecture.md ("one canvas, two inputs, zero
-duplicates"), docs/advice-ledger-spec.md (one advisor voice), and docs/roadmap.md.
+Status: **Superseded historical audit.** Its accepted removals have since changed the
+surface map (for example, Export now lives beside the canvas and the format strip is the
+canonical format control). Use `refactor-prd.md` and `ux-architecture.md` as current truth.
 
 ## How to read this
 

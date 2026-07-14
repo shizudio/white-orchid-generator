@@ -19,3 +19,7 @@ generated/
 
 # Isolated dev-server dist (wo-3210-iso launch config)
 .next-3210/
+
+# isolated build dirs + codedb tool snapshot
+.next-*/
+codedb.snapshot

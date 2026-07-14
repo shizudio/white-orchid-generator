@@ -9,8 +9,8 @@
 //             example chips are <button> siblings; Send button aria-label="Send".
 //   chat:     .ad-msg--user / .ad-msg--assistant / .ad-bubble, .ad-changed,
 //             textarea[aria-label^="Message Orchid"], button[aria-label="Send"].
-//   top bar:  role=toolbar[aria-label="Design globals"]; buttons by text
-//             (Format / Posts / Templates / + Add / Export); Undo button text "↶ Undo".
+//   globals:  role=toolbar[aria-label="Design globals"] for Posts/Templates;
+//             Export lives in the canvas control strip as .wo-export-cta.
 //   canvas:   canvas[aria-label="Interactive post preview"].
 
 const O = require('./oracles');
@@ -64,9 +64,10 @@ async function sendChat(page, text) {
   return got;
 }
 
-// Open a top-bar popover by its visible button text.
-async function openTopMenu(page, label) {
-  const btns = await page.$$('.wo-topbar button, .wo-topbtn');
+// Open a global control by visible text. Some finish controls intentionally live
+// beside the canvas rather than in the globals toolbar.
+async function openGlobalControl(page, label) {
+  const btns = await page.$$('.wo-topbar button, .wo-topbtn, .generator-canvas-controls button, .wo-export-cta');
   for (const b of btns) {
     const t = (await b.innerText().catch(() => '')).trim();
     if (t.replace(/\s+/g, ' ').includes(label)) { await b.click(); await settle(400); return true; }
@@ -217,11 +218,10 @@ async function runJourneys(page, run, cons, baseUrl) {
   try {
     await page.keyboard.press('Escape').catch(() => {});
     await settle(300);
-    const opened = await openTopMenu(page, 'Format');
     let switched = 0, worst = null;
-    if (opened) {
-      // The format popover lists 6 dimension buttons; click each in turn.
-      const fmtBtns = await page.$$('.wo-topmenu button');
+    {
+      // The always-visible format strip is the canonical format surface.
+      const fmtBtns = await page.$$('.generator-format-strip button[aria-pressed]');
       for (let i = 0; i < fmtBtns.length && i < 8; i++) {
         const b = fmtBtns[i];
         const t = (await b.innerText().catch(() => '')).trim();
@@ -238,10 +238,7 @@ async function runJourneys(page, run, cons, baseUrl) {
           for (const c of [ovf, sy, buf]) if (!c.ok) run.recordDefect({ journey: 'format-switch', oracle: c.name, expected: c.expected, observed: `[${t}] ${c.observed}`, screenshot: shot, console: cons.peek(), severity: c.severity });
         }
         switched++;
-        // Re-open the menu if it closed on selection.
-        if (!(await page.$('.wo-topmenu'))) await openTopMenu(page, 'Format');
       }
-      await page.keyboard.press('Escape').catch(() => {});
     }
     cons.drain();
     pushStep('format switch ×N', switched > 0 && !worst, worst ? `broke on ${worst.t}` : `${switched} formats, no dead space / strip jump`);
@@ -309,10 +306,10 @@ async function runJourneys(page, run, cons, baseUrl) {
   try {
     await page.keyboard.press('Escape').catch(() => {});
     await settle(300);
-    const opened = await openTopMenu(page, 'Posts');
+    const opened = await openGlobalControl(page, 'Posts');
     let restored = 'n/a';
     if (opened) {
-      const tiles = await page.$$('.wo-topmenu [role="menuitem"], .wo-topmenu button');
+      const tiles = await page.$$('.wo-feedgal-grid button');
       restored = tiles.length > 0 ? `${tiles.length} post tile(s) present` : 'no posts yet (fresh device)';
       await page.keyboard.press('Escape').catch(() => {});
     }
@@ -325,11 +322,10 @@ async function runJourneys(page, run, cons, baseUrl) {
   try {
     await page.keyboard.press('Escape').catch(() => {});
     await settle(300);
-    const opened = await openTopMenu(page, 'Export');
+    const opened = await openGlobalControl(page, 'Export');
     await settle(600);
     const hasChecklist = await page.evaluate(() =>
-      /ready to post/i.test(document.querySelector('.wo-topmenu')?.textContent || '') ||
-      !!document.querySelector('.wo-topmenu [class*="ready"], .wo-topmenu [class*="checklist"]'));
+      /ready to post/i.test(document.querySelector('.wo-export-pop')?.textContent || ''));
     ctx = { journey: 'export-checklist', tag: 'j7-export', console: cons.drain() };
     if (opened && !hasChecklist) {
       const shot = await run.shot(page, 'j7-export-no-checklist');

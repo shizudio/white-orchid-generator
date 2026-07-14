@@ -198,6 +198,20 @@ patch enums: modes reuse `overlayMode`; the fill colour rides `overlayUpdate.sty
 (a client-only key). Autonomous text collision-free vs every shape layer still holds
 (decor shapes remain reflow obstacles/compose-partners).
 
+### 2.10 Selection and library convergence (2026-07-14)
+
+- **One Shapes pill.** Individual shape instances are children of the Shapes inspector,
+  never top-level element pills. Clicking a shape on the canvas selects that instance
+  inside Shapes; the inspector list remains the fallback for occluded instances.
+- **One Templates gallery.** Built-in, personal and team templates use the same card
+  grid and interactions. Source is a small metadata label, not a separate section.
+- **Role-specific text selection.** The canvas selection frame names and outlines the
+  actual selected role (title, caption, date, label or button). Keyboard movement and
+  direct manipulation target that same role.
+- **Pointer-specific capture.** A selected element may capture a drag only when the
+  pointer starts inside its own hit geometry. Selection state must never swallow the
+  next click elsewhere on the canvas.
+
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
 A selection-only inspector can't add absent elements, and staff don't know the
