@@ -3578,19 +3578,34 @@ export default function App() {
   // (Refinement 1) RAW writer for a per-role free-placement offset. Scoped by the
   // ACTIVE dim + postType (MASTER_DIM writes the master row, mirroring writeTextLayout).
   // {dx,dy} are the role's centre delta in fractions. Only the patch pipeline calls this.
-  const writeRoleOffset = (role, dx, dy) => {
+  // (P1 slice 3 — owner rails) The entry may also carry a FROZEN BASE {bx,by} (fractions):
+  // the solver-governed centre captured at the FIRST explicit drag of a solver-placed
+  // date/eyebrow/badge. Final position = (bx+dx, by+dy) — invariant under any re-solve
+  // (law 5: a pin is never moved by the system's own re-layout). Both entry shapes are
+  // legal everywhere ({dx,dy} legacy, {dx,dy,bx,by} frozen); a write that omits bx/by
+  // PRESERVES an existing frozen base (a later delta update must not thaw the pin).
+  // dx===null clears the entry entirely — the one sanctioned unpin (the element returns
+  // to solver governance; used by the pinned-placement finding's "Put it back" remedy).
+  const writeRoleOffset = (role, dx, dy, bx, by) => {
     if(!role) return;
-    const off = { dx:+(dx||0), dy:+(dy||0) };
     setRoleOffsetsByDim(prev=>{
       const dim = prev[dimensionId]||{};
       const pt = dim[postType]||{};
+      if(dx===null){ if(!(role in pt)) return prev; const npt={...pt}; delete npt[role]; return {...prev, [dimensionId]:{...dim, [postType]:npt}}; }
+      const cur = pt[role]||{};
+      const off = { dx:+(dx||0), dy:+(dy||0) };
+      const nbx = Number.isFinite(bx)?+bx:(Number.isFinite(cur.bx)?cur.bx:undefined);
+      const nby = Number.isFinite(by)?+by:(Number.isFinite(cur.by)?cur.by:undefined);
+      if(nbx!==undefined && nby!==undefined){ off.bx=nbx; off.by=nby; }
       return {...prev, [dimensionId]:{...dim, [postType]:{...pt, [role]:off}}};
     });
   };
   // Pipeline wrapper — a canvas role-drag emits ONE patch grammar through applyPatch so
   // the whole gesture folds into a single undo burst + runs the manual harmonizer, exactly
-  // like updateTextLayout for the hero.
-  const updateRoleOffset = (role, dx, dy) => applyPatch({ roleOffset: { role, dx, dy } }, { source: "ui" });
+  // like updateTextLayout for the hero. (P1 slice 3) bx/by carry the frozen solver base for
+  // date/eyebrow/pill drags; riding the SAME patch means base + delta land in ONE undo
+  // entry / session snapshot / restore — atomically, never one without the other.
+  const updateRoleOffset = (role, dx, dy, bx, by) => applyPatch({ roleOffset: { role, dx, dy, bx, by } }, { source: "ui" });
   const resetTextLayout = () => {
     noteManualEdit("text");   // undoable + harmonized like any other manual edit
     if(dimensionId===MASTER_DIM){
@@ -4134,10 +4149,14 @@ export default function App() {
     }
     // (Refinement 1) roleOffset — a single text/furniture role's free-placement
     // centre-delta ({role, dx, dy}), scoped to the active dim + postType. Client-only
-    // (CLIENT_PATCH_KEYS); the AI grammar cannot produce it.
+    // (CLIENT_PATCH_KEYS); the AI grammar cannot produce it. (P1 slice 3 — owner rails)
+    // Optional {bx,by} freezes the solver base with the delta (one atomic entry);
+    // {clear:true} deletes the entry — the sanctioned unpin (element returns to the
+    // solver), driven by the pinned-placement finding's "Put it back" remedy.
     if (patch.roleOffset && typeof patch.roleOffset === "object" && typeof patch.roleOffset.role === "string") {
-      const { role, dx, dy } = patch.roleOffset;
-      if (Number.isFinite(dx) && Number.isFinite(dy)) { writeRoleOffset(role, dx, dy); applied.push("roleOffset"); }
+      const { role, dx, dy, bx, by, clear } = patch.roleOffset;
+      if (clear === true) { writeRoleOffset(role, null); applied.push("roleOffset"); }
+      else if (Number.isFinite(dx) && Number.isFinite(dy)) { writeRoleOffset(role, dx, dy, bx, by); applied.push("roleOffset"); }
     }
     if (patch.photoTransform && typeof patch.photoTransform === "object") {
       const t = {};
@@ -5408,7 +5427,14 @@ export default function App() {
       : (roleOffsetsByDimRef.current?.[dimId]?.[postType] || null);
     const roleOff = (role) => {
       const o = _roleOffSrc && _roleOffSrc[role];
-      return o ? { dx:(o.dx||0)*w, dy:(o.dy||0)*h } : { dx:0, dy:0 };
+      if(!o) return { dx:0, dy:0, frozen:false };
+      // (P1 slice 3 — owner rails) A FROZEN entry ({dx,dy,bx,by}) pins the role's centre at
+      // (bx+dx, by+dy) — the base captured at first drag, so a re-solve that would pick a
+      // different candidate can never move the pin (law 5). Legacy {dx,dy}-only entries
+      // keep the translate-the-current-placement behaviour. Calibration/legacyForce renders
+      // see neither (_roleOffSrc is null above) — the guards render the archetype verbatim.
+      const frozen = Number.isFinite(o.bx) && Number.isFinite(o.by);
+      return { dx:(o.dx||0)*w, dy:(o.dy||0)*h, frozen, bx:frozen?o.bx*w:0, by:frozen?o.by*h:0 };
     };
     // The legacy duplicate-draw guard must exercise the LEGACY stacked painters, not
     // whatever editorial layout the live design happens to carry. Setting the postType
@@ -6487,6 +6513,14 @@ export default function App() {
         }catch(_){/* saliency unavailable → authored placement stands */}
       }
 
+      // (P1 slice 3 — owner rails) A FROZEN (dragged) eyebrow leaves the reflow engine's
+      // world entirely: its labelBox is withdrawn BEFORE reflow so the hero/caption reclaim
+      // the space as their own free variable (re-solve around the pin), and the pinned draw
+      // below paints the eyebrow at its frozen centre instead. If the reclaimed layout now
+      // collides with the pinned spot, that surfaces as the pinned-placement advisor dot —
+      // never an auto-move (M3).
+      const _ebPin=roleOff("eyebrow");
+      if(_ebPin.frozen) labelBox=null;
       // ── REFLOW + COLLISION ENGINE (Commit 3) ──────────────────────────────────
       // Measure each role at its target size, then deterministically de-collide:
       // priority hero > support > microLabel > logo > motifs. Overlapping lower-
@@ -6533,7 +6567,7 @@ export default function App() {
       // (Governing rule: the user can always overwrite our suggestions — placement is never
       // blocked or auto-corrected; consequences surface only as advisor reminders.) The
       // date + pill boxes pick up their own offsets at their draw sites below.
-      { const eo=roleOff("eyebrow"); if(labelBox&&(eo.dx||eo.dy)) labelBox={...labelBox,x:labelBox.x+eo.dx,y:labelBox.y+eo.dy}; }
+      { const eo=_ebPin; if(!eo.frozen && labelBox&&(eo.dx||eo.dy)) labelBox={...labelBox,x:labelBox.x+eo.dx,y:labelBox.y+eo.dy}; }
       const _supOff=roleOff("support");
       const _supFree=!!(_supOff.dx||_supOff.dy);   // user placed the caption freely → skip auto nudge/lift
       if(supBox&&_supFree) supBox={...supBox,x:supBox.x+_supOff.dx,y:supBox.y+_supOff.dy};
@@ -6779,7 +6813,7 @@ export default function App() {
       // exactly as before. Fires ONLY when eyebrow content is present (born-clean: autonomous
       // no-eyebrow generations never sprout one). eyebrowDrawnW is a live-independent signal,
       // so the offscreen audit sweeps see the same placement the live canvas does.
-      if(eyebrow && !isSchedule && heroBox && eyebrowDrawnW==null){
+      if(eyebrow && !isSchedule && heroBox && eyebrowDrawnW==null && !_ebPin.frozen){
         const ebAlign=mat.roles?.microLabel?.align||"left";
         const ebTxt=stripHeroMarkers(eyebrow).toUpperCase();
         const ebPref=Math.max(MIN_FONT_PX.dateLabel(h), 0.026*h);
@@ -6838,6 +6872,35 @@ export default function App() {
           const _edi=dropped.indexOf("Eyebrow"); if(_edi>=0) dropped.splice(_edi,1);
         }
       }
+      // ── (P1 slice 3 — owner rails) THE PINNED EYEBROW — GUARANTEED draw at the frozen
+      // base + delta (law 5). Neither the prior nor the rescue solver runs for a frozen
+      // eyebrow: the draw below is unconditional so a re-solve (copy edit, element add/
+      // remove, palette change) can never move OR drop what the owner placed. Position is
+      // the pin; STYLING stays the system's free variable (M3 forbids auto-MOVING, not
+      // restyling): ink follows heroInk (palette re-solves recolour it), size follows the
+      // class floor (format re-solves rescale it). No legibility ladder and NEVER a band
+      // (§6a-safe on shape designs by construction) — an illegible or rule-violating pinned
+      // spot surfaces as the pinned-placement advisor dot, the honest surface, never a
+      // silent correction. Box convention mirrors the rescue draw (top-anchored, h=1.4·px);
+      // a pin grabbed from a PRIOR-path eyebrow (h=1.8·px convention) settles ≤0.3·px once
+      // at first drop — the centre itself never drifts thereafter. If the eyebrow text is
+      // later removed the pin persists harmlessly (nothing draws; re-adding the text
+      // returns it to the owner's spot — mirroring logoFreePos semantics).
+      if(eyebrow && !isSchedule && _ebPin.frozen){
+        const ebTxt=stripHeroMarkers(eyebrow).toUpperCase();
+        const ebSz=Math.max(MIN_FONT_PX.dateLabel(h), 0.026*h);
+        ctx.save();
+        ctx.font=`400 ${ebSz}px ${F.subtitle}`; ctx.letterSpacing=`${0.09*ebSz}px`;
+        const ebW=ctx.measureText(ebTxt).width; ctx.letterSpacing="0px";
+        const ebCx=_ebPin.bx+_ebPin.dx, ebCy=_ebPin.by+_ebPin.dy;
+        const ebX=ebCx-ebW/2, ebY=ebCy-ebSz*0.7;
+        ctx.fillStyle=heroInk;
+        drawMicroLabel(ctx,ebTxt,ebX,ebY,ebSz,{align:"left",tracking:0.08});
+        ctx.restore();
+        fontMeta.dateLabel=ebSz;
+        eyebrowDrawn={x:ebX,y:ebY,w:ebW,h:ebSz*1.4};
+        if(_roleB) _roleB.eyebrow=eyebrowDrawn;
+      }
       // ── THE DATE LINE ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 1b) ──
       // The date is no longer a PHOTO-LED-only line. When a date is present (ccDateText)
       // it is placed by the universal solver on ANY archetype: the CURRENT photo-led
@@ -6852,6 +6915,10 @@ export default function App() {
       // one (the born-clean invariant). big_number (usesDateAsHero) still paints the date
       // AS the hero and is untouched here (!isBigNum).
       let dateDrawn=null, dateExtH=0;   // the date line's own drawn rect + usedH extension (audit)
+      // (P1 slice 3) the drawn pill/badge box, captured from drawFurniture's onDrawn on
+      // EVERY render (live + offscreen audit sweeps) so the audit's textBoxes / pinned
+      // signal see the badge exactly where it painted.
+      let pillDrawn=null;
       if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox){
         const _safeTopD=sm.t*h, _safeBotD=(1-sm.b)*h;
         const heroSz=fontMeta.headline||heroBox.h*0.4;
@@ -6883,6 +6950,26 @@ export default function App() {
         // (Refinement 1) the date is its own draggable role — translate its draw + box by
         // the stored per-role delta (free placement wins over the auto-placed spot).
         const _dOff=roleOff("date");
+        // ── (P1 slice 3 — owner rails) THE PINNED DATE — GUARANTEED draw at the frozen
+        // base + delta (law 5). A frozen date skips the photo-led prior AND the solver:
+        // this draw is unconditional, so a re-solve that would pick a different candidate
+        // (the reproduced defect: a copy edit moved a pinned date (281.7,780.7)→(963.1,999.0))
+        // can never move it again. Position is the pin; STYLING stays the system's free
+        // variable (M3): ink follows heroInk, size follows the hero-tracked fit (dSz) — a
+        // palette or copy re-solve may restyle, never relocate. No ladder and NEVER a band
+        // (§6a-safe): a pinned spot that violates a hard restraint gets the honest
+        // pinned-placement dot instead. Box convention matches both existing date paths
+        // (top-anchored, baseline = top+px, h = 1.28·px) so the pin lands glyph-exact.
+        // A cleared dateText leaves the pin dormant (nothing draws; the freeze persists
+        // so a re-added date returns to the owner's spot).
+        if(_dOff.frozen){
+          const dCx=_dOff.bx+_dOff.dx, dCy=_dOff.by+_dOff.dy;
+          const dX0=dCx-dTextW/2, dY0=dCy-dSz*0.64;
+          beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
+          drawTextLines(ctx,[dTxt],dX0,dY0+dSz,dTextW,dSz*1.05,"left");
+          fontMeta.date=dSz; endText();
+          dateDrawn={x:dX0,y:dY0,w:dTextW,h:dSz*1.28};
+        }
         const clearOfObs=(rect)=>!_dObs||!(rect.x<_dObs.x+_dObs.w&&rect.x+rect.w>_dObs.x&&rect.y<_dObs.y+_dObs.h&&rect.y+rect.h>_dObs.y);
         const drawDate=(dy)=>{ beginText(); ctx.fillStyle=heroInk; ctx.font=`300 ${dSz}px ${F.title}`;
           drawTextLines(ctx,[dTxt],heroBox.x+_dOff.dx,dy+dSz+_dOff.dy,heroBox.w,dSz*1.05,dAlign);
@@ -6893,7 +6980,7 @@ export default function App() {
         // above-hero overlay. These are exactly today's placements — preserved verbatim so
         // documentary / editorial_split / full-bleed dates never move.
         const photoLed=(mat.photoRegion || mat.fullBleed || (cardBox||maskBox));
-        if(photoLed){
+        if(photoLed && !_dOff.frozen){   // (P1 slice 3) a frozen date already drew above — prior + solver both idle
           const belowTop=heroBox.y+usedH+dGap;
           const belowRect={x:dX+_dOff.dx,y:belowTop+_dOff.dy,w:dTextW,h:dSz*1.28};
           if(belowTop+dSz*1.28+supNeed<=dFloor && clearOfObs(belowRect)){
@@ -7183,7 +7270,27 @@ export default function App() {
             const padX=bs*0.9, padY=bs*0.55; return { w:tw+padX*2, h:bs+padY*2 }; };
           for(const it of furnItems){
             if(!it || it.type!=="badge") continue;
-            const _o=roleOff(_furnRoleKey(it)); if(_o.dx||_o.dy) continue;   // user-dragged pin — never auto-move (law 5)
+            const _o=roleOff(_furnRoleKey(it));
+            // (P1 slice 3 — owner rails) A FROZEN (dragged) badge draws its pill centre at
+            // exactly (frozen base + delta). The old skip-on-offset left the base at the RAW
+            // authored prior, so a badge the SOLVER had moved before the drag jumped by
+            // (prior − solved) on the next render (reproduced: dropped at centre
+            // (707.4,1431.7), redrew at (431.0,1552.8) on cta_card/story). The frozen base
+            // captured at first drag closes that: position pinned; pill styling (fill,
+            // label ink pole, size basis) stays the system's free variable (M3). _pinned
+            // tells the drawFurniture offset resolver NOT to re-add the delta (it is
+            // already inside the target), and _placed bypasses the auto-clutter skip —
+            // a pin may sit literally anywhere; violations surface as the
+            // pinned-placement dot, never a re-drop.
+            if(_o.frozen){
+              const bs=(it.size||0.024)*h;
+              const txt=String(it.text==null?DEFAULT_FURNITURE_TEXT.badge:it.text);
+              const dim=badgePillDim(txt,bs);
+              const cx=_o.bx+_o.dx, cy=_o.by+_o.dy;
+              it.x=(cx-dim.w/2)/w; it.y=cy/h; it.align="left"; it._placed=true; it._pinned=true;
+              continue;
+            }
+            if(_o.dx||_o.dy) continue;   // legacy delta-only pin — translate-only behaviour unchanged (law 5)
             const bs=(it.size||0.024)*h;
             const txt=String(it.text==null?DEFAULT_FURNITURE_TEXT.badge:it.text);
             const dim=badgePillDim(txt,bs);
@@ -7213,8 +7320,13 @@ export default function App() {
           }
         }
         drawFurniture(ctx, furnItems, w, h, sm, heroInk, avoid, accentInk,
-          _roleB ? (role, box) => { _roleB[role] = box; } : null,
-          (it) => { const o=roleOff(_furnRoleKey(it)); return (o.dx||o.dy)?{dx:o.dx/w,dy:o.dy/h}:null; });
+          // (P1 slice 3) onDrawn always fires: _roleB (live hit-testing) when live, and the
+          // drawn pill box captured for EVERY audit render (the offscreen sweeps need it in
+          // ready.textBoxes / ready.pinned exactly like the live canvas).
+          (role, box) => { if(_roleB) _roleB[role] = box; if(role==="pill") pillDrawn=box; },
+          // (P1 slice 3) a FROZEN badge's item position already IS (base + delta) — the
+          // resolver returns null so the delta is never applied twice.
+          (it) => { if(it._pinned) return null; const o=roleOff(_furnRoleKey(it)); return (o.dx||o.dy)?{dx:o.dx/w,dy:o.dy/h}:null; });
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
@@ -7412,7 +7524,19 @@ export default function App() {
         const supDrawn=supBox&&supportText?{x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.3)}:null;
         const labelDrawn=labelBox&&eyebrow?{x:labelBox.x,y:labelBox.y,w:(eyebrowDrawnW||labelBox.w),h:reflow.labelSize||labelBox.h}:null;
         const ix=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
-        const textRoles=[heroDrawn,supDrawn,labelDrawn,dateDrawn].filter(Boolean);
+        // (P1 slice 3 — owner rails) The RESCUED (solver-placed) eyebrow and the drawn
+        // badge/pill now join the audited text boxes — solver-placed elements land inside
+        // the PLATFORM_SAFE-tightened bounds by construction, so fresh generations stay at
+        // zero findings (born-clean; asserted by __woBornCleanGuard/__woArchStress).
+        // PINNED (user-dragged) date/eyebrow/pill boxes are PARTITIONED OUT of textRoles:
+        // a pin is the owner's explicit intent, not a system defect — it must neither trip
+        // the system-cleanliness assertions (boxOverlaps/outOfMargin) nor receive
+        // safe-area-text's auto-nudge fix (M3). Pinned boxes travel in ready.pinned instead,
+        // where the audit raises the honest fix:null pinned-placement dot.
+        const eyeDrawnBox=labelDrawn||eyebrowDrawn;   // prior-path box, else rescued/pinned drawn box
+        const _pinOf=(role)=>{const o=roleOff(role);return !!(o.dx||o.dy||o.frozen);};
+        const _datePinned=_pinOf("date"), _eyePinned=_pinOf("eyebrow"), _pillPinned=_pinOf("pill");
+        const textRoles=[heroDrawn,supDrawn,_eyePinned?null:eyeDrawnBox,_datePinned?null:dateDrawn,_pillPinned?null:pillDrawn].filter(Boolean);
         let boxOverlaps=0;
         for(let i=0;i<textRoles.length;i++)for(let j=i+1;j<textRoles.length;j++) if(ix(textRoles[i],textRoles[j])) boxOverlaps++;
         // Text vs photo obstacle (card/mask/split) — a real collision unless fullBleed.
@@ -7474,13 +7598,31 @@ export default function App() {
         const _norm=b=>b?{x:b.x/w,y:b.y/h,w:b.w/w,h:b.h/h}:null;
         const _readyBoxes=textRoles.map(_norm).filter(Boolean);
         const _readyLogo=_norm(logoBx);
+        // (P1 slice 3 — owner rails) PINNED placements, with a cheap collision verdict
+        // against the system-drawn boxes (text roles, the photo obstacle, the logo) the
+        // render already has in hand. Pinned-vs-pinned overlaps are deliberately NOT
+        // counted — two owner placements crowding each other are both explicit intent.
+        // Consumed by lib/audit-local.js (the pinned-placement finding); empty on any
+        // fresh generation (no offsets → born-clean holds).
+        const _pinnedRoles=[];
+        if(_datePinned&&dateDrawn)_pinnedRoles.push({role:"date",box:dateDrawn});
+        // eyeDrawnBox, not eyebrowDrawn: a LEGACY delta-only eyebrow pin draws via the
+        // PRIOR path (labelDrawn; eyebrowDrawn stays null) — it is partitioned out of
+        // textRoles like every pin, so it must ride ready.pinned or its violation
+        // becomes invisible to the audit entirely.
+        if(_eyePinned&&eyeDrawnBox)_pinnedRoles.push({role:"eyebrow",box:eyeDrawnBox});
+        if(_pillPinned&&pillDrawn)_pinnedRoles.push({role:"pill",box:pillDrawn});
+        const _readyPinned=_pinnedRoles.map(p=>({
+          role:p.role, ..._norm(p.box),
+          collides: textRoles.some(t=>ix(p.box,t)) || (!mat.fullBleed&&photoObs&&ix(p.box,photoObs)) || (logoBx&&ix(p.box,logoBx)) || false,
+        }));
         auditRef.current={
           dimensionId:dimId,postType,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
           ready:{canvasW:w,canvasH:h,fontPx:{headline:fontMeta.headline||0,subtext:fontMeta.subtext||0,date:fontMeta.date||0},
-                 textBoxes:_readyBoxes,logoBox:_readyLogo,sm:{...sm}},
+                 textBoxes:_readyBoxes,logoBox:_readyLogo,sm:{...sm},pinned:_readyPinned},
           archetypeDrift:{
             heroSupportRatio, heroWords:(stripHeroMarkers(heroFinal||"").trim().split(/\s+/).filter(Boolean).length),
             supportFloor:(mat.heroToSupport||8),
@@ -7896,8 +8038,11 @@ export default function App() {
         logo:{...auditLogo},            // {explicit,overlapsText,inFocalBand}
         safeZoneViolation,
         hasText:!!(headline||subtext||attribution||dateText),
+        // (P1 slice 3) pinned:[] — the legacy (archetypeId-null) painters draw the date/
+        // eyebrow INSIDE the text block (covered by textBoxes) and never call drawFurniture,
+        // so no separately-drawn solver-placed/pinned element exists on this path.
         ready:{canvasW:w,canvasH:h,fontPx:{headline:fontMeta.headline||0,subtext:fontMeta.subtext||0,date:fontMeta.date||0},
-               textBoxes:_readyBoxesL,logoBox:_readyLogoL,sm:{...sm}},
+               textBoxes:_readyBoxesL,logoBox:_readyLogoL,sm:{...sm},pinned:[]},
       };
     }
 
@@ -8096,7 +8241,7 @@ export default function App() {
     // flush, then apply the geometry fix — otherwise the override lands on the wrong
     // format. Global fixes (colour/backdrop) are dimension-agnostic and apply now.
     const needsSwitch = fix.dimensionId && fix.dimensionId !== dimensionId &&
-      (fix.textLayout || fix.logoPosition || fix.logoSize);
+      (fix.textLayout || fix.logoPosition || fix.logoSize || fix.roleOffset);   // (P1 slice 3) roleOffset writes are dim-scoped too
     if (needsSwitch) {
       setDimensionId(fix.dimensionId);
       const rest = { ...fix }; delete rest.dimensionId;
@@ -8132,6 +8277,12 @@ export default function App() {
     // An AI-audit finding carries its own anchor element (spec rule 1).
     if (issue.anchor && issue.anchor.element) return elementBoxOf(issue.anchor.element);
     const norm = (b) => (b && W && H) ? { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H } : null;
+    // (P1 slice 3) pinned-placement anchors to the ACTUAL pinned element's drawn box
+    // (roleBounds carries date/eyebrow/pill on the live render) — the dot sits ON the
+    // element the finding names, not on the text block.
+    if (issue.id === "pinned-placement" && issue.element && roleBoundsRef.current?.[issue.element]) {
+      return norm(roleBoundsRef.current[issue.element]);
+    }
     if (LOGO_ISSUE_IDS.has(issue.id) || issue.category === "overlap") {
       return norm(logoBoxRef.current);
     }
@@ -8328,6 +8479,28 @@ export default function App() {
       }
       // [Leave it off] — the ack, honest loss-class wording.
       acts.push(ackAction("Leave it off"));
+      return acts;
+    }
+
+    // (P1 slice 3 — owner rails) PINNED PLACEMENT: the user dragged a date/eyebrow/badge
+    // into a hard-restraint violation. We never move it for them unasked (M3) — the
+    // executable remedies are the machinery's own: [Put it back] clears the role's
+    // offset entry through THE patch pipeline (the element returns to solver governance;
+    // undoable like any patch), [Move it myself] deep-links to the element, and the ack
+    // keeps it. Every offending role gets its own unpin action (law 2 — no dead labels).
+    if (issue.id === "pinned-placement") {
+      const roles = Array.isArray(issue.pinnedRoles) && issue.pinnedRoles.length ? issue.pinnedRoles : [issue.element].filter(Boolean);
+      const ROLE_WORD = { date: "date", eyebrow: "eyebrow", pill: "badge" };
+      for (const role of roles) {
+        acts.push({
+          label: roles.length === 1 ? "Put it back for me" : `Put the ${ROLE_WORD[role] || role} back`,
+          kind: "patch",
+          run: () => applyReadyFix({ dimensionId: issue.dimensionId || dimensionId, roleOffset: { role, clear: true } }),
+        });
+      }
+      const first = roles[0];
+      if (first) acts.push({ label: "Move it myself", kind: "deep-link", run: () => { setAdvisorDot(null); focusTextField(first); } });
+      acts.push(ackAction("Keep it this way"));
       return acts;
     }
 
@@ -9654,10 +9827,23 @@ export default function App() {
             const _ew=b.w/W, _eh=b.h/H;
             const _cx=(b.x+b.w/2)/W, _cy=(b.y+b.h/2)/H;   // current drawn centre (offset already baked in)
             const _stored=roleOffsetsByDimRef.current?.[dimensionId]?.[postType]?.[role]||null;
+            // (P1 slice 3 — owner rails) SOLVER-PLACED roles (date/eyebrow/pill) FREEZE their
+            // base on the first explicit drag: base = drawn centre − stored delta = the
+            // solver-governed centre this drag overrules. The frozen base rides every
+            // roleOffset patch of the gesture, so (base + delta) — the element's final
+            // position — is invariant under any later re-solve (law 5). An entry already
+            // frozen keeps its base verbatim (re-drags only move the delta). Non-solver
+            // roles (support, furniture) keep the legacy translate-only pin.
+            const _frz=(role==="date"||role==="eyebrow"||role==="pill")
+              ? (Number.isFinite(_stored?.bx)&&Number.isFinite(_stored?.by)
+                  ? {bx:_stored.bx, by:_stored.by}
+                  : {bx:_cx-(_stored?.dx||0), by:_cy-(_stored?.dy||0)})
+              : null;
             dragRef.current={mode:"text",role,x:e.clientX,y:e.clientY,ox:b.x/W,oy:b.y/H,rect,downX:e.clientX,downY:e.clientY,downTime:Date.now(),moved:false,
               ew:_ew, eh:_eh, roleFree:true,
               baseCx:_cx, baseCy:_cy,               // centre before THIS gesture
               baseOff:{dx:_stored?.dx||0,dy:_stored?.dy||0}, // stored delta before THIS gesture
+              baseB:_frz,                            // frozen solver base (null for non-solver roles)
               orig:{key:role,cx:_cx,cy:_cy}};
           }
           try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
@@ -9752,7 +9938,10 @@ export default function App() {
         // Routed through THE pipeline (applyPatch → noteManualEdit) so the whole gesture is
         // ONE undoable burst, exactly like the hero's updateTextLayout.
         const cx=nx+ew/2, cy=ny+eh/2;
-        updateRoleOffset(d.role, (d.baseOff?.dx||0)+(cx-d.baseCx), (d.baseOff?.dy||0)+(cy-d.baseCy));
+        // (P1 slice 3) d.baseB carries the frozen solver base for date/eyebrow/pill —
+        // stored atomically with the delta in the same roleOffset patch (undefined for
+        // non-solver roles → writeRoleOffset stores the legacy {dx,dy} shape).
+        updateRoleOffset(d.role, (d.baseOff?.dx||0)+(cx-d.baseCx), (d.baseOff?.dy||0)+(cy-d.baseCy), d.baseB?.bx, d.baseB?.by);
       } else {
         // The HERO drags the whole text block (textLayout) exactly as before.
         updateTextLayout({x:Math.max(0.08,Math.min(0.92-textLayout.width,nx)),y:Math.max(0.08,Math.min(0.82,ny))});
