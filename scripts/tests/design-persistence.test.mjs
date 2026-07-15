@@ -29,3 +29,47 @@ test("collection rollout retains exact legacy rollback records and telemetry", (
   assert.deepEqual(result.backups,[legacy]);
   assert.equal(result.migrated[0].state.persistenceVersion,1);
 });
+
+// ── (2026-07-15) stored-stump cleanup adapter ────────────────────────────────
+import { repairStoredCopyStumps, repairStumpText, isDanglingStump } from "../../lib/design-persistence.mjs";
+
+const stumpDoc=(fields,authorship)=>({content:{headline:"",subtext:"",attribution:"",dateText:"",microLabel:null,pillText:null,...fields,authorship},composition:{}});
+
+test("stump repair trims an AI-authored dangling function word back to the last complete phrase", () => {
+  const doc=stumpDoc({subtext:"Join us for a week of creativity and"},{subtext:"ai"});
+  const out=repairStoredCopyStumps(doc);
+  assert.equal(out.content.subtext,"Join us for a week of creativity");
+});
+
+test("stump repair strips stacked function words and dangling separators", () => {
+  assert.equal(repairStumpText("A celebration of songs, stories, and of the"),"A celebration of songs, stories");
+});
+
+test("owner-typed and authorship-less copy is NEVER altered (law 5)", () => {
+  const owner=stumpDoc({headline:"We are proud of our children and"},{headline:"owner"});
+  assert.equal(repairStoredCopyStumps(owner),owner);
+  const unknown=stumpDoc({headline:"We are proud of our children and"},{});
+  assert.equal(repairStoredCopyStumps(unknown),unknown);
+});
+
+test("clean-ending and non-stump copy passes through untouched", () => {
+  const clean=stumpDoc({headline:"Welcome back to school."},{headline:"ai"});
+  assert.equal(repairStoredCopyStumps(clean),clean);
+  assert.equal(isDanglingStump("Welcome back to school."),false);
+  assert.equal(isDanglingStump("A bright new term"),false); // ends on a content word
+});
+
+test("a stump too thin to repair is left stored (advisor surfaces it) — never deleted", () => {
+  const thin=stumpDoc({dateText:"On the of"},{dateText:"ai"});
+  const out=repairStoredCopyStumps(thin);
+  assert.equal(out.content.dateText,"On the of");   // untouched — copy-stump finding fires instead
+  assert.equal(repairStumpText("On the of"),null);
+});
+
+test("the repair adapter is idempotent and runs inside readPersistedDesignPayload", () => {
+  const payload=createPersistedDesignPayload({headline:"Come celebrate a week of art and",copyAuthors:{headline:"ai"}});
+  const once=readPersistedDesignPayload(payload);
+  assert.equal(once.document.content.headline,"Come celebrate a week of art");
+  const twice=readPersistedDesignPayload(createPersistedDesignPayload(once.document));
+  assert.equal(twice.document.content.headline,"Come celebrate a week of art");
+});

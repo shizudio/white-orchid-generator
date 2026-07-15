@@ -58,3 +58,33 @@ test("type-size-floor carries the fit-shrunk field so its action can shorten the
   assert.ok(floor, "expected a type-size-floor finding");
   assert.equal(floor.field, "subtext");
 });
+
+// ── (2026-07-15) copy-stump: the stored-stump advisor surface ────────────────
+const stumpSignal = (copy, copyAuthors) => ({
+  dimensionId: "ig_square", hasText: true,
+  zoneContrast: { flat: true, mean: 8 },
+  flooredRoles: [],
+  ready: { textBoxes: [], logoBox: null, pinned: [] },
+  copy, copyAuthors,
+});
+
+test("copy-stump fires on a stored AI-authored dangling fragment and carries the standard action hint", () => {
+  const { issues } = computeReadyVerdict(stumpSignal({ subtext: "On the of" }, { subtext: "ai" }), "ig_square");
+  const hit = issues.find(f => f.id === "copy-stump");
+  assert.ok(hit, "expected a copy-stump finding");
+  assert.equal(hit.field, "subtext");
+  assert.equal(hit.dropped[0].field, "subtext", "the dropped hint drives the Tighten/Edit/Leave-off action row");
+  assert.ok(hit.message.includes("On the of"), "names the actual words (law 2)");
+});
+
+test("copy-stump never fires on owner copy, clean endings, or content-word endings", () => {
+  for (const [copy, authors] of [
+    [{ subtext: "On the of" }, { subtext: "owner" }],          // owner-typed (law 5)
+    [{ subtext: "On the of" }, {}],                             // no authorship record
+    [{ subtext: "Welcome back to school." }, { subtext: "ai" }],// clean ending
+    [{ subtext: "A bright new term" }, { subtext: "ai" }],      // content-word ending
+  ]) {
+    const { issues } = computeReadyVerdict(stumpSignal(copy, authors), "ig_square");
+    assert.ok(!issues.some(f => f.id === "copy-stump"), JSON.stringify(copy));
+  }
+});

@@ -105,7 +105,10 @@ export function useAdvisorFindingActions({
       run: () => onAck ? onAck(issue) : acknowledgeIssue(issue, dimensionId),
     });
 
-    if (issue.id === "copy-dropped" || issue.id === "degradation-drops") {
+    // (copy-stump · 2026-07-15 stored-stump cleanup) A stored AI-authored fragment too
+    // thin for the load-time repair gets the SAME standard copy action row — its
+    // `dropped` hint carries {role, field, text} exactly like a dropped-copy finding.
+    if (issue.id === "copy-dropped" || issue.id === "degradation-drops" || issue.id === "copy-stump") {
       const primary = Array.isArray(issue.dropped) ? issue.dropped[0] : null;
       const budget = primary ? copyBudgets[primary.field] : null;
       if (primary && COPY_FIELDS.includes(primary.field)) {

@@ -3108,7 +3108,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     const dimId = resolveRenderDimension(model,opts.dimensionId);
     const live = opts.live !== false;
     const {
-      content:{ headline,subtext,attribution,dateText,microLabel,pillText },
+      content:{ headline,subtext,attribution,dateText,microLabel,pillText,authorship:copyAuthors },
       composition:{ archetypeId,archetypeVariant:archVariant },
       palette:{ background:bgColor,field:fieldColorOverride,text:textColorId,backdrop:backdropMode,backgroundOpacity:bgAlpha,pins:pinnedProps },
       typography:{ heroRegister,fontSizes,masterLayouts:typeLayouts,formatLayouts:typeLayoutsByDim,roleOffsetsByFormat:roleOffsetsByDim },
@@ -5356,6 +5356,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         renderTruth.audit={
           dimensionId:dimId,postType,hasMedia:!!mediaObj,backdropMode:backdropMode||"auto",textColorId,
           copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
+          copyAuthors:copyAuthors||{},   // (copy-stump) authorship gates the stored-stump finding to AI copy
           zoneContrast:contrast,flooredRoles:[...reflow.flooredRoles],dropped:[...dropped],logo:{...auditLogo},
           safeZoneViolation:false,hasText:!!(headline||subtext||attribution||dateText),archetypeId,
           ready:{canvasW:w,canvasH:h,fontPx:{headline:fontMeta.headline||0,subtext:fontMeta.subtext||0,date:fontMeta.date||0},
@@ -5856,6 +5857,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         backdropMode:backdropMode||"auto",
         textColorId,
         copy:{headline,subtext,attribution,dateText}, // (WP-U #7) italic-phrase audit
+        copyAuthors:copyAuthors||{},    // (copy-stump) authorship gates the stored-stump finding to AI copy
         zoneContrast:contrast,          // {min,max,mean} or null
         flooredRoles,                   // [{label}]
         dropped:[...dropped],           // spec §6 drops active this render

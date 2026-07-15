@@ -440,7 +440,19 @@ function fitCopy(s, max) {
   const window = t.slice(0, max + 1);
   const sent = window.match(/^[\s\S]*[.!?](\s|$)/); // a sentence end within budget
   if (sent && sent[0].trim().length >= max * 0.5) return sent[0].trim();
-  const cut = t.slice(0, max).replace(/\s+\S*$/, '').trim(); // last whole word
+  let cut = t.slice(0, max).replace(/\s+\S*$/, '').trim(); // last whole word
+  // (2026-07-15 stump class, mirrors 81ebe5e's client guard) A whole-word cut can
+  // still land on a DANGLING FUNCTION WORD ("…a week of creativity and") — a stump
+  // at any length. Back off trailing function words + their separators so authored
+  // landing copy always ends on a content word (born-clean: never author what the
+  // copy-stump advisor finding would flag).
+  const DANGLES = /\b(?:and|or|but|nor|yet|so|for|of|to|in|on|at|by|as|with|from|into|the|a|an|our|your|their|its|his|her|is|are|was|were|be|been)\s*$/i;
+  let guard = 0;
+  while (guard++ < 24 && DANGLES.test(cut)) {
+    const next = cut.replace(DANGLES, '').replace(/[\s,;:–—-]+$/, '').trim();
+    if (!next || next === cut) break;
+    cut = next;
+  }
   return cut || t.slice(0, max).trim();
 }
 
