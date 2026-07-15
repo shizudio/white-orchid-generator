@@ -3,7 +3,7 @@ import { memo } from "react";
 function TemplateLibrary({ templates, renderCard, renderActions, onRestore, onSave, hiddenCount=0, palette, fonts }) {
   const B=palette,F=fonts.body,FU=fonts.ui;
   return <>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+    <div className="wo-tpl-grid" style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
       {templates.map(template=><div key={template.id} style={{position:"relative"}}>
         {renderCard(template)}
         <span style={{position:"absolute",top:7,left:7,fontSize:8,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:0.6,textTransform:"uppercase",color:"#fff",background:B.jet+"d9",borderRadius:5,padding:"2px 5px",lineHeight:1.3}}>{template._source}</span>

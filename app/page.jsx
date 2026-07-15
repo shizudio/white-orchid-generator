@@ -283,7 +283,7 @@ export default function Home() {
           {/* Example chips */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 20 }}>
             {examples.map(text => (
-              <button key={text} type="button" onClick={() => useExample(text)} disabled={loading}
+              <button key={text} type="button" className="wo-landing-chip" onClick={() => useExample(text)} disabled={loading}
                 style={{
                   fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg)',
                   background: 'color-mix(in srgb, var(--tw-celadon) 22%, transparent)',

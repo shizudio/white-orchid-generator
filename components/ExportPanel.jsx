@@ -12,7 +12,7 @@ function ExportPanel({ sizeLabel, format, onFormat, onDownloadAll, onDownloadOne
       {guardrail}
     </div>
     <button onClick={onDownloadAll} title={`Export all ${formatCount} formats as ${format.toUpperCase()}`} style={{width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle}}>Download all {formatCount} formats</button>
-    <button onClick={onDownloadOne} title={`Download only this format as ${format.toUpperCase()}`} style={{width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle}}>Just this one</button>
+    <button className="wo-export-one" onClick={onDownloadOne} title={`Download only this format as ${format.toUpperCase()}`} style={{width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle}}>Just this one</button>
     {readiness}
     <div style={{display:"flex",gap:8,marginTop:14}}><button onClick={onAudit} title="Review this design for on-brand polish" style={{flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span aria-hidden="true">✓</span> AI audit</button></div>
   </>;
