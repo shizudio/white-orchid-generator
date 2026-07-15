@@ -14,6 +14,23 @@ test("render result exposes stable scene identities for every measured element",
   ]);
 });
 
+test("a solver-placed date is a first-class draggable text role, not the textBounds hero fallback", () => {
+  // (ISSUE 2 / element-placement-spec §2) On the legacy layouts the date is now placed
+  // through the solver and published in roleBounds alongside the hero. Once roleBounds is
+  // non-empty, createRenderResult must NOT fall back to the textBounds→hero element, and
+  // BOTH the hero and the placed date must be selectable/hit-testable scene text roles.
+  const result=createRenderResult({
+    dimensionId:"ig_portrait",width:1080,height:1350,
+    textBounds:{x:80,y:200,w:600,h:180},
+    roleBounds:{ hero:{x:80,y:200,w:600,h:180}, date:{x:820,y:1180,w:180,h:52} },
+    logoBox:{x:60,y:1180,w:120,h:120},
+  });
+  const textRoles=result.sceneElements.filter(item=>item.type==="text").map(item=>item.role).sort();
+  assert.deepEqual(textRoles,["date","hero"]);
+  // the date is hit-testable at its own bounds (drag entry point)
+  assert.equal(hitTestScene(result.sceneElements,900,1205,{types:["text"]}).role,"date");
+});
+
 test("shape bounds use the same width-relative transform as canvas painting", () => {
   assert.deepEqual(shapeBounds({x:0.5,y:0.25,scale:0.2},2,1000,500),{x:400,y:75,w:200,h:100});
 });

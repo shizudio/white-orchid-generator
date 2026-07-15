@@ -4646,7 +4646,16 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // EVERY render (live + offscreen audit sweeps) so the audit's textBoxes / pinned
       // signal see the badge exactly where it painted.
       let pillDrawn=null;
-      if(!isSchedule && !isBigNum && ccDateText && heroFinal && heroBox){
+      // (ISSUE 2 — element-placement-spec §2) The date solver runs whenever a date is
+      // PRESENT (ccDateText) — no longer gated on the hero carrying CONTENT. The old
+      // `heroFinal && heroBox` gate meant a design with a date but an EMPTY headline
+      // (the reproduced case: an added date on a caption-less photo design) skipped the
+      // solver entirely and the date was declared "Not shown in this layout" — the solver
+      // never consulted. It now anchors to the hero BOX geometry (usedH=0 when the hero is
+      // empty) and walks the same candidate ladder. `heroBox` (geometry, always present on
+      // an editorial archetype) is still required so the anchors resolve; born-clean is
+      // unaffected (the block still fires only when a date is present).
+      if(!isSchedule && !isBigNum && ccDateText && heroBox){
         const _safeTopD=sm.t*h, _safeBotD=(1-sm.b)*h;
         const heroSz=fontMeta.headline||heroBox.h*0.4;
         const dTxt=stripHeroMarkers(ccDateText);
@@ -5653,6 +5662,90 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       }else{setTextBounds(h*0.12);putLogo();}
     }
 
+    // ── (ISSUE 2 — element-placement-spec §2) THE DATE ADOPTS THE SOLVER ON THE
+    // LEGACY STACKED LAYOUTS ──────────────────────────────────────────────────
+    // The postType painters above (photo_logo / texture_text / text_post / quote)
+    // predate the universal placement solver: none draws a date line, so an added
+    // date was declared a DEAD ROLE ("this layout doesn't show the date" / the
+    // inspector "Not shown in this layout" banner + a switch-layout offer) by the
+    // LEGACY_DRAWS allowlist below — the exact per-archetype gate the ratified spec
+    // retired. The solver was never consulted even on a near-empty canvas. Now the
+    // date is PLACED through the SAME placeElement()/dateElementClass ladder the
+    // editorial path uses, on ANY legacy layout: it lands as a quiet corner / under-
+    // block line, born-clean by construction (ink-flip → weight → face → size; §6a
+    // band suppressed on shape designs). `event` keeps its native big-date treatment
+    // (it draws the date as its hero) and is excluded. A frozen owner drag pins the
+    // date (law 5). A GENUINE no-candidate refusal (rare) leaves legacyDateDrawn null
+    // and the honest switch-layout offer fires exactly as before (§2 step 5 / law 3).
+    let legacyDateDrawn=null;
+    if(live && postType!=="event" && String(dateText||"").trim()){
+      const dTxt=stripHeroMarkers(dateText);
+      const tb=renderTruth.textBounds;
+      // Date size tracks the drawn hero when known, else a readable per-format default;
+      // shrink-to-fit the anchor width so a long date never overflows.
+      const heroSz=fontMeta.headline||(tb?Math.min(tb.h*0.5,52*S):40*S*scale);
+      let dSz=Math.max(20*S, Math.min(heroSz*0.55, 40*S*scale));
+      const blockX=tb?tb.x:bx, blockRight=tb?tb.x+tb.w:bx+bw, blockBottom=tb?tb.y+tb.h:by;
+      const _availW=Math.max(40,blockRight-blockX);
+      ctx.font=`300 ${dSz}px ${F.title}`;
+      while(dSz>14*S && ctx.measureText(dTxt).width>_availW){ dSz-=2; ctx.font=`300 ${dSz}px ${F.title}`; }
+      const baseInk=zoneTc||B.burnham;
+      const _dOff=roleOff("date");
+      if(_dOff.frozen){
+        // (law 5 — re-solve around pins) The owner dragged the date: draw UNCONDITIONALLY
+        // at the pinned centre (bx+dx, by+dy). Position is the pin; STYLING stays free
+        // (ink follows the resolved text colour, size follows the hero-tracked fit) — a
+        // copy/palette re-solve may restyle, never relocate (mirrors the editorial pin).
+        ctx.font=`300 ${dSz}px ${F.title}`;
+        const dTextW=ctx.measureText(dTxt).width;
+        const dCx=_dOff.bx+_dOff.dx, dCy=_dOff.by+_dOff.dy;
+        const dX0=dCx-dTextW/2, dY0=dCy-dSz*0.64;
+        beginText(); ctx.fillStyle=baseInk; ctx.font=`300 ${dSz}px ${F.title}`;
+        drawTextLines(ctx,[dTxt],dX0,dY0+dSz,dTextW,dSz*1.05,"left");
+        fontMeta.date=dSz; endText();
+        legacyDateDrawn={x:dX0,y:dY0,w:dTextW,h:dSz*1.28};
+      } else {
+        const dGap=Math.max(0.014*h, dSz*0.4);
+        const alignX=(bw2)=> align==="center"?blockX+(_availW-bw2)/2 : align==="right"?blockRight-bw2 : blockX;
+        const _ps=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
+        const safL=_ps?Math.max(sm.l,_ps.left):sm.l, safR=_ps?Math.max(sm.r,_ps.right):sm.r,
+              safT=_ps?Math.max(sm.t,_ps.top):sm.t,  safB=_ps?Math.max(sm.b,_ps.bottom):sm.b;
+        const cands=[];
+        if(tb) cands.push({id:"below-block", at:(bw2)=>({x:alignX(bw2), y:blockBottom+dGap})});
+        cands.push({id:"corner-bl", at:(bw2,bh2)=>({x:safL*w, y:(1-safB)*h-bh2})});
+        cands.push({id:"corner-br", at:(bw2,bh2)=>({x:(1-safR)*w-bw2, y:(1-safB)*h-bh2})});
+        cands.push({id:"corner-tl", at:()=>({x:safL*w, y:safT*h})});
+        cands.push({id:"corner-tr", at:(bw2)=>({x:(1-safR)*w-bw2, y:safT*h})});
+        cands.push({id:"bottom-center", at:(bw2,bh2)=>({x:(w-bw2)/2, y:(1-safB)*h-bh2})});
+        const hardObstacles=[renderTruth.textBounds, renderTruth.logoBox].filter(Boolean);
+        let _focalBox=null;
+        if(mediaObj){ try{ const _f=analyzeAsset(mediaObj).focal; const _g=photoGeom(mediaObj,w,h,effImgTFor(w,h,false));
+          if(_f&&_g&&_f.confidence>=0.35){ const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh, _fr=0.18*Math.min(w,h); _focalBox={x:fxC-_fr,y:fyC-_fr,w:_fr*2,h:_fr*2}; } }catch(_){}
+        }
+        const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
+        const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
+        const sol=placeElement({align},{
+          w,h, cfg:dateElementClass(dSz,{noBand:_archShapeActive}),
+          candidates:cands, hardObstacles, softObstacles:[],
+          safe:{x0:safL*w,y0:safT*h,x1:(1-safR)*w,y1:(1-safB)*h,tolX:0,tolY:0},
+          focalBox:_focalBox, measure, surface, baseInk, inkPoles:[B.burnham,B.whiteSmoke],
+        });
+        if(sol){
+          beginText();
+          if(sol.band){ const bandCol=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:sol.x,y:sol.y,w:sol.w,h:sol.h},bandCol,0.92,false); }  // (§6a) guarded — never over a silhouette
+          ctx.fillStyle=sol.ink; ctx.font=`${sol.weight} ${sol.px}px ${sol.face}`;
+          drawTextLines(ctx,[dTxt],sol.x+_dOff.dx,sol.y+sol.px+_dOff.dy,sol.w,sol.px*1.05,"left");
+          fontMeta.date=sol.px; endText();
+          legacyDateDrawn={x:sol.x+_dOff.dx,y:sol.y+_dOff.dy,w:sol.w,h:sol.px*1.28};
+        }
+      }
+      // Record hero + date in roleBounds so BOTH stay selectable/draggable on canvas —
+      // createRenderResult skips the textBounds→hero fallback once roleBounds is
+      // non-empty, so the hero box must be carried explicitly. The date is now a
+      // first-class draggable role on the legacy layouts.
+      if(legacyDateDrawn) renderTruth.roleBounds={...(tb?{hero:tb}:{}), date:legacyDateDrawn};
+    }
+
     // ── (LEGACY DEAD-ROLE HONESTY) ──────────────────────────────────────────
     // The legacy postType layouts above are HEADLINE-CENTRIC: each draws only the
     // roles its template supports (photo_logo/texture_text draw the headline alone;
@@ -5696,7 +5789,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const dead=[];
       if(String(subtext||"").trim() && !paintsSubtext()) dead.push("support");
       if(String(attribution||"").trim() && !paintsAttribution() && !dead.includes("support")) dead.push("support");
-      if(String(dateText||"").trim() && !drawn.includes("date")) dead.push("date");
+      if(String(dateText||"").trim() && !drawn.includes("date") && !legacyDateDrawn) dead.push("date");   // (ISSUE 2) placed by the solver above → not dead
       if(String(microLabel||"").trim()) dead.push("eyebrow");   // no legacy layout paints an eyebrow
       renderTruth.deadRoles=dead;
     }
