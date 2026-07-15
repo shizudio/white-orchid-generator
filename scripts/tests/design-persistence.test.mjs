@@ -73,3 +73,24 @@ test("the repair adapter is idempotent and runs inside readPersistedDesignPayloa
   const twice=readPersistedDesignPayload(createPersistedDesignPayload(once.document));
   assert.equal(twice.document.content.headline,"Come celebrate a week of art");
 });
+
+// ── (§2.9.2) the generated layout-shape layer round-trips with full fidelity ──
+test("a layout-origin frame layer survives persistence with origin/userTouched/byDim intact", () => {
+  const layer={ uid:"ol_layout_test1", assetId:"shape-1", mode:"frame", origin:"layout",
+    userTouched:true, touchedByDim:{ story:true },
+    master:{ x:0.62, y:0.44, scale:0.41, rotation:15, opacity:1 },
+    byDim:{ story:{ x:0.6, y:0.3, scale:0.38, rotation:0, opacity:1 } } };
+  const payload=createPersistedDesignPayload({ headline:"Round trip", overlayLayers:[layer] });
+  const restored=readPersistedDesignPayload(payload);
+  const round=restored.document.shapes.find(s=>s.uid==="ol_layout_test1");
+  assert.ok(round, "the layer survives");
+  assert.equal(round.origin,"layout");
+  assert.equal(round.userTouched,true);
+  assert.equal(round.mode,"frame");
+  assert.deepEqual(round.master,layer.master);
+  assert.deepEqual(round.byDim,layer.byDim);
+  assert.deepEqual(round.touchedByDim,{ story:true });
+  // idempotent second round trip
+  const twice=readPersistedDesignPayload(createPersistedDesignPayload(restored.document));
+  assert.deepEqual(twice.document.shapes.find(s=>s.uid==="ol_layout_test1"),round);
+});

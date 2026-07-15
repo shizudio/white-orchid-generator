@@ -31,7 +31,12 @@ export function useFormatOverrideActions({
     if (layouts && Object.keys(layouts).some(key => layouts[key] && Object.keys(layouts[key]).length)) return true;
     if (logoByDimension?.[targetDimensionId]) return true;
     if (imageTransformByDimension?.[targetDimensionId]) return true;
-    return shapeLayers.some(layer => layer?.byDim?.[targetDimensionId]);
+    // (§2.9.2) A GENERATED layout shape carries SYSTEM-authored per-format geometry
+    // in byDim (the archetype's own 6-format cascade, baked at emission) — that is
+    // not a user adjustment. It counts as an override only once the owner actually
+    // edited the shape on that format (touchedByDim, written by the shape writers).
+    return shapeLayers.some(layer => layer?.byDim?.[targetDimensionId]
+      && (layer.origin !== "layout" || layer.touchedByDim?.[targetDimensionId]));
   }, [masterDimensionId, typeLayoutsByDimension, logoByDimension, imageTransformByDimension, shapeLayers]);
 
   const resetFormatToMaster = useCallback(targetDimensionId => {

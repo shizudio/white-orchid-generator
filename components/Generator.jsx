@@ -3473,7 +3473,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const a=overlays.find(o=>o.id===layer.assetId);
       return deriveFromMaster(layer.master,a?.kind||"center",a?.ratio||1,w,h);
     };
-    const frameLayers=overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
+    // (§2.9.2) An OVERRIDE render (calibration board / guard cell) is a self-
+    // contained hypothetical design — its shape comes from the override archetype's
+    // own materialization (the synthesized job in the unified frame painter), never
+    // from the LIVE design's frame layers. Before unification the live-layer leak was
+    // masked by the editorial/frame mutual exclusion; now it must be explicit or the
+    // live session's shape paints into every board cell (__woArchStress overlaps).
+    const _isOverrideRender=!!(opts.archOverride&&ARCHETYPES_BY_ID[opts.archOverride]);
+    const frameLayers=_isOverrideRender?[]:overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
     const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
     const finishRender=()=>createRenderResult({
@@ -3606,7 +3613,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // the most legible, on-brand result and never fights the photo.
     let frameBgTextColor=null;   // forced hi-contrast colour when text snaps onto bg
     let frameOnPhoto=false;      // text intentionally kept inside the shape (on photo)
-    if(hasFrame){
+    // (§2.9.2) LEGACY designs only: the editorial path owns its shape collisions via
+    // the reflow obstacle set (maskBox/_activeShapeBoxes), so the snap must not
+    // relocate editorial text — that was half of the "override each other" conflict.
+    if(hasFrame && !mat.editorial){
       // Widest frame box (union not needed — a single frame is the norm; use the
       // largest so the clear strips are conservative when several are stacked).
       let fb=null;
@@ -3819,7 +3829,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // band-paint time (bands always paint AFTER those are set). `_bandOverShape` counts
     // any band the guard had to BLOCK because it would have overlapped a silhouette — it
     // must stay 0 in normal operation; __woArchStress asserts it (sabotage-testable).
-    const _archShapeActive = !!(mat && mat.photoFrame && (mat.photoFrame.type==="shapeMask" || mat.photoFrame.type==="petalMask"));
+    // (§2.9.2) The archetype cutout is now an EMITTED frame layer (origin:"layout");
+    // legacy docs / override renders still carry it on mat.photoFrame. Either form
+    // disables the auto band (§6a) — the archetype shape is the design's device.
+    const _archShapeActive = !!(mat && mat.photoFrame && (mat.photoFrame.type==="shapeMask" || mat.photoFrame.type==="petalMask"))
+      || frameLayers.some(l=>l.origin==="layout");
     let _activeShapeBoxes = [];
     let _bandOverShape = 0;
     const _rectsHit=(a,b)=>!!(a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y);
@@ -3879,8 +3893,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       _paintBand(box,bandColor,0.92,false);    // (§6a) suppressed on shape designs
     };
     const setTextBounds=used=>{renderTruth.textBounds={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
-    // Frame pre-pass: solid background + photo clipped into each shape (under text/logo)
-    if(hasFrame){
+    // Frame pre-pass — LEGACY (non-editorial) designs only. Editorial designs render
+    // every frame-kind shape (generated + user-added) through the ONE fitted-window
+    // painter inside the editorial branch (§2.9.2 unification) — this pre-pass firing
+    // there was the conflict: it repainted the field and clipped the photo at canvas
+    // scale, wiping the layout shape, roles and motifs the editorial branch draws.
+    if(hasFrame && !mat.editorial){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
       const fcv=document.createElement("canvas"); fcv.width=w; fcv.height=h;
       frameLayers.forEach(l=>drawFrameLayer(ctx,fcv,overlayImgs.current[l.assetId],mediaObj,w,h,resolveT(l),imgT));
@@ -3898,7 +3916,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // below), overlay adds append layers (no re-seed → no layout jump), drags rewrite
     // roles, inspector edits stick. The reflow engine (Commit 3) then de-collides the
     // measured boxes.
-    if(mat.editorial && !hasFrame){
+    // (§2.9.2 · 2026-07-15) The `!hasFrame` mutual-exclusion is GONE — adding a free
+    // frame shape no longer silently evicts the whole editorial render (the client's
+    // "layout shape and add-another-shape override each other"). Frame layers render
+    // INSIDE this branch through the unified fitted-window painter below.
+    if(mat.editorial){
       const pal=mat.palette||{};
       // (B1/B3) The Background inspector's field override wins over the archetype
       // VARIANT field colour, so the swatch visibly changes the panel on editorial
@@ -4024,6 +4046,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       //    photoFrame, not archetype. A `cardBox`/`maskBox` is returned so the reflow
       //    engine (Commit 3) can de-collide text against the photo geometry.
       let cardBox=null, maskBox=null;
+      // (§2.9.2) Frame silhouettes that DON'T hold the photo (older frame-kind
+      // shapes under the newest-takes-the-photo rule) still occupy space — they
+      // join the decor obstacle set below so text never collides with them.
+      const _extraFrameObstacles=[];
       if(frame.type==="card"){
         const c=clampBox(frame.box); cardBox=c;
         if(c){
@@ -4042,67 +4068,100 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           ctx.restore();
           ctx.restore();
         }
-      }else if(frame.type==="petalMask"||frame.type==="shapeMask"){
-        const m0=clampBox(frame.box);
-        // (B8 petal coherence + R2 shape cutout) The silhouette and the photo rect
-        // must agree as ONE aligned unit on every format. Lock the mask window to
-        // the SHAPE'S OWN aspect ratio, contained + centred in the authored box,
-        // and draw BOTH the silhouette AND the photo into that SAME rect. For the
-        // (near-)square orchid this reduces to the old square lock; (R2) generic
-        // brand shapes (shape-1/2/3) keep their intrinsic proportions undistorted.
-        const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):"orchid-petal"];
-        const m = m0 ? (()=>{
-          const ar=(shapeImg&&shapeImg.width&&shapeImg.height)?shapeImg.width/shapeImg.height:1;
-          let mw=m0.w, mh=mw/ar;
-          if(mh>m0.h){ mh=m0.h; mw=mh*ar; }
-          return {x:m0.x+(m0.w-mw)/2, y:m0.y+(m0.h-mh)/2, w:mw, h:mh};
-        })() : null;
-        maskBox=m;
-        if(m) _activeShapeBoxes.push(m);   // (§6a) the mask silhouette is a band-exclusion obstacle
-        if(m && mediaObj && shapeImg){
-          // (R2 ROOT CAUSE — partial-alpha silhouettes) Brand SVGs may carry a
-          // partial fill opacity (shape-1 ships fill-opacity 0.4). The old code
-          // stacked 8 source-over draws to saturate alpha — fine for the ADDITIVE
-          // pass, but the destination-in RE-MASK then MULTIPLIED the partial alpha
-          // 8× (0.4⁸ ≈ 0) and silently wiped the whole masked photo. Rasterize the
-          // silhouette ONCE into its own canvas (the 8 stacked draws saturate alpha
-          // THERE), and use that saturated bitmap for BOTH passes — one draw each,
-          // so the re-mask preserves alpha instead of decimating it. The opaque
-          // orchid renders identically through this path (1⁸ = 1).
+      }else if(frame.type==="petalMask"||frame.type==="shapeMask"||frameLayers.length){
+        // ── (§2.9.2 · 2026-07-15) ONE fitted-window painter for EVERY frame shape ──
+        // The archetype's layout shape is a genuine frame-mode layer (origin:"layout",
+        // emitted by buildMaterialized); legacy documents / override renders still
+        // carry it on mat.photoFrame — synthesized here as the OLDEST job so both
+        // forms render through the same pipeline. Jobs paint oldest → newest and the
+        // NEWEST frame shape takes the photo (client default, 2026-07-15); every
+        // older frame shape renders as a colour-field silhouette in its matched
+        // colour — never an empty ghost. This structurally kills the "layout shape
+        // and add-another-shape override each other" conflict: both are jobs in one
+        // list, never two fighting painters.
+        // (B8 petal coherence + R2 shape cutout preserved) Each job's rect is the
+        // shape's OWN aspect ratio contained in its box; silhouette AND photo share
+        // that ONE rect.
+        const jobs=[];
+        if(frame.type==="petalMask"||frame.type==="shapeMask"){
+          const m0=clampBox(frame.box);
+          const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):"orchid-petal"];
+          const m = (m0&&shapeImg) ? (()=>{
+            const ar=(shapeImg.width&&shapeImg.height)?shapeImg.width/shapeImg.height:1;
+            let mw=m0.w, mh=mw/ar;
+            if(mh>m0.h){ mh=m0.h; mw=mh*ar; }
+            return {x:m0.x+(m0.w-mw)/2, y:m0.y+(m0.h-mh)/2, w:mw, h:mh};
+          })() : null;
+          if(m) jobs.push({rect:m, shapeImg, fillColor:null, rotation:0});
+        }
+        for(const l of frameLayers){
+          const img=overlayImgs.current[l.assetId]||archAssetImgs.current[l.assetId];
+          if(!img) continue;
+          const t=resolveT(l);
+          const a=overlays.find(o=>o.id===l.assetId);
+          const ratio=(img.width&&img.height)?img.width/img.height:(a?.ratio||1);
+          const ow=(t.scale??0.2)*w, oh=ow/ratio;
+          jobs.push({rect:{x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh},
+                     shapeImg:img, fillColor:l.fillColor||null, rotation:t.rotation||0,
+                     opacity:t.opacity});
+        }
+        jobs.forEach((job,i)=>{
+          const m=job.rect;
+          const isPhotoJob=(i===jobs.length-1);   // newest frame-kind shape holds the photo
+          _activeShapeBoxes.push(m);   // (§6a) every frame silhouette is a band-exclusion obstacle
+          if(isPhotoJob) maskBox=m;                     // THE photo obstacle for reflow
+          else _extraFrameObstacles.push(m);            // older silhouettes → decor obstacles
+          // (R2 ROOT CAUSE — partial-alpha silhouettes) Rasterize the silhouette ONCE
+          // (8 stacked draws saturate alpha THERE) and use the saturated bitmap for
+          // both the additive pass and the destination-in re-mask — one draw each, so
+          // partial fill-opacity (shape-1 ships 0.4) is never multiplied to nothing.
           const sil=document.createElement("canvas");
           sil.width=Math.max(2,Math.round(m.w)); sil.height=Math.max(2,Math.round(m.h));
           const silCtx=sil.getContext("2d");
-          for(let i=0;i<8;i++) silCtx.drawImage(shapeImg,0,0,sil.width,sil.height);
-          const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
-          const octx=oc.getContext("2d");
-          octx.save();
-          octx.drawImage(sil,m.x,m.y,m.w,m.h);
-          octx.globalCompositeOperation="source-in";
-          const _eM=effImgTFor(m.w,m.h,true);
-          octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
-          drawPhotoFramed(octx,mediaObj,m.w,m.h,_eM); octx.restore();
-          octx.globalCompositeOperation="source-over";
-          octx.restore();
-          _recPhotoWin(m,"mask",true,_eM);
-          // Treat the masked photo (WP-U: the MATERIALIZED treatment — warm grade by
-          // default; green duotone only when the design explicitly carries it), then
-          // RE-MASK: blend passes paint the whole rect (incl. the transparent area
-          // OUTSIDE the silhouette) at low alpha, leaving a faint tinted rectangle.
-          // Knock everything outside the silhouette back out with a destination-in
-          // pass of the SATURATED shape, so only the shape's interior survives.
-          treatOf(mat.photoTreatment)(octx,m.x,m.y,m.w,m.h);
-          octx.save();
-          octx.globalCompositeOperation="destination-in";
-          octx.drawImage(sil,m.x,m.y,m.w,m.h);
-          octx.restore();
-          ctx.drawImage(oc,0,0);
-        }else if(m && shapeImg){
-          // No photo yet → placeholder: the silhouette tinted to a readable tone on
-          // this field (terracotta on light fields, the field ink at low volume on dark).
-          const phColor=hexLuminance(fieldColor)>0.5?ARCHETYPE_COLORS.terracotta:B.whiteSmoke;
-          const tinted=tintedAccessory(shapeImg,phColor);
-          if(tinted) containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,m.w,m.h,0.9);
-        }
+          for(let k=0;k<8;k++) silCtx.drawImage(job.shapeImg,0,0,sil.width,sil.height);
+          const rot=job.rotation||0;
+          const drawSil=(target)=>{   // silhouette into canvas space, honoring rotation
+            target.save();
+            if(rot){ target.translate(m.x+m.w/2,m.y+m.h/2); target.rotate(rot*Math.PI/180); target.drawImage(sil,-m.w/2,-m.h/2,m.w,m.h); }
+            else target.drawImage(sil,m.x,m.y,m.w,m.h);
+            target.restore();
+          };
+          if(isPhotoJob && mediaObj){
+            const oc=document.createElement("canvas"); oc.width=w; oc.height=h;
+            const octx=oc.getContext("2d");
+            octx.save();
+            drawSil(octx);
+            octx.globalCompositeOperation="source-in";
+            const _eM=effImgTFor(m.w,m.h,true);
+            octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
+            drawPhotoFramed(octx,mediaObj,m.w,m.h,_eM); octx.restore();
+            octx.globalCompositeOperation="source-over";
+            octx.restore();
+            _recPhotoWin(m,"mask",true,_eM);
+            // Treat the masked photo (WP-U: the MATERIALIZED treatment), then RE-MASK
+            // with the saturated silhouette so only the shape's interior survives.
+            treatOf(mat.photoTreatment)(octx,m.x,m.y,m.w,m.h);
+            octx.save();
+            octx.globalCompositeOperation="destination-in";
+            drawSil(octx);
+            octx.restore();
+            if(job.opacity!=null&&job.opacity<1){ ctx.save(); ctx.globalAlpha=job.opacity; ctx.drawImage(oc,0,0); ctx.restore(); }
+            else ctx.drawImage(oc,0,0);
+          }else{
+            // No photo for this job → a colour-field silhouette: the layer's own
+            // matched colour when set, else the readable placeholder tone on this
+            // field (terracotta on light, ivory on dark). Never an empty outline.
+            const phColor=(job.fillColor&&B[job.fillColor])||(hexLuminance(fieldColor)>0.5?ARCHETYPE_COLORS.terracotta:B.whiteSmoke);
+            const tinted=tintedAccessory(job.shapeImg,phColor);
+            if(tinted){
+              ctx.save();
+              if(job.opacity!=null) ctx.globalAlpha=job.opacity;
+              if(rot){ ctx.translate(m.x+m.w/2,m.y+m.h/2); ctx.rotate(rot*Math.PI/180); ctx.translate(-(m.x+m.w/2),-(m.y+m.h/2)); }
+              containDraw(ctx,tinted,m.x+m.w/2,m.y+m.h/2,m.w,m.h,isPhotoJob?0.9:1);
+              ctx.restore();
+            }
+          }
+        });
       }else if(mat.photoRegion && !mat.fullBleed){
         // Plain split/side photo (editorial_split, portrait_credential materialized).
         // BLEED to the true canvas edge (§2.2 / §2.10 true split) — never a floating
@@ -4145,6 +4204,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           _decorEarly.add(layer);
         }
       }
+      // (§2.9.2) Non-photo frame silhouettes are solid colour fields the text must
+      // not cross; they were already painted (and pushed to _activeShapeBoxes) by the
+      // unified frame painter above — register them as avoid-only obstacles here.
+      for(const r of _extraFrameObstacles) decorObstacles.push({box:r,canCompose:false});
       // 3. Text roles — positioned. hero via drawHeroText; support = caption; label =
       //    eyebrow. The REFLOW ENGINE (Commit 3) adjusts these measured boxes to
       //    de-collide before the final draw.
@@ -4279,7 +4342,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // so the floor follows the free zone when photo/decor obstacles narrow
         // it. The reflow's shrink-to-fit logic keeps final say (0.42×H cap
         // intact) — it shrinks only when the quiet zone genuinely can't hold it.
-        heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask")
+        heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||frameLayers.length>0)
           && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.92 : null,
       });
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
@@ -5239,7 +5302,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const whitespaceFrac=Math.max(0,Math.min(1,1-occArea/(w*h)));
         // Warmth-device count: the materialized frame/motif set is 1 device; a user-
         // added frame/overlay/lineart/outline (NON-motif) stacks on top.
-        const specialDevice=(frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||overlayLayers.some(l=>l.motif))?1:0;
+        const specialDevice=(frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||frameLayers.length>0||overlayLayers.some(l=>l.motif))?1:0;
         const extraLayerDevices=topLayers.filter(l=>!l.motif&&["frame","overlay","lineart","outline"].includes(l.mode||"frame")).length;
         const warmthDevices=specialDevice+extraLayerDevices;
         const provPal=provArch?.palette||{};
@@ -5375,7 +5438,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             bandOverShape:_bandOverShape,     // (§6a) a band the guard BLOCKED because it would slice a shape silhouette — must be 0
             decorOverlapsText:_decorOverlapsText, decorInFocal:_decorInFocal,  // (item 4a) decor law
             frameMisalign:(()=>{               // (item 4b/4d) mask/outline/photo window must be ONE unit
-              const fb=(frame.type==="card")?cardBox:(frame.type==="petalMask"||frame.type==="shapeMask")?maskBox:null;
+              const fb=cardBox||maskBox||null;   // (§2.9.2) maskBox is set by whichever frame shape holds the photo
               const pw=_photoWin;
               if(!fb||!pw||!mediaObj) return 0;
               // The frame's mask rect and the photo's DRAWN window must coincide (±1.5% of
@@ -6494,8 +6557,24 @@ export default function App() {
 
   // Raw shape writers are declared before the patch pipeline that dispatches
   // them, keeping the extracted pipeline free of forward/TDZ dependencies.
+  // (§2.9.2 pins law) An explicit edit to a GENERATED (origin:"layout") shape pins
+  // it: userTouched survives re-solves and makes a layout swap keep the shape
+  // instead of replacing it (law 5 — never revert explicit user choice).
+  const pinLayoutShapeIfNeeded = (uid, editDimId) => {
+    const layer=overlayLayers.find(item=>item.uid===uid);
+    if(!layer || layer.origin!=="layout") return;
+    const patch={};
+    if(!layer.userTouched) patch.userTouched=true;
+    // A per-format edit marks THAT format user-adjusted (the "adjusted" badge +
+    // reset-to-master affordance) — the system-authored byDim cascade alone doesn't.
+    if(editDimId && editDimId!==MASTER_DIM && !layer.touchedByDim?.[editDimId]){
+      patch.touchedByDim={...(layer.touchedByDim||{}),[editDimId]:true};
+    }
+    if(Object.keys(patch).length) dispatchDesignCommand({ type:"shape/update", uid, patch });
+  };
   const writeLayerMode = (uid, mode) => {
     const layer=overlayLayers.find(item=>item.uid===uid); if(!layer)return;
+    pinLayoutShapeIfNeeded(uid);
     dispatchDesignCommand({ type:"shape/update", uid, patch:{
       mode,
       ...(mode==="outline" ? { outlineColor:layer.outlineColor||"tangerine", outlineWidth:layer.outlineWidth??0.08 } : {}),
@@ -6504,11 +6583,13 @@ export default function App() {
     setOverlayDirty(true);
   };
   const writeLayerStyle = (uid, patch) => {
+    pinLayoutShapeIfNeeded(uid);
     dispatchDesignCommand({ type:"shape/update", uid, patch });
     setOverlayDirty(true);
   };
   const writeLayerT = (uid, patch) => {
     const layer=overlayLayers.find(item=>item.uid===uid); if(!layer)return;
+    pinLayoutShapeIfNeeded(uid, dimensionId);
     const asset=overlays.find(item=>item.id===layer.assetId);
     const base=layer.byDim?.[dimensionId]||deriveFromMaster(layer.master,asset?.kind||"center",asset?.ratio||1,W,H);
     dispatchDesignCommand({ type:"shape/update-transform", uid, dimensionId, isMaster:dimensionId===MASTER_DIM, base, patch });
@@ -8732,6 +8813,57 @@ function useDesignPatchPipeline(workspace) {
     if (frame.type === "card") {
       frame = { ...frame, rotationDeg: 0 };  // (T4) de-tilt everywhere
     }
+    // ── (§2.9.2 · 2026-07-15 client ruling) THE LAYOUT SHAPE IS A GENUINE LAYER ──
+    // An archetype's shape cutout (shapeMask/petalMask) no longer materializes as the
+    // special photoFrame field — it EMITS as an ordinary frame-mode overlay layer
+    // (exactly the motif precedent below: "motifs become normal overlay layers").
+    // Per-format geometry is baked into byDim from each format's OWN archetype
+    // materialization (the 6-format cascade photoFrame had), converted to the overlay
+    // transform of the aspect-locked rect the mask painter would have drawn — so the
+    // emitted layer renders byte-identically to the old photoFrame path. `origin:
+    // "layout"` is provenance for the pins law (a layout swap replaces UNEDITED
+    // generated shapes; a userTouched one is pinned and survives). The card frame is
+    // NOT a layout shape (never surfaced as one in the Shapes panel) and stays as-is.
+    let layoutShapeLayer = null;
+    if (frame.type === "shapeMask" || frame.type === "petalMask") {
+      const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : "orchid-petal";
+      const asset = DEFAULT_OVERLAYS.find(a => a.id === assetId);
+      const ar = asset?.ratio || 1;
+      // Mirror of the render-side clampBox + aspect-lock (fraction space → px →
+      // transform), using the same per-format safe margins (fmt.safe for this postType).
+      const tFor = (dim, box) => {
+        const fmtD = formatLayoutFor(dim.id, pt);
+        const smD = fmtD.safe || { t: 0.08, b: 0.08, l: 0.08, r: 0.08 };
+        const minW = 0.05, minH = 0.03;
+        const bw2 = Math.max(minW, Math.min((box.w ?? 0.8), 1 - smD.l - smD.r));
+        const bh2 = Math.max(minH, Math.min((box.h ?? 0.2), 1 - smD.t - smD.b));
+        const x0 = Math.max(smD.l, Math.min(1 - smD.r - bw2, (box.x ?? smD.l)));
+        const y0 = Math.max(smD.t, Math.min(1 - smD.b - bh2, (box.y ?? smD.t)));
+        // px-space contain-fit to the shape's own aspect (B8 coherence).
+        const bpx = { x: x0 * dim.w, y: y0 * dim.h, w: bw2 * dim.w, h: bh2 * dim.h };
+        let mw = bpx.w, mh = mw / ar;
+        if (mh > bpx.h) { mh = bpx.h; mw = mh * ar; }
+        const cx = bpx.x + (bpx.w - mw) / 2 + mw / 2, cy = bpx.y + (bpx.h - mh) / 2 + mh / 2;
+        return { x: +(cx / dim.w).toFixed(5), y: +(cy / dim.h).toFixed(5), scale: +(mw / dim.w).toFixed(5), rotation: 0, opacity: 1 };
+      };
+      const byDim = {};
+      let masterT = null;
+      for (const d of DIMENSIONS) {
+        const md = d.id === MASTER_DIM ? m : materializeArchetypeLayout(arch, d.id, variant);
+        const fb = md.photoFrame && md.photoFrame.box;
+        if (!fb) continue;
+        const t = tFor(d, fb);
+        if (d.id === MASTER_DIM) masterT = t; else byDim[d.id] = t;
+      }
+      if (masterT) {
+        layoutShapeLayer = {
+          uid: "ol_layout_" + Math.random().toString(36).slice(2, 7),
+          assetId, mode: "frame", origin: "layout",
+          master: masterT, byDim,
+        };
+        frame = { type: "none" };   // the genuine layer replaces the special field
+      }
+    }
     const layout = {
       x: m.roles.hero?.x ?? 0.08, y: m.roles.hero?.y ?? 0.18,
       width: m.roles.hero?.w ?? 0.8, align: m.roles.hero?.align || "left",
@@ -8761,7 +8893,7 @@ function useDesignPatchPipeline(workspace) {
       postType: pt, bg: (m.palette?.bg && BG_ID_SET.has(m.palette.bg)) ? m.palette.bg : null,
       register: m.register, microLabel: shortAttr ? attr : null,
       photoTreatment: m.photoTreatment || "none", photoFrame: frame,
-      layout, motifLayers,
+      layout, motifLayers, layoutShapeLayer,
     };
   };
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
@@ -8803,8 +8935,22 @@ function useDesignPatchPipeline(workspace) {
     setPhotoTouchedByDim({});   // (B2) fresh archetype → auto photo crop again
     setImgTByDim({});
     setPinnedProps({});         // (item 2) a fresh archetype has no user contrast pins yet
-    if (mat.motifLayers) dispatchDesignCommand({type:"shapes/replace",shapes:mat.motifLayers});
-    else dispatchDesignCommand({type:"shapes/replace",shapes:overlayLayers.filter(l=>!l.motif)});
+    // (§2.9.2 · pins law) A layout swap re-seeds ONLY the system's free variables:
+    // previous motifs and UNEDITED layout-origin shapes are replaced; user-added
+    // layers ALWAYS survive, and a user-edited (userTouched) generated shape is
+    // pinned — it wins over the new layout's shape, which then isn't emitted
+    // (law 5: never revert explicit user choice; the layout adapts).
+    const keepLayers = overlayLayers.filter(l => {
+      if (l.motif) return false;                          // motifs re-seed per layout
+      if (l.origin === "layout") return !!l.userTouched;  // unedited generated → replaced
+      return true;                                        // user layers survive a swap
+    });
+    const pinnedLayoutFrame = keepLayers.some(l => l.origin === "layout" && (l.mode || "frame") === "frame");
+    dispatchDesignCommand({type:"shapes/replace",shapes:[
+      ...keepLayers,
+      ...((mat.layoutShapeLayer && !pinnedLayoutFrame) ? [mat.layoutShapeLayer] : []),
+      ...(mat.motifLayers || []),
+    ]});
     // (WP-W0) a fresh archetype brings fresh furniture — stale per-piece overrides
     // (keyed by the OLD archetype's item indexes) must not hide/recolour the new set.
     dispatchDesignCommand({type:"furniture/set",overrides:{}});
