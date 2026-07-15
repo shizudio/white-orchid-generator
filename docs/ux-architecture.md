@@ -274,15 +274,38 @@ mutually exclusive (both want to clip the single `mediaObj`), which is precisely
 client sees. Unifying emission + render (one shape path, no `!hasFrame` gate) kills this by
 construction.
 
-**Build status: DEFERRED (not started as of commit `3d12c4b`).** This is the largest single
-surface of the 2026-07-15 fixes (the `photoFrame` field is threaded through ~30 call sites in
-Generator.jsx plus the patch, persistence, genes, render, §6a band-exclusion and 6-format
-cascade). Recommended slices: (1) emit the layout shape as a `frame`/`fill` shape layer at
-materialize/`buildGenes` time and render ALL shapes through the single shape path (delete the
-`!hasFrame` mutual-exclusion gate); (2) panel/selection/interaction parity + verify the conflict
-is gone (free shape + generated shape coexist); (3) load-time migration adapter in
-`design-persistence.mjs` + round-trip tests; (4) retire the `photoFrame` field and this doc's
-§2.9.1 override-field plan. Each slice ships born-clean-gated and committed only when green.
+**Build status: LANDED 2026-07-15** (slices 1–2 `53afbbe`, slice 3 `20d3f33`, slice 4 with
+this doc update). What shipped:
+
+- **Emission** — `buildMaterialized` emits the archetype's shapeMask/petalMask as an
+  ordinary `frame`-mode layer (`origin:"layout"`, master + explicit per-format `byDim`
+  baked from each format's own materialization). `photoFrame` is `{type:"none"}` on new
+  designs.
+- **One painter** — every frame-kind shape renders through one fitted-window painter in
+  the editorial branch; a legacy `mat.photoFrame` synthesizes as the oldest job, so
+  unconverted documents and override renders (guards/boards) paint byte-identically. The
+  `!hasFrame` mutual exclusion is deleted — the conflict is dead by construction.
+  **Photo-wins rule (orchestrator default, client may override): the NEWEST frame-kind
+  shape takes the photo; older frame shapes render as colour-field silhouettes in their
+  matched colour (never empty outlines).**
+- **Pins law** — any edit to a generated shape pins it (`userTouched`); a layout swap
+  replaces only unedited layout-origin layers, keeps user layers, and does not emit the
+  new layout's shape over a pinned one.
+- **Migration** — `migrateLegacyLayoutShape` (lib/design-persistence.mjs, composed in
+  `readPersistedDesignPayload`) + the exact-geometry converter `convertLegacyLayoutShape`
+  (Generator.jsx, injected at the one install point `applyDesignTemplate`): legacy
+  sessions convert exactly once, idempotently (stable layer uid across reloads), master
+  from the stored box, other formats per the R2 cascade rule.
+- **Grammar retirement** — `photoFrameType` no longer accepts `petalMask` (a shape cutout
+  is `addOverlay { assetId, mode:"frame" }`); the read-only "LAYOUT SHAPE" panel row and
+  its helper copy are retired. The archetype **variant picker stays** — it is the
+  shape ↔ field-colour pairing rotation surface, and the pairing survives emission.
+
+**Deliberately retained:** the `media.frame` document field itself — `card` still uses it
+(a card was never a "layout shape"), and it is the fidelity net for any unconverted legacy
+payload (which renders identically via the synthesized job and converts on its next load
+through the editor). Full field removal is possible only after the client's cloud sessions
+have all been re-saved post-migration.
 
 ### 2.10 Selection and library convergence (2026-07-14)
 

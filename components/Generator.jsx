@@ -9110,10 +9110,13 @@ function useDesignPatchPipeline(workspace) {
     // explicit override wins. photoFrameType maps to the {type,...} object (card/petal
     // geometry is re-derived from the active archetype's data, or a sensible default).
     if (inList(patch.photoTreatment, "photoTreatment") && patch.photoTreatment !== photoTreatment) { setPhotoTreatment(patch.photoTreatment); applied.push("photoTreatment"); }
+    // (§2.9.2) petalMask is RETIRED from this field — a shape cutout is a genuine
+    // frame-mode shape layer (addOverlay { assetId, mode:"frame" }); the enum now
+    // carries none/card only, so a legacy 'petalMask' output is silently ignored
+    // by inList and never becomes a new special-field mask.
     if (inList(patch.photoFrameType, "photoFrameType") && patch.photoFrameType !== (photoFrame?.type || "none")) {
       if (patch.photoFrameType === "none") setPhotoFrame({ type: "none" });
       else if (patch.photoFrameType === "card") setPhotoFrame({ type: "card", box: { x:0.54,y:0.32,w:0.38,h:0.42,align:"left" }, radiusFrac:0.06, rotationDeg:0 });
-      else if (patch.photoFrameType === "petalMask") setPhotoFrame({ type: "petalMask", box:{ x:0.62,y:0.34,w:0.34,h:0.44,align:"left" }, areaFrac:0.30, centroid:{ x:0.79, y:0.56 } });
       applied.push("photoFrameType");
     }
 
@@ -9701,18 +9704,19 @@ function InspectorWorkspace({ workspace }) {
   const renderShapesHome = () => {
     const hasLayoutShapes=(ARCHETYPES_BY_ID[archetypeId]?.variants||[]).some(variant=>variant.shapeId);
     const selectedLayer=overlayLayers.find(layer=>layer.uid===selOverlay);
-    const layoutShapeActive=photoFrame?.type==="shapeMask"||photoFrame?.type==="petalMask";
-    const layoutAsset=layoutShapeActive?overlays.find(asset=>asset.id===ARCHETYPES_BY_ID[archetypeId]?.variants?.[archVariant]?.shapeId):null;
+    // (§2.9.2) The read-only "LAYOUT SHAPE" row is RETIRED: the archetype's shape is
+    // a genuine layer in the list below (every load path converts legacy documents,
+    // and the patch grammar can no longer author a special-field mask). The variant
+    // picker above stays — it is the layout's shape/field-pairing rotation surface.
     const counts=overlayLayers.reduce((map,layer)=>(map.set(layer.assetId,(map.get(layer.assetId)||0)+1),map),new Map());
     const seen=new Map();
     const layers=overlayLayers.map(layer=>{
       const asset=overlays.find(item=>item.id===layer.assetId);seen.set(layer.assetId,(seen.get(layer.assetId)||0)+1);
       return {id:layer.uid,name:asset?.name,src:asset?.dataUrl||asset?.src,label:(asset?.name||"Shape")+(counts.get(layer.assetId)>1?" · "+seen.get(layer.assetId):""),modeLabel:SHAPE_MODE_LABEL[layer.mode||"frame"]||layer.mode};
     });
-    const jumpToLayout=()=>{try{layoutShapeSecRef.current?.scrollIntoView({behavior:"smooth",block:"nearest"});}catch{}setLayoutShapeFlash(true);setTimeout(()=>setLayoutShapeFlash(false),1100);};
     return <ShapeInspectorPanel hasLayoutShapes={hasLayoutShapes} layoutSectionRef={layoutShapeSecRef} layoutFlash={layoutShapeFlash}
-      layoutPicker={renderShapeVariantPanel()} layoutShape={layoutShapeActive?{name:layoutAsset?.name,src:layoutAsset?.dataUrl||layoutAsset?.src}:null}
-      onJumpLayout={jumpToLayout} layers={layers} selectedId={selOverlay} onSelect={id=>selectElement("overlay",id)} onDelete={deleteLayer}
+      layoutPicker={renderShapeVariantPanel()}
+      layers={layers} selectedId={selOverlay} onSelect={id=>selectElement("overlay",id)} onDelete={deleteLayer}
       selectedEditor={selectedLayer?<><div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Editing: {overlays.find(asset=>asset.id===selectedLayer.assetId)?.name||"Shape"}</div>{renderOverlayPanel()}</>:null}
       addOpen={!!foldOpen.shapeAdd} onToggleAdd={()=>toggleFold("shapeAdd")} addTray={renderShapesSection()} palette={B} fonts={F}/>;
   };
