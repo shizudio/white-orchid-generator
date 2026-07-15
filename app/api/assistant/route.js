@@ -4,6 +4,7 @@ import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
+import { detectBandRemoval, reconcileEditorLayoutClaim } from '@/lib/assistant-intents';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -1534,10 +1535,44 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       return ALL_BG.find(b => b !== avoid) || token;
     };
 
+    // Did the band belt handle this turn? Gates the full-image belt below so a
+    // scrim-removal ask ("remove the text band") is never ALSO read as a panel
+    // removal (which would swap the archetype and re-narrate a layout switch).
+    let bandHandled = false;
+
+    // 0. BAND / SCRIM REMOVAL — "remove the text band", "get rid of the strip
+    //    behind the words", "hide the scrim". On a full-bleed photo the legibility
+    //    band is controlled ONLY by backdropMode; the correct patch is
+    //    backdropMode:'none' (drop to shadow-only). The band is load-bearing — auto
+    //    only paints it once the ladder's lighter remedies (ink flip → weight → face
+    //    → size) already fell short of AA over this photo — so we name that tradeoff
+    //    and offer the REAL band-free remedies (a calmer layout, shorter copy), one
+    //    honest reply, never a fabricated "changed the layout" claim (M4 honesty).
+    {
+      const bd = detectBandRemoval(lastUserText, designState);
+      if (bd) {
+        bandHandled = true;
+        if (bd.present) {
+          patch.backdropMode = 'none';
+          beltReply = 'Dropped the band behind the text — the words now sit straight on the photo with a soft shadow. If they read hard against this photo, tap the “Try another layout” chip for one with a calm text area, or shorten the copy. Tap Undo to bring the band back.';
+        } else {
+          // Already shadow-only — no band to remove. Honest, and the word "already"
+          // suppresses the client's no-op apology for this genuinely empty patch.
+          beltReply = 'There is no band to remove here — the text already sits straight on the photo, kept legible by its colour and weight. If it still reads hard, tap the “Try another layout” chip for a design with a solid text area, or shorten the copy.';
+        }
+        // A band ask never edits copy or swaps layout — strip any such field the
+        // model hallucinated (the specimen falsely tagged "changed: headline") so
+        // the patch is exactly the backdrop change (clean tag, one honest reply).
+        for (const f of ['headline', 'subtext', 'attribution', 'dateText', 'microLabel', 'pillText', 'archetypeId']) {
+          if (f in patch) delete patch[f];
+        }
+      }
+    }
+
     // 1. TEXT SUBSTITUTION — "the headline shud say Open House not open day".
     //    A plain wording fix must land on the named copy role. Runs first so it
     //    isn't shadowed by the colour/mood belts on a mixed utterance.
-    {
+    if (!beltReply) {
       const sub = detectTextSubstitution(lastUserText);
       if (sub && designState[sub.role] !== sub.value) {
         patch[sub.role] = sub.value;
@@ -1694,7 +1729,7 @@ Current design state (compact): ${JSON.stringify(designState)}`;
         patch.removeOverlays = true;   // applyDesignPatch removes before it adds
       }
     }
-    if (wantsFullImage(lastUserText)) {
+    if (!bandHandled && wantsFullImage(lastUserText)) {
       const tinted = /\b(duotone|tint\w*|wash(ed)?|moody|darker|green look)\b/i.test(lastUserText);
       const target = tinted ? 'full_bleed_duotone' : 'documentary';
       const pick = patch.archetypeId;
@@ -1750,6 +1785,20 @@ Current design state (compact): ${JSON.stringify(designState)}`;
       // A real, applied change → narrate THIS switch (honesty law), and make the
       // repeat affordance explicit so the next ask reads as expected behaviour.
       reply = `Switched to ${LAYOUT_NICE[patch.archetypeId] || 'a different layout'} — your words are unchanged. Ask again and I'll show you the next one.`;
+    }
+
+    // ── (Honesty coordination) REPLY↔PATCH LAYOUT-CLAIM RECONCILE ──────────────
+    // The general root fix for the two-bubble contradiction: when NO belt owned the
+    // turn (beltReply/bandHandled unset) and the deterministic belts above did not
+    // switch the layout, but the MODEL's reply still claims a layout / photo-fill
+    // switch, that claim is unbacked by the final gated patch. Rewrite it HERE — from
+    // the real patch, before the single authoritative reply reaches the client — so a
+    // false "Changed the layout…" is never shown, transiently or otherwise (M4). The
+    // deterministic full-image / layout-variety belts above (which DO set archetypeId)
+    // are unaffected: reconcile sees the archetype change and returns null.
+    if (!beltReply && !bandHandled) {
+      const honest = reconcileEditorLayoutClaim(reply, patch, designState);
+      if (honest) reply = honest;
     }
   }
 
