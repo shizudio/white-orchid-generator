@@ -1878,9 +1878,16 @@ canvas[role="application"]:focus-visible {
   box-shadow: none;
 }
 
-.wo-inspector-backdrop { display: none; }
+/* (Half-sheet ruling 2026-07-15) The mobile dimming backdrop is GONE: it dimmed
+   the canvas peek (#13) and swallowed the first canvas tap (#19). The element is
+   no longer rendered; outside-tap dismiss lives in useMobileInspectorSheet. */
 
-/* Mobile: inspector becomes a bottom sheet + dismiss backdrop. */
+/* Mobile: inspector becomes the HALF-SHEET (ratified 2026-07-15, ux-architecture
+   §2.11). CONTENT-HEIGHT, capped at the half detent so the canvas band above
+   stays visible and live; .wo-sheet-tall (drag handle) promotes to the tall
+   detent for the long Text inspector. No dimming backdrop: the band above the
+   sheet is fully interactive (tap-through re-selection), and outside taps are
+   handled in JS (useMobileInspectorSheet). */
 @media (max-width: 760px) {
   .wo-inspector-dock {
     position: fixed;
@@ -1893,13 +1900,19 @@ canvas[role="application"]:focus-visible {
     max-width: 100vw;         /* (#7) hard-clamp to the visual viewport */
     box-sizing: border-box;   /* (#7) so children never push the sheet wider */
     overflow-x: hidden;       /* (#7) belt-and-braces against a stray wide child */
-    max-height: 72vh;
-    height: 72vh;
+    height: auto;             /* (#2) content-height — no dead lower third */
+    max-height: 45vh;         /* half detent */
+    max-height: 45dvh;        /* iOS dynamic-toolbar-aware where supported */
+    min-height: 150px;        /* handle + head + a control row, always graspable */
     border: 1px solid var(--line);
     border-radius: 18px 18px 0 0;
     box-shadow: 0 24px 70px rgba(37, 78, 72, 0.24);
     z-index: 362;              /* above the FAB (360) so it isn't obscured */
     animation: wo-sheet-up 220ms cubic-bezier(.22,1,.36,1);
+  }
+  .wo-inspector-dock.wo-sheet-tall {
+    max-height: 78vh;         /* tall detent (Text inspector) */
+    max-height: 78dvh;
   }
   /* (#6) Bottom safe-area: without this the last controls (SIZE pills, colour
      swatches) sit under the home indicator on notched iPhones. The body is the
@@ -1910,15 +1923,64 @@ canvas[role="application"]:focus-visible {
     padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
     overscroll-behavior: contain;
   }
-  .wo-inspector-backdrop {
-    display: block;
+  /* The drag handle (mobile-only; desktop column hides it below). */
+  .wo-sheet-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    flex: 0 0 auto;
+    background: #fff;
+    border-radius: 18px 18px 0 0;
+    cursor: grab;
+    touch-action: none;        /* the handle drag must never scroll the page */
+  }
+  .wo-sheet-handle-bar {
+    width: 40px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--line-strong);
+  }
+}
+/* Desktop: no sheet, no handle — the inspector is the in-flow column. */
+@media (min-width: 761px) {
+  .wo-sheet-handle { display: none; }
+}
+/* ── (Half-sheet ruling 2026-07-15) FLOATING UNDO/REDO (#5, §2.7) ──
+   Mobile-only: while the sheet is open, undo must stay reachable (the strip's
+   Undo sits below the canvas, behind the sheet). A 44px pair floats in the live
+   canvas band just above the sheet; JS anchors `bottom` to the measured sheet
+   height and flips the side away from the selected element (collision nudge). */
+.wo-float-undo { display: none; }
+@media (max-width: 760px) {
+  .wo-float-undo {
+    display: flex;
+    gap: 8px;
     position: fixed;
-    inset: 0;
-    /* (#13) Lowered from 0.42 → 0.20 so the ~40% canvas peek above the sheet is
-       barely dimmed (you must SEE the edit you just made). A faint scrim is kept
-       so the sheet's rounded top corners still read as a dismissable overlay. */
-    background: rgba(37, 45, 40, 0.20);
-    z-index: 361;
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    z-index: 363;              /* above the sheet (362) */
+  }
+  .wo-float-undo--right {
+    left: auto;
+    right: calc(12px + env(safe-area-inset-right, 0px));
+  }
+  .wo-float-undo button {
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--tw-burnham);
+    font-size: 18px;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 6px 20px rgba(37, 78, 72, 0.22);
+    cursor: pointer;
+  }
+  .wo-float-undo button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 }
 @keyframes wo-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
