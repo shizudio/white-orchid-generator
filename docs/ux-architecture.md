@@ -230,6 +230,60 @@ and the mask render must read the override. This is the largest surface of the t
 2026-07-15 client fixes and is tracked as a follow-up build; the ruling above is the law
 it must satisfy.
 
+> **SUPERSEDED (2026-07-15, later same-day ruling) — see §2.9.2.** The "make the
+> `photoFrame` layout shape editable-in-place" approach above is withdrawn. The client
+> ruled the layout shape should not be a special editable object at all; it must become a
+> genuine ordinary shape layer. The transform-override document field described here is NOT
+> to be built.
+
+#### 2.9.2 The layout shape is eliminated — it becomes a genuine shape layer (2026-07-15 client ruling, SUPERSEDES §2.9.1)
+
+Client ruling (verbatim intent): *"layout shape is conflicting with add another shape, they
+override each other. Ideally layout shape is just another added shape … eliminate this
+layout [shape] completely, and replace it with a genuine normal shape layer instead."*
+
+Today a "layout shape" is the archetype's `photoFrame` mask/cutout (`shapeMask` / `petalMask`
+/ `card`), a first-class design field rendered by its own editorial branch and surfaced
+read-only in the Shapes inspector. Free shapes already support a `frame` mode that clips the
+photo. **Target: archetypes that use a shape emit it as a genuine `frame`-kind (or `fill`-kind
+for a colour field) shape *layer* in the design document — no separate `photoFrame` render
+path for new designs.** The emitted layer is selectable, fully transformable, panel-editable,
+deletable, and z-ordered like any other shape. Pins law (law 5): a user-edited generated
+shape is pinned and survives re-solves; a layout swap replaces *unedited* generated shapes but
+a pinned one wins and the layout adapts. The variant's "matched field colour" pairing must
+survive for the generated shape. Migration: a load-time adapter in `lib/design-persistence.mjs`
+converts a legacy `photoFrame` into the equivalent shape layer exactly once (idempotent), so
+old sessions render identically (round-trip fidelity invariant). Mirror surfaces (M6): any
+shape-kind/enum change lands together in `components/Generator.jsx` constants,
+`lib/design-patch.js` enums, and `buildGenes`. Born-clean holds (`__woBornCleanGuard` /
+`__woArchStress` 0 new offenders; §6a `_bandOverShape` stays 0 on fresh shape designs), and the
+6-format cascade must produce per-format geometry for the generated shape exactly as
+`photoFrame` did.
+
+**Root cause of the "override each other" conflict (verified in code, 2026-07-15).** The
+entire editorial render branch — which draws the layout shape (`photoFrame`
+`shapeMask`/`petalMask`/`card`), text roles, motifs, and the matched field colour — is gated
+at `components/Generator.jsx:3901` on `if (mat.editorial && !hasFrame)`, where
+`hasFrame = frameLayers.length > 0` is true whenever a free shape is in `frame` mode
+(`overlayLayers.some(l => (l.mode||'frame')==='frame')`, Generator.jsx:3478 / :6257). Adding a
+free frame shape flips `hasFrame` true, which **skips the whole editorial branch** and routes
+rendering to a separate legacy frame pre-pass (Generator.jsx:3883-3887, `drawFrameLayer`) that
+paints only the free shape's clipped photo on a plain field — the layout shape, materialized
+text positions, motifs and paired field colour all disappear. The two systems are structurally
+mutually exclusive (both want to clip the single `mediaObj`), which is precisely what the
+client sees. Unifying emission + render (one shape path, no `!hasFrame` gate) kills this by
+construction.
+
+**Build status: DEFERRED (not started as of commit `3d12c4b`).** This is the largest single
+surface of the 2026-07-15 fixes (the `photoFrame` field is threaded through ~30 call sites in
+Generator.jsx plus the patch, persistence, genes, render, §6a band-exclusion and 6-format
+cascade). Recommended slices: (1) emit the layout shape as a `frame`/`fill` shape layer at
+materialize/`buildGenes` time and render ALL shapes through the single shape path (delete the
+`!hasFrame` mutual-exclusion gate); (2) panel/selection/interaction parity + verify the conflict
+is gone (free shape + generated shape coexist); (3) load-time migration adapter in
+`design-persistence.mjs` + round-trip tests; (4) retire the `photoFrame` field and this doc's
+§2.9.1 override-field plan. Each slice ships born-clean-gated and committed only when green.
+
 ### 2.10 Selection and library convergence (2026-07-14)
 
 - **One Shapes pill.** Individual shape instances are children of the Shapes inspector,
