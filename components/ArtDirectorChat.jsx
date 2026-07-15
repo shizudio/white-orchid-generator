@@ -742,10 +742,18 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
         thumb = dataUrl;
         try { await onGenerateImage(dataUrl); photoLanded = true; } catch { /* keep the reply */ }
       }
+      // (A1) The route asked for a deterministic photo re-roll (a plain "change the
+      // photo" ask on a photo-bearing design). Run the SAME action as the toolbar's
+      // Refresh-photo button; the swap is async, so we count the turn as a real action
+      // (the present-tense reply is honest) and suppress the no-op apology below.
+      let photoRefreshed = false;
+      if (data.refreshPhoto === true && typeof onChangePhoto === 'function') {
+        try { onChangePhoto(); photoRefreshed = true; } catch { /* keep the reply */ }
+      }
       const summaryParts = [];
       if (changeKeys.length) summaryParts.push(summarizeKeys(changeKeys));
       if (photoLanded) summaryParts.push('photo');
-      const didChange = changeKeys.length > 0 || photoLanded;
+      const didChange = changeKeys.length > 0 || photoLanded || photoRefreshed;
       // Which provider made the photo (Higgsfield primary, gpt-image-1 fallback).
       const providerLabel = photoLanded
         ? (data.imageProvider === 'higgsfield' ? 'Higgsfield' : data.imageProvider === 'openai' ? 'gpt-image-1' : null)
@@ -1073,7 +1081,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       commitLog();
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, renderTruth, fileFeedback, fileFeedbackAddendum]);
+  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, onChangePhoto, renderTruth, fileFeedback, fileFeedbackAddendum]);
 
   // (findings actions-model law) Expose an imperative send so a finding's "Shorten it
   // for me" ai-fix action can route a targeted prompt through the SAME assistant +

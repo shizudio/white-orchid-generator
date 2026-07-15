@@ -1484,6 +1484,11 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // switch to a photo-dominant archetype. The prompt now carries few-shot
   // mappings, but this deterministic belt guarantees the patch carries the
   // right archetype even when the model reaches for backdrop/logo fields again.
+  // (A1) When a plain "change / swap / different photo" ask (no named subject) lands
+  // on a photo-bearing design, the RIGHT action is the SAME deterministic re-roll the
+  // toolbar's Refresh-photo button runs — not an empty patch that trips the no-op
+  // apology. The belt sets this; the client runs onChangePhoto (refreshPhoto) on it.
+  let refreshPhotoSignal = false;
   if (context !== 'landing') {
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
 
@@ -1553,11 +1558,18 @@ Current design state (compact): ${JSON.stringify(designState)}`;
           // block then returns its own honest "couldn't generate" reply, overriding).
           patch.imagePrompt = sanitizeScenePrompt(pc.scene);
           beltReply = `Generating a new photo of ${pc.scene} now — it'll appear on the canvas in a moment. Tap Undo if it's not what you pictured.`;
+        } else if (designState.hasImage) {
+          // No subject named ("different picture", "doesn't fit our vibe") on a design
+          // that HAS a photo → re-roll it via the SAME action as the toolbar's Refresh
+          // photo button (fetchScenePhoto on the stored brief, else a Library rotation).
+          // The client runs it; present tense, because the swap is async (and mocked in
+          // the tester) — a past-tense "I changed the photo" would be false until it lands.
+          refreshPhotoSignal = true;
+          beltReply = `Swapping in a different photo now — it'll refresh on the canvas in a moment. Tap Undo if you preferred the last one.`;
         } else {
-          // No subject named ("different picture", "doesn't fit our vibe"): we never
-          // invent facts/scenes, so give an HONEST, non-apologetic, actionable reply —
-          // never the generic "that didn't change anything".
-          beltReply = `Tell me what you'd like the photo to show — say something like “a bright classroom with children reading” — and I'll generate it. You can also tap the photo on the canvas to reframe or swap it.`;
+          // No subject named AND no photo to swap: we never invent facts/scenes, so give
+          // an HONEST, actionable reply — never the generic "that didn't change anything".
+          beltReply = `Tell me what you'd like the photo to show — say something like “a bright classroom with children reading” — and I'll generate it. You can also add one from the photo panel.`;
         }
       }
     }
@@ -1784,6 +1796,6 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // (Photo-first) Return the landing photo URL (Library fallback) AND the scenePrompt
   // (photographer brief) so the client can start a Higgsfield photo job for photo-led
   // designs. Both null for text-only archetypes / editor turns.
-  return { status: 200, payload: { reply, patch, imageB64: null, imageUrl: landingPhotoUrl, scenePrompt: landingScenePrompt } };
+  return { status: 200, payload: { reply, patch, imageB64: null, imageUrl: landingPhotoUrl, scenePrompt: landingScenePrompt, refreshPhoto: refreshPhotoSignal } };
   } // end finalizeBody
 }

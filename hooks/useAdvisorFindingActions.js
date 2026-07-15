@@ -35,12 +35,15 @@ export function useAdvisorFindingActions({
   resetTextLayout,
 }) {
   const tightenCopyForFinding = useCallback(async (issue) => {
+    // The field to shorten comes from a dropped-copy hint (copy-dropped) OR directly
+    // from the finding's own `field` (thumb-legibility / type-size-floor name the
+    // fit-shrunk role's copy field), so one shortener serves every size/overflow dot.
     const primary = Array.isArray(issue?.dropped) ? issue.dropped[0] : null;
-    const field = primary?.field;
+    const field = primary?.field || issue?.field;
     if (!field || !COPY_FIELDS.includes(field)) return;
     const role = FIELD_TO_ROLE[field];
     const budget = copyBudgets[field] || 60;
-    const current = copy[field] || String(primary.text || "");
+    const current = copy[field] || String(primary?.text || "");
     if (!current) return;
 
     let aiValue = null;
@@ -194,6 +197,29 @@ export function useAdvisorFindingActions({
           focusTextField(issue.element || "hero");
         },
       });
+      actions.push(acknowledge("Keep it this way"));
+      return actions;
+    }
+
+    // Size findings whose ONLY real remedy is shorter copy (the render fit-shrank the
+    // role, so a bigger font step can't grow it). The honest, one-tap primary is
+    // "Shorten it for me" — an ai-fix that reduces the copy so the fitter renders it
+    // larger — plus a deep-link to edit by hand. (advice-ledger one-tap-fix law.)
+    if ((issue.id === "thumb-legibility" || issue.id === "type-size-floor") && issue.field && COPY_FIELDS.includes(issue.field)) {
+      actions.push({
+        label: "Shorten it for me",
+        kind: "ai-fix",
+        run: () => { tightenCopyForFinding(issue); },
+      });
+      const role = FIELD_TO_ROLE[issue.field];
+      if (role) {
+        actions.push({
+          label: "Edit it myself",
+          kind: "deep-link",
+          hint: Number.isFinite(copyBudgets[issue.field]) ? `Fits about ${copyBudgets[issue.field]} characters here` : undefined,
+          run: () => { setAdvisorDot(null); focusTextField(role); },
+        });
+      }
       actions.push(acknowledge("Keep it this way"));
       return actions;
     }
