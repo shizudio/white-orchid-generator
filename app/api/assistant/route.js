@@ -1747,7 +1747,14 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // the b64 image alongside the reply/patch. imagePrompt is a side-effect trigger,
   // not a design field, so strip it from the patch before it reaches the client's
   // applyDesignPatch (which would ignore it anyway — it's not in PATCH_CHANGE_KEYS).
-  const imagePrompt = typeof patch.imagePrompt === 'string' && patch.imagePrompt.trim() ? patch.imagePrompt.trim() : null;
+  // (A1 money-safety) When the subject-less photo-change belt fired (refreshPhotoSignal),
+  // the ask is a FREE re-roll — the client runs the deterministic Refresh-photo action.
+  // A model may STILL have set imagePrompt on the same "change photo" utterance; honoring
+  // it would fire a paid gpt-image/Higgsfield generation, breaking the belt's "$0, photo
+  // generation is never invoked" guarantee. Force it null on the refresh path so the
+  // paid block below can never run — only an explicitly NAMED scene (refreshPhotoSignal
+  // stays false) generates.
+  const imagePrompt = (!refreshPhotoSignal && typeof patch.imagePrompt === 'string' && patch.imagePrompt.trim()) ? patch.imagePrompt.trim() : null;
   if ('imagePrompt' in patch) delete patch.imagePrompt;
   // scenePrompt is a photo-first side-effect trigger (returned separately, above),
   // never an applied design field — strip it before the patch reaches the client.
