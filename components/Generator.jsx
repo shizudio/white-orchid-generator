@@ -5267,11 +5267,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         else { const swap=readableLogoForField(hexLuminance(fieldColor)); if(swap) logoOpts={...logoOpts,logoImg:swap.img,inkLum:swap.inkLum}; }
       }
       if(wantMark){
-        // (Commit 2) MARK SLOT — prefer a real mark-only brand variant (circle/bg badge),
-        // coloured for the field (ivory on dark, green on light) and rotated by seed, so the
-        // corner mark ALTERNATES instead of always the same tinted orchid-petal glyph. Falls
-        // back to the tinted orchid-petal when no mark image is cached (or the pick is a
-        // green-only mark on a dark field, where the tinted glyph reads better).
+        // (Commit 2) MARK SLOT — a REAL brand variant suited to this backing: a mark-only
+        // badge (circle/bg) on a light field, a readable lockup (ivory) on a dark one,
+        // rotated by seed so the corner mark alternates. Only real brand assets paint here
+        // (client 2026-07-15) — the fabricated tinted orchid-petal fallback is retired.
         // (Item A) explicit user size pins the mark; else the archetype default. The
         // mark stays a QUIET corner glyph, so its step fractions are smaller than the
         // full-lockup LOGO_SIZES pct — but it must visibly respond to every step.
@@ -5300,25 +5299,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             }
           }catch(_){/* keep the field fallback */}
         }
-        const fieldLight=markBackLum>0.5;
-        const pickMark=brandLogoForContext(dimId, "mark", markBackLum, logoSeed);
-        // The mark variants are green-only; on a LIGHT backing draw the real badge as-is,
-        // on a DARK backing the green badge would vanish, so tint the orchid-petal to ivory.
+        // (only-real-assets law 3 · client ruling 2026-07-15) The corner mark is a REAL
+        // brand logo variant chosen for THIS backing — a green mark badge on a light
+        // field, an ivory lockup on a dark one (brandLogoForContext resolves shape+colour
+        // by markBackLum) — drawn UNMODIFIED. The retired path stamped a RECOLOURED
+        // orchid-petal DECOR shape into this slot when no green badge suited a dark field;
+        // the client flagged that tinted glyph as a non-brand logo. It is gone: only the
+        // real logo may paint here. When no real variant image is loaded yet, draw NOTHING
+        // (the "＋ add logo" ghost / honest absence) — never substitute a fabricated mark.
         // NOTE: the small corner MARK is intentionally allowed to sit quietly near text in
-        // a corner (it's a tiny quiet glyph, not a lockup), so it is NOT registered in the
-        // logo↔text collision assertion (auditLogo.box) — only the full lockup is.
+        // a corner (a quiet glyph, not a lockup), so it is NOT registered in the logo↔text
+        // collision assertion (auditLogo.box) — only the full lockup is.
+        const pickMark=brandLogoForContext(dimId, "mark", markBackLum, logoSeed);
         let drew=false;
-        if(pickMark && fieldLight && !effUserLogoTouched){
+        if(pickMark){
           containDraw(ctx,pickMark.img,cx,cy,mSz,mSz,isCentered?1:0.9);
           drew=true;
-        }
-        if(!drew){
-          const orchid=archAssetImgs.current["orchid-petal"];
-          if(orchid){
-            const markColor=fieldLight?B.burnham:B.whiteSmoke;
-            const tinted=tintedAccessory(orchid,markColor);
-            if(tinted){ containDraw(ctx,tinted,cx,cy,mSz,mSz,isCentered?1:0.9); drew=true; }
-          }
         }
         // (WP-W0) render truth + clickability: the drawn mark IS the logo — publish
         // its box so "move the logo" verifies against the canvas and a click on the
