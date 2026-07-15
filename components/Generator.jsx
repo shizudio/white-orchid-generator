@@ -6842,6 +6842,7 @@ export default function App() {
     loadFile,
     refreshPhoto,
     refreshStage,
+    refreshNotice,
     refreshingPhoto,
     selectFromLibrary,
   } = useMediaGenerationActions({
@@ -6851,6 +6852,7 @@ export default function App() {
     genBrief,
     harmonizeRef,
     image,
+    mediaObj,
     library,
     setAiUndoStack,
     setLibrary,
@@ -7387,7 +7389,7 @@ export default function App() {
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
-    refreshPhoto, refreshPostTiles, refreshStage, refreshingPhoto,
+    refreshPhoto, refreshPostTiles, refreshStage, refreshNotice, refreshingPhoto,
     renderExportPanel, renderFeedGallery, renderTruth, resetFormatToMaster,
     resolveProposal, runAiAudit, saveDesignTemplate, saveEditedAsNew,
     saveEditedTemplate, selOverlay, selectElement, selectFromLibrary,
@@ -7959,7 +7961,7 @@ function EditorShell({ workspace }) {
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
-    refreshPhoto, refreshPostTiles, refreshStage, refreshingPhoto,
+    refreshPhoto, refreshPostTiles, refreshStage, refreshNotice, refreshingPhoto,
     renderExportPanel, renderFeedGallery, renderTruth, resetFormatToMaster,
     resolveProposal, runAiAudit, saveDesignTemplate, saveEditedAsNew,
     saveEditedTemplate, selOverlay, selectElement, selectFromLibrary,
@@ -8319,6 +8321,9 @@ function EditorShell({ workspace }) {
                   <span aria-hidden="true" style={{fontSize:12,lineHeight:1,display:"inline-block",transform:refreshingPhoto?"rotate(90deg)":"none",transition:"transform 0.3s"}}>↻</span>
                   {refreshingPhoto ? (refreshStage || "Refreshing…") : "Refresh photo"}
                 </button>
+              )}
+              {mediaObj && refreshNotice && !refreshingPhoto && (
+                <span role="status" style={{fontFamily:F.body,fontSize:11,color:B.ash,lineHeight:1.4,maxWidth:220}}>{refreshNotice}</span>
               )}
               {/* (canvas-chrome §3 / undo-visibility) Undo + Redo are ALWAYS in the
                   strip so the cluster never re-shuffles; each is DISABLED (greyed,
@@ -8840,7 +8845,14 @@ function useDesignPatchPipeline(workspace) {
         // the advisor offers a working "tighten it" repair. Never store/paint a stump.
         const endsClean = /[.!?…]["')\]]?$/.test(trimmed);
         const trimmedWords = trimmed.split(/\s+/).filter(Boolean).length;
-        const isFragmentStump = trimmed !== authored && !endsClean && (trimmedWords < 4 || trimmed.length < 16);
+        // (gap fix) A word-boundary cut can also land on a DANGLING function word —
+        // a conjunction/preposition/article/aux ("…a week of creativity and", "join us
+        // for") — which reads as a stump at ANY length, so the short-fragment test
+        // (< 4 words / < 16 chars) misses it. Treat a trailing function word as a stump
+        // too: keep the authored copy verbatim (complete-or-absent) rather than paint
+        // "…creativity and".
+        const danglesFunctionWord = /\b(?:and|or|but|nor|yet|so|for|of|to|in|on|at|by|as|with|from|into|the|a|an|our|your|their|its|his|her|is|are|was|were|be|been)\s*$/i.test(trimmed);
+        const isFragmentStump = trimmed !== authored && !endsClean && (trimmedWords < 4 || trimmed.length < 16 || danglesFunctionWord);
         fitted[field] = isFragmentStump ? authored : trimmed;
       }
       patch = fitted;

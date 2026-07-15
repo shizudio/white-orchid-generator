@@ -8,6 +8,7 @@ export function useMediaGenerationActions({
   genBrief,
   harmonizeRef,
   image,
+  mediaObj,
   library,
   setAiUndoStack,
   setLibrary,
@@ -103,10 +104,21 @@ const [refreshingPhoto, setRefreshingPhoto] = useState(false);
 // (B2) Honest staged label for the in-editor photo wait: a generated (Higgsfield)
 // refresh genuinely runs ~20s, so after a beat we say so rather than a bare spinner.
 const [refreshStage, setRefreshStage] = useState("");
+// (B1 · never a dead end) A warm, retryable line shown when a refresh finds NO
+// replacement — the current photo is kept untouched (swap-on-success only), never
+// cleared, and the user is invited to try again rather than left with a silent no-op.
+const [refreshNotice, setRefreshNotice] = useState("");
 const refreshStageTimer = useRef(null);
+const refreshNoticeTimer = useRef(null);
 const refreshPhoto = async () => {
   if (refreshingPhoto || !mediaObj) return;
   setRefreshingPhoto(true);
+  setRefreshNotice("");
+  if (refreshNoticeTimer.current) { clearTimeout(refreshNoticeTimer.current); refreshNoticeTimer.current = null; }
+  // SWAP-ON-SUCCESS ONLY: we mutate the canvas photo ONLY once we hold a replacement.
+  // A failed/empty fetch (mocked keys, host blocked, no candidate) leaves the existing
+  // photo in place — a failed refresh must never clear the media before it has a swap.
+  let swapped = false;
   try {
     const scene = genBrief?.scene || "";
     if (scene) {
@@ -114,7 +126,7 @@ const refreshPhoto = async () => {
       if (refreshStageTimer.current) clearTimeout(refreshStageTimer.current);
       refreshStageTimer.current = setTimeout(() => setRefreshStage("Still looking — a few more seconds…"), 10_000);
       const url = await fetchScenePhoto(scene);
-      if (url) { await applyGeneratedImage(url, { harmonize: true }); return; }
+      if (url) { await applyGeneratedImage(url, { harmonize: true }); swapped = true; return; }
     }
     // Library rotation fallback: any local-library or sample photo that isn't
     // the current one. Deterministic-ish walk: first non-current candidate.
@@ -123,11 +135,16 @@ const refreshPhoto = async () => {
     if (pool.length) {
       const url = pool[Math.floor(Math.random() * pool.length)];
       applyPatch({ imageSrc: url }, { source: "ui" });   // WP-V: through THE pipeline
+      swapped = true;
     }
   } finally {
     if (refreshStageTimer.current) { clearTimeout(refreshStageTimer.current); refreshStageTimer.current = null; }
     setRefreshStage("");
     setRefreshingPhoto(false);
+    if (!swapped) {
+      setRefreshNotice("Couldn't find a different photo just now — your photo's unchanged. Tap Refresh photo to try again.");
+      refreshNoticeTimer.current = setTimeout(() => setRefreshNotice(""), 6000);
+    }
   }
 };
 
@@ -157,6 +174,7 @@ const selectFromLibrary = async (img) => {
     loadFile,
     refreshPhoto,
     refreshStage,
+    refreshNotice,
     refreshingPhoto,
     selectFromLibrary,
   };

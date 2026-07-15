@@ -40,7 +40,11 @@ export function useInspectorModel({
 
   const activeElements = useMemo(() => [
     { key: "bg", label: "Background", icon: "◐" },
-    ...(hasMedia ? [{ key: "photo", label: hasVideo ? "Video" : "Photo", icon: "▣" }] : []),
+    // (B2 · never a dead end) The photo chip is ALWAYS present. With media it opens the
+    // Photo panel to reframe/swap; with NO media it reads "Add photo" and opens the same
+    // panel in its add state (upload / Library / sample / generate) — the only recovery
+    // path once media is null (e.g. a failed refresh left the design photo-less).
+    { key: "photo", label: hasMedia ? (hasVideo ? "Video" : "Photo") : "Add photo", icon: hasMedia ? "▣" : "＋" },
     ...(postHasCopy ? [{ key: "text", label: textRoleLabel, icon: "T" }] : []),
     ...(hasRenderedLogo ? [{ key: "logo", label: "Logo", icon: "❋" }] : []),
     ...((archetypeId || postHasCopy || hasMedia || shapeLayers.length)
@@ -89,7 +93,9 @@ export function useInspectorModel({
   let removeAction = null;
   if (inspectorElement === "text") {
     removeAction = { label: "Clear text", act: () => applyPatch({ headline: "", subtext: "", attribution: "", dateText: "", microLabel: "", pillText: "" }, { source: "ui" }) };
-  } else if (inspectorElement === "photo") {
+  } else if (inspectorElement === "photo" && hasMedia) {
+    // Only offer removal when a photo/video actually exists — in the no-media "Add
+    // photo" state there is nothing to remove (a dead button would violate law 2).
     removeAction = { label: hasVideo ? "Remove video" : "Remove photo", act: () => { applyPatch({ removeImage: true }, { source: "ui" }); closeInspector(); } };
   } else if (String(inspectorElement || "").startsWith("furn_")) {
     removeAction = { label: "Delete", act: () => { applyPatch({ furnitureUpdate: { key: inspectorElement, hidden: true } }, { source: "ui" }); closeInspector(); } };
