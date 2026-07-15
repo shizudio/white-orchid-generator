@@ -64,7 +64,7 @@ import { useInspectorModel } from "@/hooks/useInspectorModel";
 import { useMediaGenerationActions } from "@/hooks/useMediaGenerationActions";
 import { useDesignDocumentController } from "@/hooks/useDesignDocumentController";
 import { createAssetAnalysisCache } from "@/lib/asset-analysis.mjs";
-import { readPersistedDesignPayload } from "@/lib/design-persistence.mjs";
+import { readPersistedDesignPayload, migrateLegacyLayoutShape } from "@/lib/design-persistence.mjs";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
    DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
@@ -2601,6 +2601,65 @@ const DIMENSIONS = [
   { id:"facebook",    label:"Facebook",    sub:"1.91:1", w:1200, h:630,  purpose:"link/post image" },
   { id:"banner",      label:"Banner",      sub:"3:1",    w:1500, h:500,  purpose:"website/email banner" },
 ];
+
+// (§2.9.2) The layout-shape box → overlay-transform conversion, shared by the
+// EMISSION path (buildMaterialized) and the legacy MIGRATION path
+// (convertLegacyLayoutShape). Mirrors the render-side clampBox + B8 aspect-lock
+// exactly: clamp the authored fraction box to this format's safe margins (for
+// this postType), contain-fit to the shape's own aspect in px space, and return
+// the {x,y,scale} of the rect the mask painter would have drawn — so an emitted
+// or migrated layer renders byte-identically to the old photoFrame path.
+function layoutShapeTransformFor(dim, postType, box, ratio) {
+  const fmtD = formatLayoutFor(dim.id, postType);
+  const smD = fmtD.safe || { t: 0.08, b: 0.08, l: 0.08, r: 0.08 };
+  const minW = 0.05, minH = 0.03;
+  const bw2 = Math.max(minW, Math.min((box.w ?? 0.8), 1 - smD.l - smD.r));
+  const bh2 = Math.max(minH, Math.min((box.h ?? 0.2), 1 - smD.t - smD.b));
+  const x0 = Math.max(smD.l, Math.min(1 - smD.r - bw2, (box.x ?? smD.l)));
+  const y0 = Math.max(smD.t, Math.min(1 - smD.b - bh2, (box.y ?? smD.t)));
+  const bpx = { x: x0 * dim.w, y: y0 * dim.h, w: bw2 * dim.w, h: bh2 * dim.h };
+  const ar = ratio || 1;
+  let mw = bpx.w, mh = mw / ar;
+  if (mh > bpx.h) { mh = bpx.h; mw = mh * ar; }
+  const cx = bpx.x + (bpx.w - mw) / 2 + mw / 2, cy = bpx.y + (bpx.h - mh) / 2 + mh / 2;
+  return { x: +(cx / dim.w).toFixed(5), y: +(cy / dim.h).toFixed(5), scale: +(mw / dim.w).toFixed(5), rotation: 0, opacity: 1 };
+}
+
+// (§2.9.2 slice 3) Convert a LEGACY persisted document's layout shape (the
+// media.frame shapeMask/petalMask field) into the genuine frame-mode layer —
+// the exact-geometry converter injected into lib/design-persistence's
+// migrateLegacyLayoutShape (the archetype data model lives here, not there).
+// Fidelity rules mirror what the renderer did with the legacy field:
+//   · MASTER format: the STORED box is the authority (state wins on master).
+//   · Other formats: the archetype's own per-dim box — the (R2) cascade — but
+//     only while the archetype's frame type matches the stored type; otherwise
+//     the stored box clamps per-format exactly as clampBox did.
+// Runs exactly once (idempotent through migrateLegacyLayoutShape's guards);
+// card frames and already-migrated documents pass through untouched.
+function convertLegacyLayoutShape(document, { archetypeId = null, variant = 0, postType = "photo_logo" } = {}) {
+  const frame = document?.media?.frame;
+  if (!frame || (frame.type !== "shapeMask" && frame.type !== "petalMask")) return document;
+  if ((document.shapes || []).some(s => s && s.origin === "layout")) return migrateLegacyLayoutShape(document, null);
+  const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : "orchid-petal";
+  const ar = (DEFAULT_OVERLAYS.find(a => a.id === assetId)?.ratio) || 1;
+  const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
+  const byDim = {}; let masterT = null;
+  for (const d of DIMENSIONS) {
+    let box = frame.box;
+    if (d.id !== MASTER_DIM && arch) {
+      const md = materializeArchetypeLayout(arch, d.id, variant);
+      if (md?.photoFrame && md.photoFrame.type === frame.type && md.photoFrame.box) box = md.photoFrame.box;
+    }
+    if (!box) continue;
+    const t = layoutShapeTransformFor(d, postType, box, ar);
+    if (d.id === MASTER_DIM) masterT = t; else byDim[d.id] = t;
+  }
+  if (!masterT) return document;
+  return migrateLegacyLayoutShape(document, {
+    uid: "ol_layout_" + Math.random().toString(36).slice(2, 7),
+    assetId, mode: "frame", origin: "layout", master: masterT, byDim,
+  });
+}
 
 /* ── (format-flash fix) First-paint format resolution — SYNCHRONOUS ──────────
    Restoring the last-worked post is by design, but the restore effect (WP-W
@@ -7526,6 +7585,7 @@ function useProductWorkflows(workspace) {
     saveEditedAsNew,
   } = useTemplateManagement({
     designDocument,
+    convertLegacyLayoutShape,   // (§2.9.2 slice 3) legacy photoFrame → genuine layer at load
     imageSource: image,
     sessionId,
     dimensionId,
@@ -8829,30 +8889,13 @@ function useDesignPatchPipeline(workspace) {
       const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : "orchid-petal";
       const asset = DEFAULT_OVERLAYS.find(a => a.id === assetId);
       const ar = asset?.ratio || 1;
-      // Mirror of the render-side clampBox + aspect-lock (fraction space → px →
-      // transform), using the same per-format safe margins (fmt.safe for this postType).
-      const tFor = (dim, box) => {
-        const fmtD = formatLayoutFor(dim.id, pt);
-        const smD = fmtD.safe || { t: 0.08, b: 0.08, l: 0.08, r: 0.08 };
-        const minW = 0.05, minH = 0.03;
-        const bw2 = Math.max(minW, Math.min((box.w ?? 0.8), 1 - smD.l - smD.r));
-        const bh2 = Math.max(minH, Math.min((box.h ?? 0.2), 1 - smD.t - smD.b));
-        const x0 = Math.max(smD.l, Math.min(1 - smD.r - bw2, (box.x ?? smD.l)));
-        const y0 = Math.max(smD.t, Math.min(1 - smD.b - bh2, (box.y ?? smD.t)));
-        // px-space contain-fit to the shape's own aspect (B8 coherence).
-        const bpx = { x: x0 * dim.w, y: y0 * dim.h, w: bw2 * dim.w, h: bh2 * dim.h };
-        let mw = bpx.w, mh = mw / ar;
-        if (mh > bpx.h) { mh = bpx.h; mw = mh * ar; }
-        const cx = bpx.x + (bpx.w - mw) / 2 + mw / 2, cy = bpx.y + (bpx.h - mh) / 2 + mh / 2;
-        return { x: +(cx / dim.w).toFixed(5), y: +(cy / dim.h).toFixed(5), scale: +(mw / dim.w).toFixed(5), rotation: 0, opacity: 1 };
-      };
       const byDim = {};
       let masterT = null;
       for (const d of DIMENSIONS) {
         const md = d.id === MASTER_DIM ? m : materializeArchetypeLayout(arch, d.id, variant);
         const fb = md.photoFrame && md.photoFrame.box;
         if (!fb) continue;
-        const t = tFor(d, fb);
+        const t = layoutShapeTransformFor(d, pt, fb, ar);
         if (d.id === MASTER_DIM) masterT = t; else byDim[d.id] = t;
       }
       if (masterT) {

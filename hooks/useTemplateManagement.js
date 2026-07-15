@@ -17,6 +17,7 @@ const clonePlain = value => JSON.parse(JSON.stringify(value));
 /** Owns complete-design template serialization, restore, sync, edit, and removal. */
 export function useTemplateManagement({
   designDocument,
+  convertLegacyLayoutShape,
   imageSource,
   sessionId,
   dimensionId,
@@ -115,6 +116,19 @@ export function useTemplateManagement({
       restored = readPersistedDesignPayload(saved);
       migrated = restored.document;
       legacy = persistedDesignToLegacyView(saved);
+      // (§2.9.2 slice 3) Convert a legacy layout shape (media.frame shapeMask/
+      // petalMask) into the genuine frame-mode layer EXACTLY ONCE at load, with
+      // the archetype-exact per-format geometry (the converter lives beside the
+      // archetype data model in Generator.jsx). Idempotent — an already-migrated
+      // or frameless document passes through unchanged, so old sessions render
+      // identically and re-saves stay stable.
+      if (typeof convertLegacyLayoutShape === "function") {
+        migrated = convertLegacyLayoutShape(migrated, {
+          archetypeId: archetypeIds.includes(legacy.archetypeId) ? legacy.archetypeId : null,
+          variant: Number.isInteger(legacy.archVariant) ? legacy.archVariant : 0,
+          postType: legacy.postType || "photo_logo",
+        });
+      }
     } catch (error) {
       console.error("Cannot open design document", error);
       return;
@@ -157,9 +171,15 @@ export function useTemplateManagement({
           },
         });
         actions.setTypeLayoutsByDimension({});
+        // (§2.9.2) A fresh materialization EMITS the archetype's layout shape as a
+        // genuine layer — it must land here too, or a shape archetype's template
+        // would apply shapeless (photoFrame is {type:"none"} post-unification).
         actions.dispatchDesignCommand({
           type: "shapes/replace",
-          shapes: materialized.motifLayers || nextLayers.filter(layer => !layer.motif),
+          shapes: [
+            ...(materialized.motifLayers || nextLayers.filter(layer => !layer.motif)),
+            ...(materialized.layoutShapeLayer ? [materialized.layoutShapeLayer] : []),
+          ],
         });
       } else {
         actions.dispatchDesignCommand({ type: "shapes/replace", shapes: nextLayers });

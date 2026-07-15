@@ -94,3 +94,42 @@ test("a layout-origin frame layer survives persistence with origin/userTouched/b
   const twice=readPersistedDesignPayload(createPersistedDesignPayload(restored.document));
   assert.deepEqual(twice.document.shapes.find(s=>s.uid==="ol_layout_test1"),round);
 });
+
+// ── (§2.9.2 slice 3) legacy photoFrame → shape-layer migration adapter ───────
+import { migrateLegacyLayoutShape } from "../../lib/design-persistence.mjs";
+
+const legacyDoc=(frame,shapes=[])=>({content:{},media:{treatment:"none",frame},shapes});
+const CONVERTED={uid:"ol_layout_mig1",assetId:"orchid-petal",mode:"frame",origin:"layout",
+  master:{x:0.7,y:0.5,scale:0.4,rotation:0,opacity:1},byDim:{story:{x:0.7,y:0.4,scale:0.35,rotation:0,opacity:1}}};
+
+test("a legacy petalMask document migrates once into a genuine layout layer", () => {
+  const doc=legacyDoc({type:"petalMask",box:{x:0.6,y:0.3,w:0.3,h:0.4}});
+  const out=migrateLegacyLayoutShape(doc,CONVERTED);
+  assert.equal(out.media.frame.type,"none");
+  assert.equal(out.shapes.length,1);
+  assert.equal(out.shapes[0].origin,"layout");
+  assert.equal(out.shapes[0].mode,"frame");
+  assert.deepEqual(out.shapes[0].byDim,CONVERTED.byDim);
+  // idempotent: a second pass is a no-op (frame already none)
+  assert.equal(migrateLegacyLayoutShape(out,CONVERTED),out);
+});
+
+test("without a converter layer the legacy document passes through UNCHANGED (renders identically via the synthesized job)", () => {
+  const doc=legacyDoc({type:"shapeMask",shapeId:"shape-2",box:{x:0.5,y:0.3,w:0.4,h:0.5}});
+  assert.equal(migrateLegacyLayoutShape(doc,null),doc);
+});
+
+test("a document carrying BOTH forms normalizes to the layer form — the frame clears, no duplicate", () => {
+  const doc=legacyDoc({type:"petalMask",box:{x:0.6,y:0.3,w:0.3,h:0.4}},[{uid:"ol_layout_x",assetId:"orchid-petal",mode:"frame",origin:"layout",master:{x:0.5,y:0.5,scale:0.4}}]);
+  const out=migrateLegacyLayoutShape(doc,CONVERTED);
+  assert.equal(out.media.frame.type,"none");
+  assert.equal(out.shapes.length,1);            // the existing layer wins; nothing appended
+  assert.equal(out.shapes[0].uid,"ol_layout_x");
+});
+
+test("card frames and frameless documents are not layout shapes — untouched", () => {
+  const card=legacyDoc({type:"card",box:{x:0.5,y:0.3,w:0.4,h:0.4}});
+  assert.equal(migrateLegacyLayoutShape(card,CONVERTED),card);
+  const none=legacyDoc({type:"none"});
+  assert.equal(migrateLegacyLayoutShape(none,CONVERTED),none);
+});
