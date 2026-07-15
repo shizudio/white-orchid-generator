@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveScenePointerTarget } from "../../lib/editor-input-controller.mjs";
+import { resolveScenePointerTarget, pointerClearsSelection } from "../../lib/editor-input-controller.mjs";
 
 const bounds = (x, y, w, h) => ({ x, y, w, h });
 const scene = [
@@ -51,4 +51,22 @@ test("elements painted above the photo keep hit-order priority", () => {
 test("a click outside the painted photo falls through to background", () => {
   // Left column, below the hero copy — no element there.
   assert.equal(resolveScenePointerTarget(photoScene, 120, 400), null);
+});
+
+// The document click-outside-to-deselect contract. Since the refactor unified
+// inspector-open state into editorSelection, a pointerdown inside the inspector
+// panel (a flex sibling of the canvas shell) must NEVER clear the selection —
+// otherwise the panel closes the instant a user touches any control inside it.
+test("pointerdown inside the canvas shell never deselects", () => {
+  assert.equal(pointerClearsSelection({ withinCanvasShell: true, withinInspector: false }), false);
+});
+
+test("pointerdown inside the inspector panel never deselects (panel-close regression guard)", () => {
+  // Outside the shell but inside the inspector subtree — the exact click that
+  // used to unmount the panel mid-edit.
+  assert.equal(pointerClearsSelection({ withinCanvasShell: false, withinInspector: true }), false);
+});
+
+test("pointerdown on empty chrome / the canvas backdrop deselects", () => {
+  assert.equal(pointerClearsSelection({ withinCanvasShell: false, withinInspector: false }), true);
 });

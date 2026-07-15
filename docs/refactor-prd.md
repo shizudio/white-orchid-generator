@@ -620,6 +620,15 @@ painted = absent) into the advisor remedy flow. No stump is stored or painted.
 - Panel stability (client defect #3): the inspector stayed open across ~15 consecutive
   selections/edits with no glitch-off whenever the dev crash did not fire; the glitch is a
   manifestation of the dev-only error-boundary remount, not a separate panel-close bug.
+  **[CORRECTED 2026-07-15 — see §9.16.](this conclusion was wrong.)** There IS a genuine,
+  separate panel-close bug that reproduces in a clean production build: the document
+  click-outside-to-deselect handler failed to exclude the inspector's DOM subtree, so
+  clicking a control *inside* the panel (one that does not itself re-select — e.g. a colour
+  swatch, a size button, a text field) cleared the selection and unmounted the panel. The
+  "~15 consecutive selections stayed open" reading here was a false negative: those were
+  *selection/edit* actions that either land on the canvas or re-select via a rail chip
+  (which immediately re-opens the panel), so they masked the defect. §9.16 documents the
+  root cause, the production repro, and the fix.
 
 **Non-paid release gate battery (final tree, with the two fixes above):**
 - `npm run test:unit`: 49/49 pass.
@@ -697,3 +706,73 @@ same scope and routed correctly.
 **Not verified / held:** R8.5 resident sweep (paid — held for explicit client approval).
 No commit, push, or `git checkout/reset/stash` was performed — the R0–R8 refactor plus this
 fix remain uncommitted in the working tree for the orchestrator to commit after gates pass.
+
+### 9.16 Verification log — inspector panel closes on click-inside (client defect #3, real bug) (2026-07-15)
+
+Client re-reported after §9.14/§9.15 landed: "when I click on right panel, right panel still
+closes instead of editing elements." §9.14 had attributed the panel glitch to the dev-only
+Fast Refresh error-boundary remount (§9.14 "Panel stability") and did not patch it. **That
+conclusion was wrong** — this is a genuine, deterministic bug that reproduces in a clean
+production build. §9.14's paragraph is corrected in place.
+
+**Root cause — the click-outside-to-deselect handler does not exclude the inspector subtree
+(`hooks/useEditorGlobalEffects.js:17-23`, pre-fix).** The document-level capture-phase
+`pointerdown` listener deselects on any click that is not inside the canvas shell:
+`if (shell && !shell.contains(event.target)) { clearSelection(); … }`. The contextual
+inspector is a flex *sibling* of the canvas shell (`Generator.jsx` render tree, comment at
+the `{inspectorWorkspace}` mount), **not** a descendant — so a `pointerdown` on any control
+inside the panel satisfies `!shell.contains(target)` and fires `clearSelection()`
+(`dispatchEditorSelection({type:"clear"})`). Since the canonical-document refactor unified
+inspector-open state into the selection reducer —
+`inspectorEl = selectionInspectorKey(editorSelection)` (`Generator.jsx:5878`) — clearing the
+selection now sets `inspectorEl = null`, which unmounts the panel. Pre-refactor the same
+handler cleared three *canvas-highlight* flags only (`setTextSelected(false)`,
+`setPhotoSel(false)`, `setOverlayChromeVisible(false)` — see `0885cb9^:Generator.jsx:5195`)
+and did not touch inspector-open state, so the identical missing-exclusion bug was latent
+and harmless; the refactor's state unification is what made it fire.
+
+**Why the earlier dev-only diagnosis missed it.** (1) §9.14 tested panel stability with
+*selection/edit* actions, which either land on the canvas (inside the shell → no deselect)
+or re-select through a rail chip (its `onClick` re-selects on the same gesture, immediately
+re-opening the panel), both of which mask the defect. The controls that expose it are the
+ones that mutate the *current* element without changing selection — a colour swatch, a
+size button, a text field. (2) A real dev-only warning ("Cannot update a component (App)
+while rendering a different component") was co-present and plausibly swallowed the symptom.
+The two are unrelated: the panel-close is pure event-handler logic, independent of Fast
+Refresh, and reproduces in production.
+
+**Instrumented repro (live, harness mode on, `NEXT_PUBLIC_WO_TEST_HOOKS=1`).** A capture-phase
+`pointerdown` probe recorded, for a click on a Background colour swatch:
+`{ targetTag:"BUTTON", closestInspector:true, closestShell:false, inspectorInDoc:false }` —
+i.e. the target is inside the inspector subtree, outside the canvas shell, and the panel was
+already gone. In dev the unmount flushes synchronously during the discrete event (native
+listener → non-batched reducer dispatch); in the production build it flushes on the next
+tick (`openSameTick:true → openNextTick:false`) — same symptom, later flush.
+
+| Build (isolated dist) | Action: click a colour swatch **inside** the open Background panel | Panel |
+|---|---|---|
+| Dev (port 3000, pre-fix) | probe shows `closestInspector:true / closestShell:false`, `inspectorInDoc:false` | **closes** (bug) |
+| Prod `.next-panel-bug` (unfixed, port 3211) | `openBefore:true`, `openSameTick:true`, `openNextTick:**false**` | **closes** (bug reproduces in production — disproves §9.14) |
+| Dev (port 3000, post-fix) | 15 consecutive interactions: 4 bg swatches, rail→Photo/Caption/Shapes/Logo/Background, text-input focus+type, SIZE S/L, colour swatch, MORE OPTIONS | **stays open**; a title text-edit rendered "QA PANEL TEST TITLE" to canvas (edit applies) |
+| Prod `.next-panel-fix` (fixed, port 3211) | swatch → `openNextTick:true`; +3 more swatches + MORE OPTIONS | **stays open**; zero console errors |
+
+**Fix (at the cause).**
+- `lib/editor-input-controller.mjs` — new pure predicate `pointerClearsSelection({withinCanvasShell, withinInspector})`: a pointerdown deselects only when it is inside neither the canvas shell nor the inspector subtree. Placed alongside `resolveScenePointerTarget` (this file already owns "so canvas clicks, inspector selection … cannot drift apart").
+- `hooks/useEditorGlobalEffects.js` — the document `pointerdown` handler now computes
+  `withinInspector = target.closest(".wo-inspector")` and delegates the deselect decision to
+  `pointerClearsSelection`. Canvas-internal clicks and the mobile bottom-sheet backdrop
+  (`.wo-inspector-backdrop`, outside `.wo-inspector`, its own `onClick=closeInspector`) are
+  unchanged; the rail chips live inside `.wo-inspector` so they are covered too.
+- `scripts/tests/editor-input-controller.test.mjs` — 3 pure tests: inside-shell → no
+  deselect; inside-inspector (outside shell) → no deselect (the regression guard); empty
+  chrome/backdrop → deselect.
+
+**Gate battery.**
+- `npm run test:unit`: **55/55 pass** (52 prior + 3 new).
+- Isolated production build with the fix (`WO_DIST_DIR=.next-panel-fix next build`): exit 0,
+  "Compiled successfully".
+- No layout/paint path touched (event-handler exclusion + pure predicate), so the born-clean
+  battery does not apply.
+
+**Not verified / held:** R8.5 resident sweep (paid — held). No push. The fix is committed
+locally via `safe-commit.sh` with explicit pathspecs.

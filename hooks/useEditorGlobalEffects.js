@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { pointerClearsSelection } from "@/lib/editor-input-controller.mjs";
 
 /** Owns document/window listeners that dismiss editor chrome and navigate history. */
 export function useEditorGlobalEffects({
@@ -16,10 +17,16 @@ export function useEditorGlobalEffects({
   useEffect(() => {
     const onPointerDown = event => {
       const shell = canvasShellRef.current;
-      if (shell && !shell.contains(event.target)) {
-        actionsRef.current.clearSelection?.();
-        canvasRef.current?.blur();
-      }
+      if (!shell) return;
+      const target = event.target;
+      // The inspector is a flex sibling of the shell but edits the live selection;
+      // a pointerdown inside it must not deselect (which would unmount the panel
+      // mid-edit). Only true empty chrome / the canvas backdrop clears selection.
+      const withinCanvasShell = shell.contains(target);
+      const withinInspector = !!(target && target.closest && target.closest(".wo-inspector"));
+      if (!pointerClearsSelection({ withinCanvasShell, withinInspector })) return;
+      actionsRef.current.clearSelection?.();
+      canvasRef.current?.blur();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
