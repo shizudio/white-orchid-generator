@@ -321,6 +321,41 @@ have all been re-saved post-migration.
   pointer starts inside its own hit geometry. Selection state must never swallow the
   next click elsewhere on the canvas.
 
+### 2.11 Mobile inspector — the half-sheet (2026-07-15, client-ratified)
+
+The mobile inspector is NO LONGER a deferred non-goal (supersedes the §6 line
+that scoped mobile work to "chat under canvas", and supersedes §2.3's
+"right side, or floating near selection" shape note — that note is
+desktop-scoped). Ruling: the client approved Option A of the 2026-07-15 mobile
+audit ("approve the half-sheet"). The contract:
+
+- **Content-height half-sheet with detents.** The inspector is a bottom sheet
+  that hugs its content, capped at a **half detent (~45vh)** by default so the
+  canvas band above it stays visible. A **drag handle** promotes it to a
+  **tall detent (~78vh)** for the long Text inspector; dragging down from tall
+  returns to half, and down from half **dismisses** (the expected iOS sheet
+  gesture). The 44px ✕ close is retained. Safe-area bottom padding and
+  overscroll containment apply.
+- **Auto-scroll-to-selection.** On open, selection change, or detent change,
+  the page scrolls so the SELECTED element's canvas region sits in the visible
+  band above the sheet (the renderer's scene bounds drive the math). A recent
+  explicit user scroll suppresses the auto-scroll — the system never fights a
+  choice the user just made.
+- **The canvas band is LIVE.** No dimming backdrop over the band; tapping a
+  different element there re-selects it and the sheet content switches in
+  place (no dismiss-then-reopen). Tapping the bare canvas keeps the canvas's
+  own semantics (selects the background — background is an element). Tapping
+  outside the canvas and sheet dismisses.
+- **Floating undo.** While the sheet is open, a 44px undo/redo pair floats in
+  the canvas band just above the sheet (safe-area aware, auto-flipped away
+  from the selected element) — restoring §2.7's "always-available undo" on
+  mobile. Same stacks as the strip buttons; one drag = one undo unchanged.
+
+Desktop is untouched by all of this: ≥761px the inspector remains the in-flow
+sticky column of §2.3 and the sheet/handle/floating-undo chrome does not
+render. Open (deferred, needs its own ruling): keeping the canvas in view
+during CHAT-driven edits (audit #9) — the one-long-scroll flow.
+
 ## 3. The "add what doesn't exist" problem (vocabulary-free)
 
 A selection-only inspector can't add absent elements, and staff don't know the
@@ -362,5 +397,7 @@ do not implement inspector controls as direct state mutations.
 
 - No fallback tool drawer.
 - No re-introduction of any always-visible per-element controls.
-- Mobile parity is required but mobile-specific redesign beyond "chat under
-  canvas" is out of scope for WP-V.
+- ~~Mobile parity is required but mobile-specific redesign beyond "chat under
+  canvas" is out of scope for WP-V.~~ **Superseded 2026-07-15:** the mobile
+  inspector is now governed by the ratified half-sheet contract (§2.11). Still
+  open: the chat-flow question (§2.11 last paragraph).
