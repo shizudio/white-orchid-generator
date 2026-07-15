@@ -1000,7 +1000,10 @@ canvas[role="application"]:focus-visible {
     right: 12px;
     bottom: auto;
     width: calc(100vw - 24px);
-    max-height: calc(100vh - 98px);
+    /* (Mobile audit #, 100vh sweep) dvh tracks the DYNAMIC iOS viewport so this
+       cap shrinks when Safari's toolbar is shown — 100vh (large viewport) would
+       let the panel run under the toolbar. Only ever reduces the cap → safe. */
+    max-height: calc(100dvh - 98px);
     padding: 20px;
   }
 
@@ -1011,7 +1014,7 @@ canvas[role="application"]:focus-visible {
 
   .mj-launcher-panel {
     width: calc(100vw - 24px);
-    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);   /* dvh: same iOS dynamic-toolbar safety */
     padding: 20px;
   }
 
@@ -1468,8 +1471,11 @@ canvas[role="application"]:focus-visible {
    constant strip-Y). Tall formats (Square/Portrait/Story) all render at the full
    reserved height, so the strip Y is constant among the common formats. clamp()
    floor 240 keeps very short laptops usable; ceil 720 caps huge external monitors.
-   Desktop-only (>=768px) so it never overrides the mobile sticky-preview cap
-   (min(27vh,178px)) defined in the max-width:767px block. */
+   Desktop-only (>=768px) so it never overrides the MOBILE-FIRST HERO CANVAS model
+   in the max-width:767px block — where the canvas is a STATIC full-width hero whose
+   height derives from its aspect ratio (see .generator-preview-panel around line
+   1027), NOT a sticky-preview cap. (Comment corrected — mobile audit 2026-07-15 #20;
+   the old text described a `min(27vh,178px)` sticky cap that no longer exists.) */
 @media (min-width: 768px) {
   .generator-preview-panel {
     --generator-preview-height: clamp(240px, calc(100vh - 380px), 720px);
@@ -1884,7 +1890,9 @@ canvas[role="application"]:focus-visible {
     min-width: 0;
     align-self: auto;
     width: 100%;
-    max-width: 100%;
+    max-width: 100vw;         /* (#7) hard-clamp to the visual viewport */
+    box-sizing: border-box;   /* (#7) so children never push the sheet wider */
+    overflow-x: hidden;       /* (#7) belt-and-braces against a stray wide child */
     max-height: 72vh;
     height: 72vh;
     border: 1px solid var(--line);
@@ -1893,11 +1901,23 @@ canvas[role="application"]:focus-visible {
     z-index: 362;              /* above the FAB (360) so it isn't obscured */
     animation: wo-sheet-up 220ms cubic-bezier(.22,1,.36,1);
   }
+  /* (#6) Bottom safe-area: without this the last controls (SIZE pills, colour
+     swatches) sit under the home indicator on notched iPhones. The body is the
+     scrolling region (inline padding "14px 15px 18px"), so !important is needed
+     to extend ITS bottom pad past the inline shorthand. (#11) overscroll:contain
+     stops an over-scroll of the sheet from chaining/rubber-banding the page. */
+  .wo-inspector-dock .wo-inspector-body {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+    overscroll-behavior: contain;
+  }
   .wo-inspector-backdrop {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(37, 45, 40, 0.42);
+    /* (#13) Lowered from 0.42 → 0.20 so the ~40% canvas peek above the sheet is
+       barely dimmed (you must SEE the edit you just made). A faint scrim is kept
+       so the sheet's rounded top corners still read as a dismissable overlay. */
+    background: rgba(37, 45, 40, 0.20);
     z-index: 361;
   }
 }
@@ -1914,5 +1934,110 @@ canvas[role="application"]:focus-visible {
   .wo-tpl-act {
     min-height: 44px;
     min-width: 44px;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE AUDIT 2026-07-15 — quick-win batch (mobile-scoped; desktop untouched).
+   All rules live behind max-width:760px so the tuned desktop layout is
+   pixel-identical. Findings referenced by their audit number.
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 760px) {
+  /* (#3) Every editable input ≥16px so iOS Safari never auto-zooms the page on
+     focus. Desktop keeps its tighter 12–14px typography (this block is mobile
+     only). The chat composer + inline feedback note are styled in CSS here; the
+     inline-styled inspector/content fields carry the .wo-mfield class below. */
+  .ad-input-row textarea,
+  .ad-fb-note input {
+    font-size: 16px;
+  }
+  .wo-mfield {
+    font-size: 16px !important;   /* beats the components' inline fontSize:14 */
+  }
+
+  /* (#12) SIZE S/M/L pills and sibling small inspector pills → 44px tap floor.
+     The VISUAL box stays compact; min-height pads only the hit area. */
+  .wo-ins-pill {
+    min-height: 44px !important;   /* beats inline minHeight:30 on element chips */
+  }
+
+  /* (#10) Inspector close ✕ → 44×44 hit area, pulled in from the extreme edge so
+     it can't clip on ≤392px devices. */
+  .wo-ins-close {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  /* (#16) Landing suggestion chips → 44px tap floor (visual padding unchanged). */
+  .wo-landing-chip {
+    min-height: 44px;
+  }
+
+  /* (#15) Templates gallery → a single column on mobile so cards + REMOVE/EDIT
+     actions never clip off the right edge of the bottom-sheet. */
+  .wo-tpl-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* (#17) Export sheet: give "Just this one" (the common single-post path) equal
+     prominence to "Download all N" — promote it to a filled burnham button on
+     mobile. The all-formats path is retained (audit: do not remove it). */
+  .wo-export-one {
+    background: var(--tw-burnham) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+    font-size: 13px !important;
+    padding: 13px 40px !important;
+  }
+}
+
+/* (#14) Top nav collapses its text links into a compact menu below 560px so
+   nothing clips. The hamburger + dropdown are hidden on wider screens (desktop
+   unchanged). Only the text links (.app-nav-link) collapse — the QuickGuide "?"
+   trigger stays inline and visible. */
+.app-nav-menu-btn { display: none; }
+.app-nav-menu { display: none; }
+@media (max-width: 560px) {
+  .app-nav-links .app-nav-link { display: none !important; }
+  .app-nav-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px; height: 44px;
+    border: 1px solid var(--line-on-deep);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--fg-on-deep);
+    font-size: 20px;
+    cursor: pointer;
+  }
+  .app-nav-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 64px; right: 12px;
+    min-width: 200px;
+    background: var(--bg-deep);
+    border: 1px solid var(--line-on-deep);
+    border-radius: 12px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+    padding: 8px;
+    z-index: 120;
+  }
+  .app-nav-menu a,
+  .app-nav-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 12px;
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--fg-on-deep);
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    text-decoration: none;
   }
 }
