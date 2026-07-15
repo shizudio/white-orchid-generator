@@ -25,6 +25,7 @@ import { migrateDesignDocument } from "@/lib/design-document.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
 import { createRenderModel, resolveRenderDimension } from "@/lib/render-model.mjs";
 import { createRenderResult, shapeBounds } from "@/lib/render-result.mjs";
+import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
 import { useFormatPreviewQueue } from "@/hooks/useFormatPreviewQueue";
 import { useEditorScale } from "@/hooks/useEditorScale";
 import { useDesignPersistence } from "@/hooks/useDesignPersistence";
@@ -4120,7 +4121,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           const bpad=Math.max(2,0.01*Math.min(w,h));
           ctx.fillStyle=(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke); rr(c.x-bpad,c.y-bpad,c.w+bpad*2,c.h+bpad*2,r+bpad); ctx.fill();
           ctx.save(); rr(c.x,c.y,c.w,c.h,r); ctx.clip();
-          if(mediaObj){ const _e=effImgTFor(c.w,c.h,true); ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,_e); ctx.restore();
+          if(mediaObj){ const _sd=srcDims(mediaObj); const _e=coverClampT(_sd.iw,_sd.ih,c.w,c.h,effImgTFor(c.w,c.h,true)); ctx.save(); ctx.translate(c.x,c.y); drawPhotoFramed(ctx,mediaObj,c.w,c.h,_e); ctx.restore();
             treatOf(mat.photoTreatment)(ctx,c.x,c.y,c.w,c.h);
             _recPhotoWin(c,"card",true,_e);
           }else{ ctx.fillStyle=withAlpha(B.celadon,1); ctx.fillRect(c.x,c.y,c.w,c.h); }
@@ -4191,7 +4192,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             octx.save();
             drawSil(octx);
             octx.globalCompositeOperation="source-in";
-            const _eM=effImgTFor(m.w,m.h,true);
+            const _sdM=srcDims(mediaObj);
+            // (§2.9.2 cover invariant) COVER-CLAMP the window transform so the photo
+            // always fully covers the silhouette — a sub-cover user zoom-out (control
+            // floors at 0.1) or a rotated pan can otherwise leave backing (field /
+            // card pad / older silhouette) showing inside the shape (client 2026-07-15).
+            const _eM=coverClampT(_sdM.iw,_sdM.ih,m.w,m.h,effImgTFor(m.w,m.h,true));
             octx.save(); octx.beginPath(); octx.rect(m.x,m.y,m.w,m.h); octx.clip(); octx.translate(m.x,m.y);
             drawPhotoFramed(octx,mediaObj,m.w,m.h,_eM); octx.restore();
             octx.globalCompositeOperation="source-over";
@@ -5505,6 +5511,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
               // larger petal outline" bug B8 fixed — assert it stays fixed.
               const tol=0.015*Math.min(w,h);
               return (Math.abs(fb.x-pw.x)>tol||Math.abs(fb.y-pw.y)>tol||Math.abs(fb.w-pw.w)>tol||Math.abs(fb.h-pw.h)>tol)?1:0;
+            })(),
+            frameUncovered:(()=>{              // (§2.9.2 cover invariant) the frame photo must FULLY COVER its window
+              const fb=cardBox||maskBox||null;  // no backing (field / card pad / older silhouette) inside the shape
+              const pw=_photoWin;
+              if(!fb||!pw||!pw.eff||!mediaObj) return 0;
+              const sd=srcDims(mediaObj);
+              return coversFrameBox(sd.iw,sd.ih,fb.w,fb.h,pw.eff)?0:1;  // 0 by construction (paint cover-clamps)
             })(),
             logoPhotoContrast: auditLogo.overPhoto ? auditLogo.photoContrast : null,
             _diag:{ logoHit:_logoHit, hero:heroDrawn, sup:supDrawn, label:labelDrawn, logo:logoBx||null,
@@ -9301,6 +9314,15 @@ function useDesignPatchPipeline(workspace) {
         // (M3). Fresh generations stay on the auto-fit default (photoTouchedByDim empty
         // until the first reframe → born-clean). Idempotent within a gesture.
         pinPhotoTouched((photoWindowRef.current && photoWindowRef.current.eff) || photoT);
+        // (§2.9.2 cover invariant — gesture-level cover-clamp) When the photo is held by
+        // a FRAME shape (mask/card window), a reframe must never zoom BELOW cover: the
+        // zoom control floors at 0.1, and a sub-cover zoom exposes backing inside the
+        // silhouette (client 2026-07-15). Standard crop UIs floor the gesture at cover;
+        // do the same so the STORED transform matches what the cover-clamped painter
+        // draws (render-truth honesty). Full-bleed/split windows are NOT frames — their
+        // intentional zoom-out (field-as-mat) is untouched.
+        const _pwKind = photoWindowRef.current && photoWindowRef.current.kind;
+        if ((_pwKind === "mask" || _pwKind === "card") && typeof t.zoom === "number") t.zoom = Math.max(1, t.zoom);
         setPhotoT(prev => ({ ...prev, ...t })); applied.push("photoTransform");
       }
     }
