@@ -3,8 +3,8 @@
 **Status:** Active  
 **Started:** 2026-07-14  
 **Migration style:** Incremental, behaviour-preserving vertical slices  
-**Current checkpoint:** `R8.5 - Resident release verification (paid — held for client approval)`  
-**Last completed checkpoint:** `R1.6 - Interactive role-selection and keyboard-movement verification`
+**Current checkpoint:** `Refactor complete — R8.5 resident release gate PASSED (2026-07-15)`  
+**Last completed checkpoint:** `R8.5 - Resident release verification (paid smoke sweep — gate PASS, no NEW regressions)`
 
 This document is the source of truth for the editor refactor. Every implementation
 session must update the two checkpoint lines above and tick completed work below. If a
@@ -267,7 +267,7 @@ stays responsive during preview and audit work.
 - [x] **R8.2** Gate all development hooks from production.
 - [x] **R8.3** Reconcile or archive superseded architecture documents.
 - [x] **R8.4** Update the resident tester to current semantic surfaces.
-- [ ] **R8.5** Run the full resident test and compare against the pre-refactor baseline.
+- [x] **R8.5** Run the full resident test and compare against the pre-refactor baseline.
 - [x] **R8.6** Stage rollout with saved-design migration telemetry and rollback support.
 
 ## 7. Test strategy
@@ -832,3 +832,113 @@ behaviour unchanged. `npm run test:unit`: **56/56 pass**.
 
 Production: isolated build with the fix (`WO_DIST_DIR=.next-shapepill next build`) — Shapes
 chip opens the Shapes home (see build/verify notes in this entry's commit).
+
+### 9.18 Verification log — R8.5 resident release gate (paid smoke sweep) (2026-07-15)
+
+**GATE VERDICT: PASS.** Rule applied: a NEW regression is any journey/oracle that PASSED
+in the pre-refactor 2026-07-14 baseline and FAILS now. **None exists.** Every difference
+vs baseline is either a fix or a pre-existing (equal-or-improved) failure, so the R8.5 gate
+passes and the checklist item is ticked. The sweep certified this exact tree (local `main`
+at `5de2440`, 3 commits ahead of origin: `0885cb9` R0–R8 + `90ee24c` + `5de2440`).
+
+**Run setup (matches the operating manual's Money rules — zero credits by construction).**
+Isolated production build `WO_DIST_DIR=.next-r85 NEXT_PUBLIC_WO_TEST_HOOKS=1 next build` —
+exit 0, "Compiled successfully", 24/24 static pages, `/generate` present; the `__woReadyCheck`
+oracle string is present in the prod bundle (test hooks compiled in, so the tester's oracles
+survive the prod build — see the gating note below). Sweep: `WO_DIST_DIR=.next-r85 node
+scripts/resident-tester/run.js` (SMOKE, `realPhotos:0`) on port 3200. Photo generation fully
+mocked: the server launched with the Higgsfield keys unset AND the browser hard-blocks
+`platform.higgsfield.ai`. **Safety verified from the run's own `verify` record:**
+`higgsfieldCalls:0` (nothing even attempted the host — zero BLOCKED-higgsfield notes, zero
+Higgsfield references in `server.log`), `newSessionIds:[]` (cloud sessions 60→60 unchanged),
+41 cloud writes intercepted+discarded, 0 real photos. **Actual spend:** 34 assistant calls,
+tester's conservative estimate **$0.68** (34 × $0.02); real gpt-4o-mini cost ≈ $0.01–0.02 —
+well within the ~$3 approval. One full pass, no retry loops. Wall clock 3.9 min. Report:
+`docs/resident-tester/smoke-report-2026-07-15.md`; artifacts under
+`scripts/resident-tester/runs/2026-07-15T03-00-09/`.
+
+**Headline counters vs baseline (the PRD §9.13 mandate — compare counters, not just pass rate):**
+
+| Counter | Baseline 2026-07-14 | New 2026-07-15 | Δ |
+|---|---|---|---|
+| Everyday journeys passed | 6 / 10 | **8 / 10** | +2 |
+| Fuzz utterances | 31 | 31 | — |
+| Fuzz utterances flagged | 13 | **8** | −5 |
+| Total quality flags | 16 | **11** | −5 |
+| Distinct issue types | 5 | **2** | −3 |
+| Higgsfield / real photos | 0 / 0 | 0 / 0 | — |
+
+**Journey-by-journey / oracle-by-oracle comparison (classification per the dispatch):**
+
+| Journey / oracle | Baseline | New | Classification |
+|---|---|---|---|
+| landing→generate | ✅ | ✅ | unchanged pass |
+| born-clean after generate (live) | ✅ | ✅ | unchanged pass |
+| chat edit (wisteria) | ✅ | ✅ | unchanged pass |
+| canvas click → inspector | ✅ | ✅ | unchanged pass |
+| every element clickable (dead-click hit-test) | ⚠️ 3 dead roles (eyebrow/hero/support) | ✅ all clickable | **FIXED** (per-element hit targets, §9.14/§9.15) |
+| + Add caption renders | ⚠️ no render delta | ✅ caption landed via chip | **FIXED** |
+| Posts/History present | ✅ | ✅ | unchanged pass |
+| undo reverts | ✅ | ✅ | unchanged pass |
+| format switch ×N | ⚠️ **0 formats detected** | ⚠️ strip-Y jump on wide formats | still-failing (pre-existing) — see note A |
+| Export → Ready checklist | ⚠️ export menu did not open | ⚠️ export menu did not open | still-failing (pre-existing) — see note B |
+| fuzz: claim-vs-changed (silent false claim) | 2 (date; mauve) | **0** | **FIXED** (renderTruth honesty) |
+| fuzz: honesty walk-back | 2 (too much green; title bigger) | **0** | **FIXED** — both now apply a real change |
+| fuzz: born-clean (contrast/thumb-legibility, wide formats) | 10 | **8** | still-failing (pre-existing), improved −2 |
+
+No oracle went PASS→FAIL; the only fuzz issue type that survives is born-clean, which is
+the SAME pre-existing category (contrast-fail / thumb-legibility on twitter/facebook/banner),
+reduced 10→8. The two trust-critical fuzz classes the refactor targeted — silent false
+claims and honesty walk-backs — dropped to **zero**.
+
+**Note A — format-switch strip-Y jump is pre-existing in-flow layout, NOT a refactor
+regression, and NOT a NEW regression vs baseline.** The baseline flagged this journey for a
+DIFFERENT reason: `.generator-format-strip button[aria-pressed]` matched nothing, so it
+switched **0 formats** and the strip-Y-stable oracle never ran. On this tree the strip is
+exercised and the oracle now fires: switching to the wide/short formats moves the strip's top
+(Twitter −59px, Facebook −89px, Banner −247px vs a 737 baseline). Root cause is inherent
+layout, not the refactor: `.generator-format-strip` is an **in-flow** element
+(`style={{width:"100%",maxWidth:820,marginTop:18}}`) that sits BELOW the canvas and reflows
+upward when the canvas shrinks for a wide aspect ratio. `git show 0885cb9^:components/Generator.jsx`
+shows the strip markup is **byte-identical** pre-refactor — the same in-flow `marginTop:18`
+container — so the behavior predates the refactor; the baseline simply couldn't reach it.
+Because the journey was RED in the baseline and is RED now, it is **still-failing (pre-existing)**,
+not a pass→fail regression. The `strip-y-stable` oracle assumes a fixed toolbar; the actual
+surface is an in-flow "every format" preview grid, so this is best read as an oracle/contract
+mismatch. NOT patched this dispatch (an oracle-semantics judgment, not a renamed selector;
+the operating-manual bar for a tester change — headful re-run + sabotage-proof — was not met).
+
+**Note B — Export "menu did not open" is a pre-existing tester-harness/flow limitation,
+identical to the baseline, NOT a refactor regression.** The `.wo-export-cta` button exists
+with the correct class and visible text "Export ▸" (`Generator.jsx:8265`) and IS in the
+tester's `openGlobalControl` selector set, and the popover contains the readiness checklist.
+The scripted J6(Posts)→J7(Export) sequence fails to open it in the headless 1440×900 sandbox
+(below-canvas CTA; this run J6 opened a 122-tile Posts gallery where the baseline had none).
+The failure string is byte-identical to the baseline, so it is stable and pre-refactor. NOT a
+renamed-selector case, so not trivially fixable in the tester; reported as a future
+tester-harness improvement, not patched.
+
+**Test-hook gating (the prior agent's flag — "prod builds don't expose `__wo*` despite
+NEXT_PUBLIC_WO_TEST_HOOKS=1").** Partly true but harmless for the sweep. The **oracle** hooks
+the smoke tester actually reads — `__woReadyCheck` (`Generator.jsx`, gated on `TEST_HOOKS`),
+`__woTruth`/`__woRoleBounds` (`useVerificationDrivers`, gated on `testHooks`), and
+`__woBornCleanGuard` (`useRenderVerificationBoards`, gated on `testHooks`) — DO survive a
+`NEXT_PUBLIC_WO_TEST_HOOKS=1` prod build and were present this run. Only the **dev-only
+drivers** (`__woSelectElement`, `__woApplyPatch`, `__woUndo`, `__woSetArchetype`, …) are gated
+on `devHooks = NODE_ENV!=="production"` and are correctly absent from any prod build. The
+smoke journeys drive the UI with **real pointer clicks**, not those drivers, so they do not
+depend on them (the dev-gated drivers were the R1.6 interactive-verification path in §9.14–17,
+run against the dev tree). The documented tester target — build with `NEXT_PUBLIC_WO_TEST_HOOKS=1`,
+which `package.json test:resident` does — is correct; nothing needed changing to get the sweep
+running.
+
+**Gate battery (final tree).**
+- `npm run test:unit`: **56/56 pass**.
+- Isolated production build (`WO_DIST_DIR=.next-r85 NEXT_PUBLIC_WO_TEST_HOOKS=1 next build`):
+  exit 0, "Compiled successfully", 24/24 static pages, `/generate` present.
+- Resident smoke sweep: 8/10 journeys, 11 flags / 2 issue types, 0 credits, 0 cloud writes,
+  ~$0.68 est spend — **no NEW regressions vs baseline → gate PASS**.
+
+**Not done (by direction):** no push (local `main` stays 3 ahead of origin); no nightly probe;
+no real-photo generation; the two still-failing journeys (format strip-Y oracle mismatch,
+Export harness flow) are reported for follow-up, not patched.
