@@ -43,6 +43,13 @@ export function useCanvasGestures({
   const [dragLift, setDragLift] = useState(null);
   const dragLiftRef = useRef(null);
   dragLiftRef.current = dragLift;
+  // (Mobile audit #8) Two-finger pinch-to-zoom for the photo on touch. We track
+  // every active pointer; a second concurrent pointer over a photo starts a pinch
+  // that drives the SAME `patchPhoto({zoom})` path the inspector slider + resize
+  // handle use — so the cover-clamp in Generator.applyPatch (mask/card frames floor
+  // zoom at 1) applies identically and a pinch-OUT can never expose backing.
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
 
   const canPan = !!mediaObject;
   const clearSnapGuide = () => {
@@ -183,9 +190,33 @@ export function useCanvasGestures({
     return Math.abs(rotatedX) <= handles.halfWidth && Math.abs(rotatedY) <= handles.halfHeight;
   };
 
+  const pinchDistance = () => {
+    const pts = [...pointersRef.current.values()];
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  };
+  const currentPhotoZoom = () =>
+    (photoWindowRef.current && photoWindowRef.current.eff && typeof photoWindowRef.current.eff.zoom === "number"
+      ? photoWindowRef.current.eff.zoom
+      : (photoTransform && typeof photoTransform.zoom === "number" ? photoTransform.zoom : 1)) || 1;
+
   const onPointerDown = event => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    // A second finger over a photo promotes the gesture to a pinch: abandon any
+    // single-pointer drag the first finger started and seed the zoom baseline.
+    if (pointersRef.current.size >= 2 && canPan) {
+      const startDist = pinchDistance();
+      if (startDist > 0) {
+        dragRef.current = null;
+        clearSnapGuide();
+        clearDragLift();
+        pinchRef.current = { startDist, startZoom: currentPhotoZoom() };
+        try { canvas.setPointerCapture(event.pointerId); } catch {}
+        return;
+      }
+    }
     if (devHooks && typeof performance !== "undefined") performance.mark("wo-editor-gesture-start");
     const rect = canvas.getBoundingClientRect();
     const x = (event.clientX - rect.left) * width / rect.width;
@@ -355,6 +386,19 @@ export function useCanvasGestures({
   };
 
   const onPointerMove = event => {
+    if (pointersRef.current.has(event.pointerId)) {
+      pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    // (Mobile audit #8) Pinch takes precedence over any single-pointer drag.
+    if (pinchRef.current && pointersRef.current.size >= 2) {
+      const dist = pinchDistance();
+      if (dist > 0) {
+        let zoom = pinchRef.current.startZoom * (dist / pinchRef.current.startDist);
+        zoom = Math.max(0.1, Math.min(6, zoom)); // Generator.applyPatch floors frames at cover
+        patchPhoto({ zoom: Math.round(zoom * 1000) / 1000 });
+      }
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.mode === "text") {
@@ -478,7 +522,18 @@ export function useCanvasGestures({
     }
   };
 
-  const onPointerEnd = () => {
+  const onPointerEnd = event => {
+    if (event && typeof event.pointerId !== "undefined") pointersRef.current.delete(event.pointerId);
+    // (Mobile audit #8) End the pinch when a finger lifts. The remaining finger has
+    // no dragRef (cleared on pinch start), so it can't spuriously become a drag —
+    // it will simply do nothing until it too lifts.
+    if (pinchRef.current && pointersRef.current.size < 2) {
+      pinchRef.current = null;
+      clearSnapGuide();
+      clearDragLift();
+      dragRef.current = null;
+      return;
+    }
     const drag = dragRef.current;
     if (drag?.mode === "text" && !drag.moved && Date.now() - drag.downTime <= 300 &&
       !(drag.role || "").startsWith("furn_")) {

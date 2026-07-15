@@ -8288,8 +8288,15 @@ function EditorShell({ workspace }) {
               100vh, the panel never overflows, so no flex-shrink ever fights the
               frame — the hug is deterministic. The strip's Y is constant among the
               tall formats and shifts up modestly for wide formats (accepted). */}
+          {/* (Mobile audit #8) touch-action is SCOPED to the active-editing state.
+              With nothing selected, `pan-y` lets a plain finger-drag on the big hero
+              canvas SCROLL THE PAGE (previously `touch-action:none` dead-locked page
+              scroll — the audit's finger-trap). Once an element is selected the user
+              is manipulating it, so we switch to `none` to enable drag + the two-finger
+              photo pinch. Desktop is mouse-driven — touch-action never affects it, so
+              this is pixel-identical on desktop. */}
           <div ref={previewRef} className="generator-preview-frame"
-            style={{width:"100%",maxWidth:820,height:"auto",display:"flex",justifyContent:"center",alignItems:"center",touchAction:"none"}}>
+            style={{width:"100%",maxWidth:820,height:"auto",display:"flex",justifyContent:"center",alignItems:"center",touchAction:(photoSel||textSelected||selOverlay)?"none":"pan-y"}}>
             <div className="generator-canvas-shell" ref={canvasShellRef}
               data-selected-scene-id={selectedSceneId || undefined} style={{
               position:"relative", maxWidth:"100%", maxHeight:"100%",
@@ -8298,7 +8305,7 @@ function EditorShell({ workspace }) {
             }}>
               <EditorCanvas canvasRef={canvasRef} width={W} height={H} scale={editorScale} accent={B.tangerine}
                 input={{onPointerDown:onPanStart,onPointerMove:onPanMove,onPointerUp:onPanEnd,onPointerCancel:onPanEnd,onKeyDown:onCanvasKeyDown}}
-                canvasStyle={{position:"absolute",inset:0,width:"100%",height:"100%",display:"block",borderRadius:8,boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:canPan?(dragRef.current?"grabbing":"grab"):"default",touchAction:"none"}}
+                canvasStyle={{position:"absolute",inset:0,width:"100%",height:"100%",display:"block",borderRadius:8,boxShadow:"0 4px 30px rgba(43,80,64,0.10)",background:B.whiteSmoke,cursor:canPan?(dragRef.current?"grabbing":"grab"):"default",touchAction:(photoSel||textSelected||selOverlay)?"none":"pan-y"}}
                 photo={photoSel && !selOverlay && selectedRenderedElement?.type==="photo"
                   ? {cx:selectedRenderedElement.bounds.x+selectedRenderedElement.bounds.w/2,cy:selectedRenderedElement.bounds.y+selectedRenderedElement.bounds.h/2,dw:selectedRenderedElement.bounds.w,dh:selectedRenderedElement.bounds.h,rot:photoT.rotation||0}
                   : null}
@@ -9790,7 +9797,7 @@ function InspectorWorkspace({ workspace }) {
             <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Size</span>
             <div style={{display:"flex",gap:5,flex:1}}>
               {[{id:"s",label:"S"},{id:"m",label:"M"},{id:"l",label:"L"}].map(step=>{const on=simple===step.id;return (
-                <button key={step.id} onClick={()=>setFontSize(primaryRole,step.id)} aria-pressed={on} title={`Text ${step.label}`}
+                <button key={step.id} className="wo-ins-pill" onClick={()=>setFontSize(primaryRole,step.id)} aria-pressed={on} title={`Text ${step.label}`}
                   style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
               );})}
             </div>
