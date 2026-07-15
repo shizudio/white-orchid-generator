@@ -1541,30 +1541,49 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     let bandHandled = false;
 
     // 0. BAND / SCRIM REMOVAL — "remove the text band", "get rid of the strip
-    //    behind the words", "hide the scrim". On a full-bleed photo the legibility
-    //    band is controlled ONLY by backdropMode; the correct patch is
-    //    backdropMode:'none' (drop to shadow-only). The band is load-bearing — auto
-    //    only paints it once the ladder's lighter remedies (ink flip → weight → face
-    //    → size) already fell short of AA over this photo — so we name that tradeoff
-    //    and offer the REAL band-free remedies (a calmer layout, shorter copy), one
-    //    honest reply, never a fabricated "changed the layout" claim (M4 honesty).
+    //    behind the words", "hide the scrim". (Client ruling 2026-07-16) The correct
+    //    remedy is a REAL layout switch to an archetype that's band-free BY
+    //    CONSTRUCTION (its photo is bounded to a card/split/mask, so the reflow engine
+    //    guarantees text never sits on raw photo — no band mechanism ever engages
+    //    there, whatever the content), not a config toggle — so the changed-field tag
+    //    and the client's render-truth check both reflect an ACTUAL archetype change.
+    //    When no band-free layout fits the current copy (never silently drop
+    //    content), fall back to the honest tradeoff: band off, name why, offer the
+    //    real remedies. Exactly one reply either way — never a fabricated claim
+    //    followed by a contradiction (M4 honesty).
     {
       const bd = detectBandRemoval(lastUserText, designState);
       if (bd) {
         bandHandled = true;
-        if (bd.present) {
+        const LAYOUT_NICE = {
+          editorial_split: 'a photo-and-text split — your words move onto a solid panel beside the photo',
+          shape_cutout: 'a shape-cutout layout — the photo shows through a brand shape, with your words on the solid canvas below it',
+          portrait_credential: 'a portrait layout — your words sit on a solid panel beside the photo',
+        };
+        if (bd.present && bd.targetArchetype) {
+          patch.archetypeId = bd.targetArchetype;
+          beltReply = `Switched to ${LAYOUT_NICE[bd.targetArchetype] || 'a layout without a band'} — legible without needing a band behind the text. Tap Undo to go back.`;
+          // Only the layout changes — strip any copy/backdrop field the model
+          // hallucinated alongside (the specimen falsely tagged "changed: headline").
+          for (const f of ['headline', 'subtext', 'attribution', 'dateText', 'microLabel', 'pillText', 'backdropMode']) {
+            if (f in patch) delete patch[f];
+          }
+        } else if (bd.present) {
+          // No band-free layout fits this copy — never force a switch that would
+          // overflow or silently drop content. Honest tradeoff instead (a real,
+          // named change: the band drops to shadow-only).
           patch.backdropMode = 'none';
-          beltReply = 'Dropped the band behind the text — the words now sit straight on the photo with a soft shadow. If they read hard against this photo, tap the “Try another layout” chip for one with a calm text area, or shorten the copy. Tap Undo to bring the band back.';
+          beltReply = 'Your copy is a bit long for a band-free layout to hold it legibly, so I can’t switch away from the band without risking it becoming unreadable. I’ve dropped the band to shadow-only for now. Tap the “Try another layout” chip, or shorten the copy and ask again.';
+          for (const f of ['headline', 'subtext', 'attribution', 'dateText', 'microLabel', 'pillText', 'archetypeId']) {
+            if (f in patch) delete patch[f];
+          }
         } else {
-          // Already shadow-only — no band to remove. Honest, and the word "already"
-          // suppresses the client's no-op apology for this genuinely empty patch.
-          beltReply = 'There is no band to remove here — the text already sits straight on the photo, kept legible by its colour and weight. If it still reads hard, tap the “Try another layout” chip for a design with a solid text area, or shorten the copy.';
-        }
-        // A band ask never edits copy or swaps layout — strip any such field the
-        // model hallucinated (the specimen falsely tagged "changed: headline") so
-        // the patch is exactly the backdrop change (clean tag, one honest reply).
-        for (const f of ['headline', 'subtext', 'attribution', 'dateText', 'microLabel', 'pillText', 'archetypeId']) {
-          if (f in patch) delete patch[f];
+          // Already shadow-only, or already on a band-free layout — no band to
+          // remove. Honest, and "already" suppresses the client's no-op apology.
+          beltReply = 'There is no band to remove here — the text already sits without one. If it still reads hard, tap the “Try another layout” chip for a design with a solid text area, or shorten the copy.';
+          for (const f of ['headline', 'subtext', 'attribution', 'dateText', 'microLabel', 'pillText', 'archetypeId', 'backdropMode']) {
+            if (f in patch) delete patch[f];
+          }
         }
       }
     }
