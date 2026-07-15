@@ -70,3 +70,11 @@ test("pointerdown inside the inspector panel never deselects (panel-close regres
 test("pointerdown on empty chrome / the canvas backdrop deselects", () => {
   assert.equal(pointerClearsSelection({ withinCanvasShell: false, withinInspector: false }), true);
 });
+
+test("pointerdown on selection-scoped floating chrome never deselects (floating-undo dead-tap guard)", () => {
+  // The mobile floating undo/redo pair sits OUTSIDE the canvas shell and the
+  // inspector subtree. Deselecting on its pointerdown unmounts the inspector and
+  // the chrome itself before pointerup — the tapped button dies under the finger
+  // and its click never fires. Half-sheet ruling 2026-07-15.
+  assert.equal(pointerClearsSelection({ withinCanvasShell: false, withinInspector: false, withinEditorChrome: true }), false);
+});

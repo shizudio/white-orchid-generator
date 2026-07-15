@@ -27,6 +27,7 @@ import { createRenderModel, resolveRenderDimension } from "@/lib/render-model.mj
 import { createRenderResult, shapeBounds } from "@/lib/render-result.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
 import { useFormatPreviewQueue } from "@/hooks/useFormatPreviewQueue";
+import { useMobileInspectorSheet } from "@/hooks/useMobileInspectorSheet";
 import { useEditorScale } from "@/hooks/useEditorScale";
 import { useDesignPersistence } from "@/hooks/useDesignPersistence";
 import { useSessionBootstrap } from "@/hooks/useSessionBootstrap";
@@ -8125,6 +8126,18 @@ function EditorShell({ workspace }) {
     textSelected, toggleLike, topBarButtons, topMenu, topMenuContent, tplNotice,
     undoLastAiChange
   } = workspace;
+  // (Half-sheet ruling 2026-07-15) Mobile sheet orchestration: auto-scroll the
+  // selected element into the live band above the sheet, anchor the floating
+  // undo to the measured sheet height, and dismiss on outside tap. Inert on
+  // desktop (active:false) — the in-flow inspector column is untouched.
+  const mobileSheet = useMobileInspectorSheet({
+    open: inspectorOpen,
+    canvasRef,
+    selectedBounds: selectedRenderedElement?.bounds || null,
+    canvasWidth: W,
+    canvasHeight: H,
+    onOutsideTap: closeInspector,
+  });
   return (
     <div style={{fontFamily:F.body,color:B.jet,minHeight:"100vh",background:B.whiteSmoke}}>
       <Nav section="create" />
@@ -8736,10 +8749,28 @@ function EditorShell({ workspace }) {
             (with the backdrop mounted below). ── */}
         {inspectorWorkspace}
       </div>
-      {/* Mobile-only dismiss backdrop for the inspector bottom-sheet (desktop:
-          display:none — the inspector is an in-flow column, nothing to dim). */}
-      {inspectorOpen && (
-        <div className="wo-inspector-backdrop" onClick={closeInspector} aria-hidden="true" />
+      {/* (Half-sheet ruling 2026-07-15) The old full-screen dismiss backdrop is
+          GONE — it dimmed the canvas peek and swallowed the first canvas tap
+          (#13/#19). The band above the sheet is live (tap-through re-selection);
+          outside taps dismiss via useMobileInspectorSheet. In its place: the
+          FLOATING UNDO/REDO pair (#5, §2.7) — reachable while the sheet covers
+          the control strip, anchored above the measured sheet, flipped away from
+          the selected element. Mobile-only (mobileSheet.active). Same stacks and
+          handlers as the strip buttons — one drag = one undo holds unchanged. */}
+      {mobileSheet.active && (
+        <div className={`wo-float-undo${mobileSheet.undoSide === "right" ? " wo-float-undo--right" : ""}`}
+          style={{ bottom: mobileSheet.sheetHeight + 12 }}>
+          <button type="button" onClick={undoLastAiChange} disabled={aiUndoStack.length === 0}
+            aria-disabled={aiUndoStack.length === 0} aria-label="Undo"
+            title={aiUndoStack.length ? "Undo the last change" : "Nothing to undo yet"}>
+            <span aria-hidden="true">↶</span>
+          </button>
+          <button type="button" onClick={redoLastChange} disabled={redoStack.length === 0}
+            aria-disabled={redoStack.length === 0} aria-label="Redo"
+            title={redoStack.length ? "Redo" : "Nothing to redo"}>
+            <span aria-hidden="true">↷</span>
+          </button>
+        </div>
       )}
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
       {/* AI Audit — the MANUAL vision pass (One Advice Ledger). Its findings merge

@@ -24,7 +24,11 @@ export function useEditorGlobalEffects({
       // mid-edit). Only true empty chrome / the canvas backdrop clears selection.
       const withinCanvasShell = shell.contains(target);
       const withinInspector = !!(target && target.closest && target.closest(".wo-inspector"));
-      if (!pointerClearsSelection({ withinCanvasShell, withinInspector })) return;
+      // (Half-sheet ruling 2026-07-15) The mobile floating undo/redo floats in the
+      // canvas band OUTSIDE both trees; deselecting on its pointerdown unmounts the
+      // button before pointerup and swallows the tap (see editor-input-controller).
+      const withinEditorChrome = !!(target && target.closest && target.closest(".wo-float-undo"));
+      if (!pointerClearsSelection({ withinCanvasShell, withinInspector, withinEditorChrome })) return;
       actionsRef.current.clearSelection?.();
       canvasRef.current?.blur();
     };
