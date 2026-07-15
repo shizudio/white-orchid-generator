@@ -198,6 +198,38 @@ patch enums: modes reuse `overlayMode`; the fill colour rides `overlayUpdate.sty
 (a client-only key). Autonomous text collision-free vs every shape layer still holds
 (decor shapes remain reflow obstacles/compose-partners).
 
+#### 2.9.1 Layout shapes are user-editable (2026-07-15, client ruling — OVERRULES the read-only layout shape)
+
+The client (design director) overruled the earlier design where the archetype's own
+**layout shape** (the `photoFrame` mask/cutout — `shapeMask` / `petalMask`, and the
+`card` frame) was read-only: selecting its "Layout shape" row in the Shapes inspector
+opened only the variant picker and gave no transform controls, and the shape could not
+be moved/resized/rotated on the preview.
+
+Ruling: **a layout shape gets the same editing affordances as a free shape.** Size and
+rotation are editable on canvas (the transform gizmo) and via the inspector panel
+controls, exactly like an overlay layer.
+
+- **Selection.** Selecting the layout-shape row — or clicking the shape on the canvas —
+  opens the shape-editing UI (size / rotation), not just the variant jump.
+- **Pinned overrides (law 5, re-solve-around-pins).** The archetype may PROPOSE the
+  layout shape's geometry, but once the owner touches it their transform is pinned as an
+  override on the design document (the `photoFrame` box/rotation override, cascaded
+  per-format like the media crop pins). It survives re-solves and layout operations where
+  the shape persists; a layout SWAP that replaces the shape clears it (like the role-offset
+  clear on swap). Autonomous generations never emit an override — born-clean holds.
+- **Matched field colour stays intact.** The variant's paired field colour still applies;
+  editing geometry does not disturb the shape↔field colour pairing.
+- **Helper copy.** The "No free shapes yet — the shape above is part of the layout"
+  language is retired in favour of copy that says the layout shape itself is editable.
+
+Implementation note (mirror surface — trap M6): the `photoFrame` transform override is a
+new document field and rides the patch pipeline, so it must land in `DesignDocumentV1`,
+the `lib/design-patch.js` enums, and `buildGenes` together (run `auto_mirror-touchlist`),
+and the mask render must read the override. This is the largest surface of the three
+2026-07-15 client fixes and is tracked as a follow-up build; the ruling above is the law
+it must satisfy.
+
 ### 2.10 Selection and library convergence (2026-07-14)
 
 - **One Shapes pill.** Individual shape instances are children of the Shapes inspector,
