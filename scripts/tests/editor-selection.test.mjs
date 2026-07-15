@@ -53,6 +53,26 @@ test("photo and furniture selection ids match renderer scene identities", () => 
   assert.equal(selectionSceneId(selectionForElement("furn_date")),"furniture:date");
 });
 
+test("the Shapes home chip selects an id-less shape (never clears the panel)", () => {
+  // The rail chip fires select-element kind:"shape" with NO uid to open the
+  // Shapes overview. This used to resolve to null (selection cleared → panel
+  // closed → the chip read as dead). It must resolve to a valid id-less shape
+  // selection that routes to the "shape" inspector.
+  const home = selectionForElement("shape");
+  assert.deepEqual(home, { type: "shape" });
+  assert.equal(selectionInspectorKey(home), "shape");
+
+  const viaReducer = editorSelectionReducer(
+    { type: "background", id: "background" },
+    { type: "select-element", kind: "shape" },
+  );
+  assert.deepEqual(viaReducer, { type: "shape" });
+
+  // A specific layer still selects by uid; a bare "overlay" stays a no-op.
+  assert.deepEqual(selectionForElement("overlay", "shape-9"), { type: "shape", id: "shape-9" });
+  assert.equal(selectionForElement("overlay"), null);
+});
+
 test("clear-if only clears the matching shape instance", () => {
   const shape = { type: "shape", id: "shape-2" };
 

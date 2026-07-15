@@ -776,3 +776,59 @@ tick (`openSameTick:true → openNextTick:false`) — same symptom, later flush.
 
 **Not verified / held:** R8.5 resident sweep (paid — held). No push. The fix is committed
 locally via `safe-commit.sh` with explicit pathspecs.
+
+### 9.17 Verification log — the Shapes rail chip was dead (second layer under §9.16) (2026-07-15)
+
+Client re-reported immediately after §9.16 landed: "the shape pill in the panel cannot be
+clicked." Reproduced with a real pointer click on the **Shapes rail chip** inside the open
+inspector: the whole panel closed instead of opening the Shapes home. All other pill-like
+controls in the panel passed a `document.elementFromPoint` sweep (no overlay interception)
+and worked.
+
+**Not a 90ee24c regression — event-sequence proof.** A capture-phase probe on the real
+click recorded: `pointerdown` on the chip with `insideInspector:true` and the panel still
+in the DOM (so the §9.16 handler correctly skipped deselect and suppressed nothing), then
+`pointerup` and `click` both delivered to the chip, and the panel closed only AFTER the
+click. The close comes from the chip's own `onClick`, one layer deeper.
+
+**Root cause — `lib/editor-selection.mjs` `selectionForElement` (the shape branch, pre-fix
+`(kind === "overlay" || kind === "shape") && uid`).** The Shapes home chip fires
+`selectElement("shape")` with NO layer uid (`ContextualInspector` `onSelect` →
+`Generator.jsx` `selectElement` → `dispatchEditorSelection({type:"select-element",
+kind:"shape"})`). `selectionForElement("shape", null)` matched no branch and returned
+`null`, so the reducer stored a **null selection** → `inspectorEl =
+selectionInspectorKey(null) = null` → the panel unmounted. Pre-refactor,
+`selectElement("shape")` ended in `setInspectorEl("shape")` (see `0885cb9^:Generator.jsx`
+~3675) — the Shapes home opened without any layer uid; the 0885cb9 selection unification
+dropped that uid-less mapping. **Classification: pre-existing regression from 0885cb9**
+(`git show 0885cb9:lib/editor-selection.mjs` and `90ee24c:` show the identical branch;
+90ee24c never touched this file). It was fully masked until 90ee24c because the
+click-outside bug closed the panel at `pointerdown` for every panel control — fixing the
+first layer exposed the second. M2 Silent No-op class: the chip acted, changed nothing
+visible, and reported nothing.
+
+**Fix (at the cause).** `selectionForElement` now returns `{ type: "shape" }` (a valid
+id-less shape selection — `normalizeEditorSelection` keeps it, `selectionInspectorKey` →
+`"shape"` routes to the Shapes home) when kind is `"shape"` with no uid. A specific layer
+uid still selects that layer; a bare `"overlay"` without uid stays a no-op as before.
+Consumers checked: `selOverlay` → null (home, no layer selected), `overlayChromeVisible`
+is only consumed together with `selectedRenderedElement?.type === "shape"` which stays
+null (`selectionSceneId` → `"shape:primary"` matches no painted shape), and the
+`useInspectorModel` guard keeps `"shape"` in `activeElements`. Pure test added
+(`scripts/tests/editor-selection.test.mjs`): the home chip resolves to an id-less shape
+selection via both `selectionForElement` and the reducer; layer-uid and bare-overlay
+behaviour unchanged. `npm run test:unit`: **56/56 pass**.
+
+**Evidence (real pointer clicks, dev port 3000 + isolated production build).**
+
+| Action | Before fix | After fix |
+|---|---|---|
+| Click ✦Shapes chip in the open panel | panel **closes** (dev, real click; probe shows close after `click`, not `pointerdown`) | Shapes home opens ("Shapes on this design… ＋ Add shape") |
+| `__woSelectElement('shape')` driver path | same null-selection close | Shapes home opens |
+| ＋ Add shape → pick "Spark" | unreachable | Spark layer added AND painted on canvas; panel switches to "EDITING: SPARK" |
+| Size pill M | unreachable | active pill flips S→M (edit applies), panel stays open |
+| Delete shape | unreachable | layer removed, panel closes (same contract as Remove photo) |
+| Full rail sweep Background/Photo/Caption/Logo/Shapes (real clicks) | — | every chip routes to its panel; zero console errors |
+
+Production: isolated build with the fix (`WO_DIST_DIR=.next-shapepill next build`) — Shapes
+chip opens the Shapes home (see build/verify notes in this entry's commit).
