@@ -345,4 +345,108 @@ export function useRenderVerificationBoards({
     };
     return () => { try { delete window.__woArchStress; delete window.__woCell; delete window.__woLegacyDupGuard; delete window.__woBornCleanGuard; } catch {} };
   }, [renderScene]);
+
+  /* ── RENDER FINGERPRINT GUARD (DLC §23 — "old sessions render identically") ───
+     window.__woRenderFingerprint(opts?) renders a DETERMINISTIC fixture set
+     offscreen — every archetype × all 6 formats, PLUS every legacy postType × all 6
+     formats (the "old session" render paths, driven exactly like __woLegacyDupGuard) —
+     and returns a stable content hash per cell (FNV-1a over a fixed-size downscale of
+     the canvas pixel buffer). The committed baseline lives at
+     scripts/guards/render-fingerprint-baseline.json.
+
+     DETERMINISM: the renderer's own layout is deterministic (no Date/Math.random on
+     the live:false path — the sibling guards depend on this). The ONE nondeterministic
+     input is the photo, so every cell renders with a FIXED solid-colour stand-in image
+     (no network, no real asset) and FIXED copy. The hash is engine-specific by design:
+     it is captured and compared in the SAME test-hooks harness (see the driver note in
+     docs/design-layer-contract.md §23).
+
+     A fingerprint diff is NEVER regenerated silently. A changed cell means either a bug
+     in the DLC change (fix the code) or a DELIBERATE, visually-reviewed baseline bump.
+
+     opts.baseline  — a prior hashes map; when passed, the report includes pass + diffs.
+     opts.fixtures  — override the archetype/legacy id lists (advanced).            */
+  useEffect(() => {
+    if (typeof window === "undefined" || !testHooks) return;
+    // Deterministic fixture copy — never varies run-to-run.
+    const FP_CONTENT = Object.freeze({
+      headline: "Freedom to *explore*",
+      subtext: "Every child leads their own day",
+      attribution: "The White Orchid",
+      dateText: "18 July",
+    });
+    const LEGACY_TYPES = ["photo_logo", "quote", "event", "text_post", "texture_text"];
+    const HASH_MAX = 128; // longest side of the downscaled hash buffer (fixed → stable)
+
+    // A fixed solid-colour stand-in for the photo, so photo archetypes hash stably
+    // without a real (nondeterministic) asset. A canvas is a valid drawImage source.
+    const makeStandInImage = () => {
+      const img = document.createElement("canvas");
+      img.width = 96; img.height = 96;
+      const ictx = img.getContext("2d");
+      ictx.fillStyle = "#8FA69B"; ictx.fillRect(0, 0, 96, 96);          // flat celadon field
+      ictx.fillStyle = "#254E48"; ictx.fillRect(24, 24, 48, 48);        // one fixed inner block
+      return img;
+    };
+
+    // FNV-1a (32-bit) over the downscaled pixel buffer. Stable, dependency-free.
+    const hashCell = (srcCanvas, w, h) => {
+      const scale = Math.min(1, HASH_MAX / Math.max(w, h));
+      const hw = Math.max(1, Math.round(w * scale));
+      const hh = Math.max(1, Math.round(h * scale));
+      const hc = document.createElement("canvas"); hc.width = hw; hc.height = hh;
+      const hctx = hc.getContext("2d", { willReadFrequently: true });
+      hctx.drawImage(srcCanvas, 0, 0, hw, hh);
+      const data = hctx.getImageData(0, 0, hw, hh).data;
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < data.length; i++) {
+        hash ^= data[i];
+        hash = Math.imul(hash, 0x01000193);
+      }
+      return ((hash >>> 0).toString(16)).padStart(8, "0") + ":" + hw + "x" + hh;
+    };
+
+    window.__woRenderFingerprint = (opts = {}) => {
+      const standIn = makeStandInImage();
+      const archIds = Array.isArray(opts.fixtures?.archetypes) ? opts.fixtures.archetypes : archetypeIds;
+      const legacyTypes = Array.isArray(opts.fixtures?.legacy) ? opts.fixtures.legacy : LEGACY_TYPES;
+      const hashes = {};
+      let errors = 0;
+      const renderCell = (dm, renderOpts, key) => {
+        try {
+          const c = document.createElement("canvas"); c.width = dm.w; c.height = dm.h;
+          renderScene(c.getContext("2d", { willReadFrequently: true }), dm.w, dm.h, renderOpts);
+          hashes[key] = hashCell(c, dm.w, dm.h);
+        } catch (e) { hashes[key] = "ERROR"; errors++; }
+      };
+      // (a) Every archetype × every format, with a fixed stand-in photo + fixed copy.
+      for (const id of archIds) for (const dm of dimensions) {
+        renderCell(dm, {
+          dimensionId: dm.id, live: false, archOverride: id, archVariant: 0,
+          calibrationContent: FP_CONTENT, imageOverride: standIn,
+        }, `arch:${id}:${dm.id}`);
+      }
+      // (b) Every legacy postType × every format — the "old session" render paths.
+      for (const pt of legacyTypes) for (const dm of dimensions) {
+        renderCell(dm, {
+          dimensionId: dm.id, live: false, postTypeOverride: pt, legacyForce: true,
+          calibrationContent: FP_CONTENT, imageOverride: standIn,
+        }, `legacy:${pt}:${dm.id}`);
+      }
+      const report = { version: 1, cells: Object.keys(hashes).length, errors, hashes };
+      // Optional self-diff against a committed baseline (used by the driver).
+      if (opts.baseline && typeof opts.baseline === "object") {
+        const base = opts.baseline.hashes || opts.baseline;
+        const diffs = [];
+        const keys = new Set([...Object.keys(base), ...Object.keys(hashes)]);
+        for (const k of keys) if (base[k] !== hashes[k]) diffs.push({ cell: k, baseline: base[k] ?? null, current: hashes[k] ?? null });
+        report.pass = diffs.length === 0;
+        report.diffs = diffs;
+      }
+      // eslint-disable-next-line no-console
+      console.log("[woRenderFingerprint]", JSON.stringify({ cells: report.cells, errors, pass: report.pass ?? null, diffs: report.diffs?.length ?? null }));
+      return report;
+    };
+    return () => { try { delete window.__woRenderFingerprint; } catch {} };
+  }, [renderScene]);
 }
