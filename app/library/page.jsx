@@ -25,11 +25,14 @@ export default function LibraryPage() {
     fetch('/api/images')
       .then(r => r.json())
       .then(data => {
-        setImages(data);
+        // Tolerate the graceful-degradation shape ({ configured:false }): treat a
+        // non-array as an empty library rather than crashing on .forEach/.filter.
+        const list = Array.isArray(data) ? data : [];
+        setImages(list);
         setLoading(false);
         // URLs are pre-signed server-side and included in the response
         const map = {};
-        data.forEach(img => { if (img.url) map[img.storage_path] = img.url; });
+        list.forEach(img => { if (img.url) map[img.storage_path] = img.url; });
         setSignedUrls(map);
       })
       .catch(() => setLoading(false));

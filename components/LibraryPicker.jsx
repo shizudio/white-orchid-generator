@@ -16,7 +16,7 @@ export default function LibraryPicker({ onSelect, onClose }) {
   useEffect(() => {
     fetch('/api/images')
       .then(r => r.json())
-      .then(data => { setImages(data); setLoading(false); })
+      .then(data => { setImages(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
