@@ -14,9 +14,25 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 import { generatePhoto } from '@/lib/higgsfield';
+import { requireAdminKey } from '@/lib/admin-auth';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+// Rate limit — same in-memory pattern as templates/design-audit/assistant. This
+// route spends real credits, so the bound is tight; it's defence-in-depth BEHIND
+// the admin-key gate. Keyed by client IP, 60s window.
+const WINDOW_MS = 60_000;
+const MAX_REQUESTS = 20;
+const requestLog = new Map();
+function isRateLimited(request) {
+  const key = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  const now = Date.now();
+  const recent = (requestLog.get(key) || []).filter(t => now - t < WINDOW_MS);
+  recent.push(now);
+  requestLog.set(key, recent);
+  return recent.length > MAX_REQUESTS;
+}
 
 // gpt-image-1 fallback — mirrors the assistant/brand-library routes, with the same
 // §6 brief language so the fallback stays on-brand. Never throws.
@@ -47,6 +63,13 @@ async function openaiFallback(scene, negativeSpace) {
 }
 
 export async function POST(request) {
+  // Credit-spending endpoint — admin-key gated + rate-limited (Phase-0 hardening).
+  const denied = requireAdminKey(request);
+  if (denied) return denied;
+  if (isRateLimited(request)) {
+    return Response.json({ ok: false, error: 'Generating too fast — please wait a moment.' }, { status: 429 });
+  }
+
   let body;
   try { body = await request.json(); } catch { return Response.json({ error: 'Invalid request.' }, { status: 400 }); }
   const scene = String(body?.scene || '').trim();

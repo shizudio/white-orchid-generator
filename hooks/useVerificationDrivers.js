@@ -2,6 +2,13 @@ import { useEffect } from "react";
 
 async function buildBrandLibrary(countRequested, startIndex = 0) {
   window.__woBuildLibraryStopFlag = false;
+  // The POST now spends credits behind the admin-key gate (lib/admin-auth). This
+  // dev-only builder reads the owner key from localStorage (device-only, same
+  // precedent as the Brand-kit admin page) and sends it as the x-wo-admin-key
+  // header. Without it the POST answers 403 — set it with:
+  //   localStorage.setItem('wo-admin-key', '<the WO_ADMIN_KEY value>')
+  const adminKey = (() => { try { return localStorage.getItem("wo-admin-key") || ""; } catch { return ""; } })();
+  if (!adminKey) console.warn("[brand-library] no wo-admin-key in localStorage — POSTs will 403. Set localStorage 'wo-admin-key' first.");
   let total = 8;
   try {
     const plan = await (await fetch("/api/brand-library")).json();
@@ -21,7 +28,7 @@ async function buildBrandLibrary(countRequested, startIndex = 0) {
     try {
       const response = await fetch("/api/brand-library", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-wo-admin-key": adminKey },
         body: JSON.stringify({ index }),
       });
       const data = await response.json().catch(() => ({}));
