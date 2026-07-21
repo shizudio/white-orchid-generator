@@ -40,6 +40,18 @@ export default function BrandKitPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
+  const [unconfigured, setUnconfigured] = useState(false);
+
+  // Admin key for the gated PATCH (lib/admin-auth). Kept DEVICE-ONLY in
+  // localStorage (same precedent as big dataURLs / the dev builder key), never
+  // sent anywhere but the x-wo-admin-key header on save. A wrong/absent key
+  // surfaces the route's honest 403 inline (not a dead Save button).
+  const [adminKey, setAdminKey] = useState('');
+  useEffect(() => { try { setAdminKey(localStorage.getItem('wo-admin-key') || ''); } catch {} }, []);
+  const onAdminKeyChange = (v) => {
+    setAdminKey(v);
+    try { if (v) localStorage.setItem('wo-admin-key', v); else localStorage.removeItem('wo-admin-key'); } catch {}
+  };
 
   // (Declutter item 7) Official decorative assets — uploaded HERE (owner-only
   // surface), served to everyone in the editor's + Add → Shapes/Decoration.
@@ -50,7 +62,13 @@ export default function BrandKitPage() {
   const assetInputRef = useRef(null);
 
   useEffect(() => {
-    fetch('/api/brand').then(r => r.json()).then(d => { if (d.error) setError(d.error); else setKit(d); });
+    fetch('/api/brand').then(r => r.json()).then(d => {
+      // Tolerate the graceful-degradation shape: a missing Supabase env answers
+      // { configured:false } (HTTP 200) with no colours — show a calm note, don't
+      // crash on kit.colors.map.
+      if (d?.configured === false || !Array.isArray(d?.colors)) { setUnconfigured(true); return; }
+      if (d.error) setError(d.error); else setKit(d);
+    }).catch(() => setUnconfigured(true));
     fetch('/api/brand-assets').then(r => r.json()).then(d => {
       setAssetsConfigured(d?.configured !== false);
       setAssets(Array.isArray(d?.assets) ? d.assets : []);
@@ -86,14 +104,17 @@ export default function BrandKitPage() {
   };
 
   const save = async () => {
-    setSaving(true); setSaved(false);
+    setSaving(true); setSaved(false); setError(null);
     const res = await fetch('/api/brand', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-wo-admin-key': adminKey },
       body: JSON.stringify({ colors: kit.colors, font_heading: kit.font_heading, font_body: kit.font_body, font_ui: kit.font_ui, guardrails: kit.guardrails }),
     });
-    const d = await res.json();
+    const d = await res.json().catch(() => ({}));
     setSaving(false);
+    // Honest inline messages for the gate (never a dead Save button):
+    if (res.status === 403) { setError(adminKey ? 'That admin key is wrong — the brand kit was not saved.' : 'An admin key is required to save. Enter it above.'); return; }
+    if (res.status === 503 || d?.configured === false) { setError('Cloud storage isn’t configured on the server — the brand kit can’t be saved yet.'); return; }
     if (d.error) setError(d.error); else { setKit(d); setSaved(true); setTimeout(() => setSaved(false), 3000); }
   };
 
@@ -103,7 +124,14 @@ export default function BrandKitPage() {
     setKit({ ...kit, colors });
   };
 
-  if (error) return <div style={{ padding: 40, color: 'var(--tw-tangerine)', fontFamily: 'var(--font-body)' }}>{error}</div>;
+  if (unconfigured) return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
+      <Nav section="brand kit" />
+      <div style={{ maxWidth: 520, margin: '0 auto', padding: '80px 32px', fontFamily: 'var(--font-body)', color: 'var(--fg-muted)', fontSize: 14, lineHeight: 1.6 }}>
+        Cloud storage isn’t configured on the server, so the brand kit can’t be loaded or edited right now. The studio keeps its built-in White Orchid palette and fonts until Supabase is configured.
+      </div>
+    </div>
+  );
   if (!kit) return <div style={{ padding: 40, fontFamily: 'var(--font-syne)', color: 'var(--tw-burnham)', letterSpacing: '0.1em', textTransform: 'uppercase', fontSize: 12 }}>Loading…</div>;
 
   return (
@@ -216,6 +244,17 @@ export default function BrandKitPage() {
           </p>
           <textarea aria-label="Content guardrails" value={kit.guardrails} onChange={e => setKit({ ...kit, guardrails: e.target.value })}
             style={{ width: '100%', padding: '12px 16px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', fontSize: 14, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none', resize: 'vertical', minHeight: 120, lineHeight: 1.6 }} />
+        </section>
+
+        {/* Admin key — required to save (the PATCH is gated). Device-only. */}
+        <section style={{ marginBottom: 32 }}>
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Admin key</div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 12, maxWidth: 520 }}>
+            Saving the brand kit requires the owner admin key. It’s stored on this device only and sent solely to authorise this change.
+          </p>
+          <input type="password" aria-label="Admin key" value={adminKey} onChange={e => onAdminKeyChange(e.target.value)} placeholder="Paste the admin key"
+            autoComplete="off" spellCheck={false}
+            style={{ width: '100%', maxWidth: 360, padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 14, fontFamily: 'monospace', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none' }} />
         </section>
 
         {/* Save */}

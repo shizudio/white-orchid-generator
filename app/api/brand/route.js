@@ -1,4 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
+import { requireAdminKey } from '@/lib/admin-auth';
 
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -14,6 +15,11 @@ export async function GET() {
 }
 
 export async function PATCH(request) {
+  // Open write to the LIVE brand kit — admin-key gated (Phase-0 hardening). GET
+  // stays public (the product reads the palette everywhere); only the WRITE is
+  // gated. The admin UI (app/admin/brand) sends x-wo-admin-key from localStorage.
+  const denied = requireAdminKey(request);
+  if (denied) return denied;
   const supabase = getAdminClient();
   const body = await request.json();
   const { data, error } = await supabase
