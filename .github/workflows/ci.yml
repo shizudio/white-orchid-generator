@@ -1,0 +1,25 @@
+# Minimal CI (Phase-0 hardening, docs/milestone-audit-2026-07-21.md §6). Runs the
+# PURE unit suite (no keys/secrets — the suite mocks nothing external) plus the
+# mirror-check drift guard on every push and PR. Deliberately excludes `next
+# build` and the resident tester (build/browser time + a production build);
+# those stay local / pre-push for now — future work to add on a nightly runner.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Unit suite (pure, no secrets)
+        run: npm run test:unit
+      - name: Mirror-check (hand-synced surface drift guard)
+        run: bash .claude/skills/auto_mirror-touchlist/scripts/mirror-check.sh
