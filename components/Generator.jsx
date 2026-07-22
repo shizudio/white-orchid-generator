@@ -193,6 +193,11 @@ const ELEMENT_ADD_CHOICES = [
   { cls:"cta",        label:"Button",     starter:"Learn more" },
 ];
 const ELEMENT_CLASS_LABELS = { heading:"Heading", subheading:"Subheading", body:"Body", caption:"Caption", cta:"Button" };
+// (Text Elements slice 4 — 10th mirrored surface) The closed element-class enum, as a
+// flat id list mirror-check.sh can parse. MIRRORS lib/text-elements.mjs ELEMENT_CLASSES,
+// lib/design-patch.js PATCH_OPTIONS.elementClass, and the assistant route's ELEMENT_CLASSES.
+// Run .claude/skills/auto_mirror-touchlist/scripts/mirror-check.sh after any edit here.
+const ELEMENT_CLASS_IDS = ["heading", "subheading", "body", "caption", "cta"];
 const ELEMENT_SIZE_UI_STEPS = [{ id:"S", label:"S" }, { id:"M", label:"M" }, { id:"L", label:"L" }];
 
 function applyBrandKit(kit) {
@@ -8282,9 +8287,10 @@ function useDesignPatchPipeline(workspace) {
   // ONE pre-edit snapshot; rapid follow-ups inside the 600ms window fold into it (typing a
   // heading = one undo, not one-per-keystroke); an isolated discrete action (S/M/L, change
   // type, priority, add, remove) is its own single undo. A command that changed nothing
-  // never notes an edit — no dead undo entry, no cleared redo branch (M2). Added-element
-  // commands have no flat patch-schema field yet (Slice 4's AI-grammar + mirror work), so
-  // they dispatch directly rather than through prepareDesignPatch — undo parity is here.
+  // never notes an edit — no dead undo entry, no cleared redo branch (M2). This is the
+  // UI/canvas path for element commands; the AI patch grammar (Slice 4) reaches the SAME
+  // content/add-element + set-element-* commands via addTextElement/editElements compiled
+  // in compileDesignPatchCommands, so both entry points share one reducer.
   const dispatchElementCommand = (command) => {
     const preEditSnapshot = manualHarmRef.current.pending ? null : snapshotApplyableState();
     const result = dispatchDesignCommand(command) || {};

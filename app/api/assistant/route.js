@@ -395,6 +395,55 @@ function bumpStep(cur, dir) {
   return FONT_STEPS[next];
 }
 
+// ── ADD TEXT ELEMENT (Text Elements slice 4 — spec §5) ───────────────────────
+// The CLOSED, brand-governed element-class enum (10th mirrored surface). MIRRORS
+// lib/text-elements.mjs ELEMENT_CLASSES, lib/design-patch.js PATCH_OPTIONS.elementClass
+// and Generator.jsx ELEMENT_CLASS_IDS — run mirror-check.sh after any edit.
+const ELEMENT_CLASSES = ['heading', 'subheading', 'body', 'caption', 'cta'];
+// Plain labels a preschool teacher reads at a glance (never "CTA"/"eyebrow").
+const ELEMENT_CLASS_LABEL = { heading: 'heading', subheading: 'subheading', body: 'text', caption: 'caption', cta: 'button' };
+// Class-appropriate starter when the user names a class but no words ("add a button").
+const ELEMENT_STARTER = { heading: 'New heading', subheading: 'New subheading', body: 'New text', caption: 'New caption', cta: 'Learn more' };
+// Map the user's noun to a sanctioned class. Order matters: sub-heading before heading,
+// cta nouns first (a "button/tag/badge/CTA" is a cta, never a body). An UNRECOGNIZED
+// content noun ("quote", "note", "message", "line") maps to the CLOSEST class, body —
+// named honestly in the reply (never a refusal). Returns { class, substituted } or null.
+function classifyElementNoun(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\b(button|cta|call[-\s]?to[-\s]?action|pill|badge|tag)\b/.test(t)) return { class: 'cta', substituted: false };
+  if (/\b(sub[-\s]?heading|sub[-\s]?title|subtitle|subhead)\b/.test(t)) return { class: 'subheading', substituted: false };
+  if (/\b(heading|header|headline|title)\b/.test(t)) return { class: 'heading', substituted: false };
+  if (/\b(caption|eyebrow|footnote|tagline|small\s+(?:text|label|line|caption)|little\s+(?:caps|label|line))\b/.test(t)) return { class: 'caption', substituted: false };
+  if (/\b(body|paragraph|body\s+(?:text|copy)|description|details?|blurb)\b/.test(t)) return { class: 'body', substituted: false };
+  // An unrecognized content noun the brand has no dedicated class for → closest = body.
+  if (/\b(quote|note|message|line|sentence|words?|text|element|copy)\b/.test(t)) return { class: 'body', substituted: true };
+  return null;
+}
+// Detect an ADD-A-NEW-ELEMENT ask and lift the words to show. Runs BEFORE the text-
+// substitution belt so "add a caption saying X" births a NEW element rather than
+// overwriting the existing caption/subtext. Returns { class, text, substituted } or null.
+function detectAddElement(text) {
+  const t = String(text || '').trim();
+  const addIntent = /\b(add|put|include|insert|place|create|drop\s+in|stick\s+in|need|want)\b/i.test(t);
+  if (!addIntent) return null;
+  // A name/phone/contact ask is the contact belt's job, not an element add.
+  if (/\b(name|phone|number|contact|email|handle|whatsapp|mobile|tel)\b/i.test(t)) return null;
+  const noun = classifyElementNoun(t);
+  if (!noun) return null;
+  // Lift the words after "saying / that says / says / reads / to say / :" or quotes.
+  let value = null;
+  let m = t.match(/\b(?:saying|that\s+says?|says?|reads?|to\s+say|which\s+says?)\s+(.+)$/i)
+       || t.match(/[:“"']\s*([^“”"']{2,})["'”]?\s*$/);
+  if (m) value = m[1];
+  if (value) {
+    value = value.replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
+    if (value.length < 2 || value.length > 240) value = null;
+  }
+  // No explicit words but a named class → seed the brand starter (matches the UI picker).
+  if (!value) value = ELEMENT_STARTER[noun.class];
+  return { class: noun.class, text: value, substituted: noun.substituted };
+}
+
 // PHOTO CHANGE / REPLACE (2.2) — "change the photo to X", "different picture",
 // "swap the image for Y", "the picture doesnt fit our vibe". This was the last-open
 // slice of the honesty cluster: the model claimed a photo change with an EMPTY patch
@@ -1165,6 +1214,7 @@ VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describ
 - "the date / when it is" → dateText (only a date the user actually supplied)
 - "the big text / the title / the main words" → headline
 TEACH THE TERM BACK: when you add or change a mapped element, your reply gently names it once so the user learns the word — e.g. "Added that as a caption — the small text under your headline. Tap it anytime to edit." or "That's the eyebrow — the little label up top. Done." Keep it warm, one sentence, never lecture.
+ADDING A NEW, EXTRA ELEMENT (spec §5): when the user wants an ADDITIONAL piece of text beyond the built-in roles — "add a caption saying …", "add a heading/subheading/body line saying …", "add a button/CTA saying …", "put another line that says …" — use patch.addTextElement { class, text }. Choose the class by what they describe: a headline-style line → heading; a supporting line → subheading; a paragraph/details → body; a small edge/eyebrow/date-like line → caption; a button/tag/CTA/pill → cta. An ask with no dedicated brand class ("add a quote") maps to the CLOSEST class, body, and you say so honestly. NEVER refuse an add. The layout engine places it; if a format has no room it is kept and named in that format's readiness — so describe the add in present tense and don't claim an exact position you can't see.
 REMOVING: "get rid of the small text / label / button" → set that field to "" (empty string removes it explicitly).`;
 
   const systemPrompt = `You are the Art Director for ${brandContext.name}, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
@@ -1585,6 +1635,27 @@ Current design state (compact): ${JSON.stringify(designState)}`;
             if (f in patch) delete patch[f];
           }
         }
+      }
+    }
+
+    // 0.5 ADD TEXT ELEMENT (spec §5) — "add a caption/heading/body/button saying X".
+    //    Births a NEW brand-governed element via patch.addTextElement (the SAME
+    //    content/add-element command the UI picker dispatches; the solver places it).
+    //    Runs BEFORE text substitution so "add a caption saying X" is an ADD, not an
+    //    overwrite of the existing caption. The reply is honest present-tense: an
+    //    element was added to the document; if a format can't seat it cleanly it is
+    //    kept in storage and named in that format's readiness (complete-or-absent) —
+    //    never a fabricated "it's at the bottom-right" claim the render can't back.
+    //    An unrecognized-class ask ("add a quote") maps to the closest class (body)
+    //    and the reply names the substitution honestly.
+    if (!beltReply) {
+      const ae = detectAddElement(lastUserText);
+      if (ae) {
+        patch.addTextElement = { class: ae.class, text: ae.text };
+        const label = ELEMENT_CLASS_LABEL[ae.class] || 'text element';
+        beltReply = ae.substituted
+          ? `Added that as a ${label} element — the closest brand text style — saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`
+          : `Added a ${label} saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`;
       }
     }
 

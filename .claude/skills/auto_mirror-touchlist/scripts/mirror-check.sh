@@ -24,6 +24,11 @@
 #   9  brand-defaults DEFAULT_LOGO_VARIANTS ids == schema.sql logo_variants seed
 #      slugs, AND DEFAULT_OVERLAY_ASSETS ids == brand_overlays seed slugs (1:1 — a
 #      fallback with no DB twin can't be re-pointed per brand, and vice versa).
+#  10  Text-element CLASS enum (spec §5) 1:1 across FOUR surfaces: text-elements.mjs
+#      ELEMENT_CLASSES == design-patch PATCH_OPTIONS.elementClass == Generator
+#      ELEMENT_CLASS_IDS == assistant/route.js ELEMENT_CLASSES. A class present in
+#      one surface but missing from another silently loses either AI addressability,
+#      belt routing, or apply/gene weighting.
 # Plus a warn-level scan for inline brand hex literals outside lib/brand-defaults.js.
 #
 # Intentional exclusions live in .claude/mirror-allow.txt, one per line:
@@ -54,6 +59,7 @@ pref = read('lib/preferences.js')
 sess = read('lib/sessions.js')
 bd   = read('lib/brand-defaults.js')
 sql  = read('lib/schema.sql')
+te   = read('lib/text-elements.mjs')
 
 def block(src, pattern, name):
     m = re.search(pattern, src, re.S)
@@ -170,6 +176,27 @@ for missing in sorted(OVER - OVER_SEED):
 for missing in sorted(OVER_SEED - OVER):
     fail(f"overlays: brand_overlays seeds '{missing}' but DEFAULT_OVERLAY_ASSETS lacks it. Add the default.")
 
+# ── Check 10: text-element CLASS enum 1:1 across four mirrored surfaces ───────────
+te_body = block(te, r'ELEMENT_CLASSES\s*=\s*Object\.freeze\(\[(.*?)\]\)', 'ELEMENT_CLASSES in lib/text-elements.mjs')
+TE_CLASSES = set(re.findall(r"['\"]([a-z]+)['\"]", te_body))
+g_ec = block(g, r'const ELEMENT_CLASS_IDS\s*=\s*\[([^\]]*)\]', 'ELEMENT_CLASS_IDS in Generator.jsx')
+GEN_CLASSES = set(re.findall(r"['\"]([a-z]+)['\"]", g_ec))
+D_CLASSES = patch_ids('elementClass')
+asst_ec = block(asst, r'const ELEMENT_CLASSES\s*=\s*\[([^\]]*)\]', 'ELEMENT_CLASSES in assistant/route.js')
+ASST_CLASSES = set(re.findall(r"['\"]([a-z]+)['\"]", asst_ec))
+CLASS_SURFACES = [
+    ('lib/text-elements.mjs ELEMENT_CLASSES', TE_CLASSES),
+    ('lib/design-patch.js PATCH_OPTIONS.elementClass', D_CLASSES),
+    ('Generator.jsx ELEMENT_CLASS_IDS', GEN_CLASSES),
+    ('assistant/route.js ELEMENT_CLASSES', ASST_CLASSES),
+]
+_canon = TE_CLASSES
+for _name, _set in CLASS_SURFACES:
+    for missing in sorted(_canon - _set):
+        fail(f"elementClass: '{missing}' is a sanctioned class but MISSING from {_name} — the tenth mirrored surface drifted (spec §5). Add it there.")
+    for extra in sorted(_set - _canon):
+        fail(f"elementClass: '{extra}' appears in {_name} but is NOT in lib/text-elements.mjs ELEMENT_CLASSES — a phantom class. Remove it or add it to the canonical enum.")
+
 # ── Brand-fact scan (warn only): hex literals outside brand-defaults ─────────────
 for path in ['components/Generator.jsx', 'lib/design-patch.js', 'lib/audit-local.js']:
     src = read(path)
@@ -184,5 +211,5 @@ if failures:
     print("mirror-check DRIFT (blocking):")
     print("\n".join(failures))
     sys.exit(1)
-print("mirror-check OK: all 9 mirrored surfaces in sync" + (f" ({len(allow)} allowlisted)" if allow else ""))
+print("mirror-check OK: all 10 mirrored surfaces in sync" + (f" ({len(allow)} allowlisted)" if allow else ""))
 PYEOF
