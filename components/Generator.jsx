@@ -2975,7 +2975,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // per element the solver could not seat in this format. Only populated on an audit
       // render (renderTruth.audit exists); element-free docs carry an empty list, so a fresh
       // generation never births a crowding/unplaced dot (born-clean holds by construction).
-      if(renderTruth.audit){
+      // (guard parity) An override/calibration render is a HYPOTHETICAL archetype cell —
+      // paintContentElements returns [] for it, so it must NOT inherit the live document's
+      // added elements into the audit signal (that would fire a phantom crowding/unplaced
+      // dot in every __woArchStress / __woBornCleanGuard cell when the live session happens
+      // to carry added elements). Gate on the real (non-override) render only.
+      if(renderTruth.audit && !_isOverrideRender){
         const _added=(Array.isArray(documentElements)?documentElements:[])
           .filter(el=>el && !el.sourceRole && typeof el.text==="string" && el.text.trim());
         const _placedByUid=new Map(paintedContentElements.map(p=>[p.uid,p]));
