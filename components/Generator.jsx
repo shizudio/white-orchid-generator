@@ -3169,7 +3169,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const contractEvaluation=evaluateRenderContracts({
         model:contractModel,dimensionId:dimId,width:w,height:h,
         textBounds:renderTruth.textBounds,
-        roleBounds:renderTruth.roleBounds,
+        // (DLC-2 born-clean parity) Judge the ratified drawn rects (auditRoleBounds), not
+        // the padded live hit-boxes; falls back to roleBounds when the audit block did not
+        // run (non-audit offscreen renders don't evaluate constraints anyway).
+        roleBounds:renderTruth.auditRoleBounds||renderTruth.roleBounds,
         logoBox:resolvedLogoBox,
         photoBox:renderTruth.photoBox,
         subjectBox,subjectWindow,shapes:renderedShapes,
@@ -4992,6 +4995,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const _pinOf=(role)=>{const o=roleOff(role);return !!(o.dx||o.dy||o.frozen);};
         const _datePinned=_pinOf("date"), _eyePinned=_pinOf("eyebrow"), _pillPinned=_pinOf("pill");
         const textRoles=[heroDrawn,supDrawn,_eyePinned?null:eyeDrawnBox,_datePinned?null:dateDrawn,_pillPinned?null:pillDrawn].filter(Boolean);
+        // (DLC-2 born-clean parity) The shared constraint evaluation must judge the SAME
+        // ratified drawn rects the legacy audit/born-clean law is defined against (the
+        // `*Drawn`/textRoles boxes), NOT the generous live hit-target boxes in `_roleB`
+        // (whose eyebrow carries a +0.5×size top lift and whose support/hero use the
+        // allocation column). Feeding `_roleB` produced false seam-straddle and
+        // safe-area-text findings on system output that is born-clean by construction.
+        // Pins are partitioned out exactly like textRoles (owner intent → pinned-placement
+        // path, never a system-cleanliness finding). Constraint content zones are only
+        // hero/support/microLabel; this is measurement-only and never touches paint.
+        renderTruth.auditRoleBounds={
+          ...(heroDrawn?{hero:heroDrawn}:{}),
+          ...(supDrawn?{support:supDrawn}:{}),
+          ...((!_eyePinned&&eyeDrawnBox)?{microLabel:eyeDrawnBox}:{}),
+          ...((!_datePinned&&dateDrawn)?{date:dateDrawn}:{}),
+          ...((!_pillPinned&&pillDrawn)?{pill:pillDrawn}:{}),
+        };
         let boxOverlaps=0;
         for(let i=0;i<textRoles.length;i++)for(let j=i+1;j<textRoles.length;j++) if(ix(textRoles[i],textRoles[j])) boxOverlaps++;
         // Text vs photo obstacle (card/mask/split) — a real collision unless fullBleed.

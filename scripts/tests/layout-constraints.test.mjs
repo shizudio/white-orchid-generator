@@ -119,3 +119,70 @@ test("decoration collisions resolve to the decoration-yields rule", () => {
   const paintAware=evaluateLayoutConstraints(capability,{zoneRects,relationTests:{"arrow-avoids-hero":false},source:"post-render"});
   assert.equal(paintAware.status,"clear","a hollow/transparent decoration does not fail from its bounding box alone");
 });
+
+// ── DLC-2 guard-reconciliation regressions (adopted-WIP false positives) ─────────
+// Both defects traced to the post-render constraint judging CONTENT against geometry
+// that is NOT the actually-drawn text: a generous DECLARED allocation column (seam) or
+// a DROPPED role's phantom allocation (safe-area). The detectors must agree with the
+// system's own placement (born-clean, Law 4) yet still fire on genuinely bad geometry.
+
+test("post-render seam: a drawn headline that clears a side photo panel does not straddle; one crossing it does", () => {
+  // editorial_split shape: the hero's DECLARED column spans nearly full width (0.06..0.94)
+  // and overlaps the right photo panel (0.6..1.0). The generous column must never decide
+  // the seam — only the ACTUALLY-DRAWN hero box does.
+  const capability=createLayoutCapability({dimensionId:"ig_portrait",zones:[
+    {id:"content:hero",kind:"content",geometry:{type:"rect",rect:{x:0.06,y:0.2,w:0.88,h:0.2}}},
+    {id:"media:primary",kind:"media",geometry:{type:"rect",rect:{x:0.6,y:0,w:0.4,h:1}}},
+  ],relations:[
+    {id:"hero-does-not-straddle-media:primary",type:"does-not-straddle",from:"content:hero",to:"media:primary"},
+  ]});
+  // (regression) The drawn hero is the left column (right edge 0.54 < panel left 0.6): clear.
+  const cleared=evaluateLayoutConstraints(capability,{zoneRects:{
+    "content:hero":{x:0.08,y:0.22,w:0.46,h:0.27},
+    "media:primary":{x:0.6,y:0,w:0.4,h:1},
+  },source:"post-render"});
+  assert.equal(cleared.status,"clear");
+  assert.equal(cleared.violations.length,0);
+  // (true positive) A hero dragged to genuinely cross the panel's left edge straddles.
+  const bad=evaluateLayoutConstraints(capability,{zoneRects:{
+    "content:hero":{x:0.4,y:0.22,w:0.4,h:0.27},
+    "media:primary":{x:0.6,y:0,w:0.4,h:1},
+  },source:"post-render"});
+  assert.equal(bad.status,"blocked");
+  assert.equal(bad.violations[0].ruleId,"structural.no-seam-straddle");
+});
+
+test("post-render drops undrawn content roles; preflight still evaluates the declared allocation", () => {
+  // serif_word:story with long copy DROPS its eyebrow — it never reaches the canvas — yet
+  // its declared allocation sits in the story top band. A dropped role must not be judged.
+  const capability=createLayoutCapability({dimensionId:"story",zones:[
+    {id:"content:microLabel",kind:"content",geometry:{type:"rect",rect:{x:0.06,y:0.08,w:0.6,h:0.05}}},
+    {id:"protected:platform-top",kind:"protected",geometry:{type:"rect",rect:{x:0,y:0,w:1,h:0.13}}},
+  ],relations:[
+    {id:"microLabel-avoids-protected:platform-top",type:"avoids",from:"content:microLabel",to:"protected:platform-top"},
+  ]});
+  // Preflight: the declared allocation overlaps the band → flagged (no render exists yet).
+  const pre=evaluateLayoutConstraints(capability);
+  assert.equal(pre.status,"blocked");
+  assert.equal(pre.violations[0].ruleId,"format.platform-occlusion");
+  // Post-render, eyebrow DROPPED (no measured box): deferred, never a false safe-area dot.
+  const post=evaluateLayoutConstraints(capability,{zoneRects:{},source:"post-render"});
+  assert.equal(post.violations.length,0);
+  assert.ok(post.deferredRelationIds.includes("microLabel-avoids-protected:platform-top"));
+});
+
+test("post-render safe-area: a drawn role inside the story chrome band fires; one at the standard margin clears", () => {
+  const capability=createLayoutCapability({dimensionId:"story",zones:[
+    {id:"content:hero",kind:"content",geometry:{type:"unconstrained"}},
+    {id:"protected:platform-top",kind:"protected",geometry:{type:"rect",rect:{x:0,y:0,w:1,h:0.13}}},
+  ],relations:[
+    {id:"hero-avoids-protected:platform-top",type:"avoids",from:"content:hero",to:"protected:platform-top"},
+  ]});
+  // (true positive) A drawn hero parked at y=0.05 sits under the 0.13 chrome band.
+  const bad=evaluateLayoutConstraints(capability,{zoneRects:{"content:hero":{x:0.08,y:0.05,w:0.8,h:0.1}},source:"post-render"});
+  assert.equal(bad.status,"blocked");
+  assert.equal(bad.violations[0].ruleId,"format.platform-occlusion");
+  // (regression) A drawn hero at the standard content band (y=0.2) clears the chrome.
+  const good=evaluateLayoutConstraints(capability,{zoneRects:{"content:hero":{x:0.08,y:0.2,w:0.8,h:0.1}},source:"post-render"});
+  assert.equal(good.status,"clear");
+});
