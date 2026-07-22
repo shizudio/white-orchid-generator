@@ -294,6 +294,120 @@ test("one format reset clears every local design override and ownership marker",
   assert.deepEqual(noop.changedPaths,[]);
 });
 
+test("add-element generates a unique uid and reports one changed path (one undo)", () => {
+  const before = createDesignDocumentV1();
+  const result = applyDesignCommand(before, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ class:"caption", text:"Doors open 9am" },
+  });
+  assert.equal(result.document.content.elements.length, 1);
+  const added = result.document.content.elements[0];
+  assert.equal(added.class, "caption");
+  assert.equal(added.text, "Doors open 9am");
+  assert.equal(added.authorship, "owner");
+  assert.equal(added.required, false);
+  assert.equal(typeof added.uid, "string");
+  assert.deepEqual(result.changedPaths, [`content.elements.${added.uid}`]);
+});
+
+test("add-element with a colliding explicit uid is a safe no-op", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_dup", class:"heading", text:"One" },
+  }).document;
+  const again = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_dup", class:"body", text:"Two" },
+  });
+  assert.equal(again.document.content.elements.length, 1);
+  assert.deepEqual(again.changedPaths, []);
+});
+
+test("element text/class/priority commands each change exactly one element in one undo", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_1", class:"body", text:"draft" },
+  }).document;
+
+  const textResult = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_TEXT, uid:"el_1", value:"final",
+  });
+  assert.equal(textResult.document.content.elements[0].text, "final");
+  assert.deepEqual(textResult.changedPaths, ["content.elements.el_1.text"]);
+  // A no-op text set reports nothing (M2 — a visible action that changes nothing is a defect).
+  assert.deepEqual(applyDesignCommand(textResult.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_TEXT, uid:"el_1", value:"final",
+  }).changedPaths, []);
+
+  const classResult = applyDesignCommand(textResult.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_CLASS, uid:"el_1", value:"heading",
+  });
+  assert.equal(classResult.document.content.elements[0].class, "heading");
+  assert.deepEqual(classResult.changedPaths, ["content.elements.el_1.class"]);
+
+  const priorityResult = applyDesignCommand(classResult.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_PRIORITY, uid:"el_1", value:5,
+  });
+  assert.equal(priorityResult.document.content.elements[0].priority, 5);
+  assert.deepEqual(priorityResult.changedPaths, ["content.elements.el_1.priority"]);
+});
+
+test("set-element-class rejects a non-sanctioned class and a self no-op", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_1", class:"heading", text:"Hero" },
+  }).document;
+  assert.deepEqual(applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_CLASS, uid:"el_1", value:"banner",
+  }).changedPaths, []);
+  assert.deepEqual(applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_CLASS, uid:"el_1", value:"heading",
+  }).changedPaths, []);
+});
+
+test("remove-element deletes exactly the named element", () => {
+  const seeded = applyDesignCommand(applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ uid:"el_1", class:"body", text:"a" },
+  }).document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ uid:"el_2", class:"cta", text:"b" },
+  }).document;
+  const removed = applyDesignCommand(seeded, { type:DESIGN_COMMAND_TYPES.CONTENT_REMOVE_ELEMENT, uid:"el_1" });
+  assert.deepEqual(removed.document.content.elements.map(e => e.uid), ["el_2"]);
+  assert.deepEqual(removed.changedPaths, ["content.elements.el_1"]);
+  // Removing an unknown element is a safe no-op.
+  assert.deepEqual(applyDesignCommand(removed.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_REMOVE_ELEMENT, uid:"ghost",
+  }).changedPaths, []);
+});
+
+test("legacy content roles migrate into elements, invisibly and idempotently", () => {
+  const doc = migrateDesignDocument({
+    headline:"Now enrolling", subtext:"Term 3", dateText:"September", pillText:"RSVP",
+    copyAuthors:{ headline:"owner" },
+  });
+  // The legacy fixed roles survive untouched (the renderer still reads them in Slice 1).
+  assert.equal(doc.content.headline, "Now enrolling");
+  assert.equal(doc.content.pillText, "RSVP");
+  // And they are ALSO projected into the dynamic element collection.
+  const byRole = Object.fromEntries(doc.content.elements.map(e => [e.sourceRole, e]));
+  assert.equal(byRole.headline.class, "heading");
+  assert.equal(byRole.headline.authorship, "owner");
+  assert.equal(byRole.dateText.class, "caption");
+  assert.equal(byRole.pillText.class, "cta");
+  // Migrating twice is byte-identical (guard-battery discipline).
+  assert.equal(JSON.stringify(migrateDesignDocument(doc)), JSON.stringify(doc));
+});
+
+test("added elements survive the legacy persistence round-trip", () => {
+  const withElement = applyDesignCommand(createDesignDocumentV1({ headline:"Base" }), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_added", class:"caption", text:"Free entry" },
+  }).document;
+  const restored = migrateDesignDocument(designDocumentToLegacyFields(withElement));
+  assert.deepEqual(restored.content.elements, withElement.content.elements);
+  assert.ok(restored.content.elements.some(e => e.uid === "el_added"));
+});
+
 test("equivalent semantic updates report no changed paths", () => {
   const before=createDesignDocumentV1({
     typeLayouts:{event:{x:0.1,y:0.2,width:0.8}},
