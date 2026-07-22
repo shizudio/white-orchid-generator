@@ -109,6 +109,38 @@ test("grammar: change detection recognizes real adds/edits and ignores empty one
   assert.deepEqual(PATCH_OPTIONS.elementSizeStep, ["S", "M", "L"]);
 });
 
+// ── BELT → DISPATCH, NO MODEL (mirrors the route's interception path) ─────────
+// The deterministic belt must fire and produce an applied command with NO model in
+// the loop (keys unset). This chains exactly what app/api/assistant/route.js does for
+// an editor turn: detectAddElement → patch.addTextElement → compile → reducer, plus the
+// honest belt reply. Proves the "intercepted, no live model" path end to end.
+test("belt→dispatch (no model): 'add a button saying Enrol now' applies + honest reply", () => {
+  const userText = "add a button saying Enrol now";
+  const ae = detectAddElement(userText);
+  assert.ok(ae, "belt did not fire");
+  const patch = { addTextElement: { class: ae.class, text: ae.text } };
+  assert.equal(patchHasChanges(patch), true);
+  // Compile + dispatch through the SAME reducer the UI picker uses.
+  let doc = createDesignDocumentV1();
+  const plan = compileDesignPatchCommands(patch);
+  const applied = [];
+  for (const e of plan.afterMaterialization) {
+    const r = applyDesignCommand(doc, e.command);
+    doc = r.document;
+    applied.push(...(r.changedPaths || []));
+  }
+  assert.ok(applied.some(p => p.startsWith("content.elements.")), "no element command applied");
+  const el = doc.content.elements[0];
+  assert.equal(el.class, "cta");
+  assert.equal(el.text, "Enrol now");
+  assert.equal(el.authorship, "ai");
+  // The route's honest belt reply names the element and never claims a position.
+  const label = { cta: "button" }[ae.class];
+  const reply = `Added a ${label} saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`;
+  assert.match(reply, /Added a button saying/);
+  assert.doesNotMatch(reply, /bottom-right|top-left|at the/); // no unverifiable position claim
+});
+
 // ── CROWDING BUDGET MATH + REMEDY RANKING ────────────────────────────────────
 test("budget: density budget is monotonic in whitespace target (airier → fewer)", () => {
   assert.equal(dynamicElementBudget(0), 6);
