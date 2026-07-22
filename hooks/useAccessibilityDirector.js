@@ -117,7 +117,6 @@ export function useAccessibilityDirector({
     setSuggestedTextColor(textColor);
     setTextMinContrast(minimumContrast);
     const actions = actionsRef.current;
-    if (!userLogoTouched) actions.setLogoPosition?.(logoPosition);
     const logoColor = suggestLogoColor(logoRegionLuminance);
     setSuggestedLogoColor(logoColor);
     const current = logoVariants.find(variant => variant.id === selectedLogoId);
@@ -125,7 +124,10 @@ export function useAccessibilityDirector({
       variant.group === current.group
       && variant.label === current.label
       && variant.color === logoColor);
-    if (match) actions.setSelectedLogoId?.(match.id);
+    actions.applyLogoPatch?.({
+      ...(!userLogoTouched ? {logoPosition} : {}),
+      ...(match ? {logoId:match.id} : {}),
+    });
   }, [
     actionsRef,
     analyzeAsset,
@@ -155,8 +157,10 @@ export function useAccessibilityDirector({
   useEffect(() => {
     if (userLogoTouched) return;
     const format = formatLayoutFor(dimensionId, postType);
-    actionsRef.current.setLogoPosition?.(format.logo.position);
-    actionsRef.current.setLogoSize?.(format.logo.sizeId);
+    actionsRef.current.applyLogoPatch?.({
+      logoPosition:format.logo.position,
+      logoSize:format.logo.sizeId,
+    });
   }, [actionsRef, dimensionId, formatLayoutFor, postType, userLogoTouched]);
 
   return {

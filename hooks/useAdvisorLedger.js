@@ -25,6 +25,7 @@ export function useAdvisorLedger({
   logoBoxRef,
   textBoundsRef,
   roleBoundsRef,
+  renderResultRef,
   acknowledgements,
   setAcknowledgements,
   sessionId,
@@ -43,7 +44,7 @@ export function useAdvisorLedger({
       : callback => setTimeout(callback, 16);
     const done = () => raf(() => raf(() => setTimeout(() => refreshReadyCheck(), 60)));
     const needsSwitch = fix.dimensionId && fix.dimensionId !== dimensionId &&
-      (fix.textLayout || fix.logoPosition || fix.logoSize || fix.roleOffset);
+      (fix.textLayout || fix.logoPosition || fix.logoSize || fix.roleOffset || fix.overlayUpdate || fix.photoTransform);
 
     if (needsSwitch) {
       setDimensionId(fix.dimensionId);
@@ -65,11 +66,14 @@ export function useAdvisorLedger({
       ? { x: box.x / width, y: box.y / height, w: box.w / width, h: box.h / height }
       : null;
     if (element === "logo") return normalize(logoBoxRef.current);
+    if (String(element||"").startsWith("shape:")) {
+      return normalize(renderResultRef?.current?.sceneElements?.find(item=>item.id===element)?.bounds);
+    }
     if (element === "headline" || element === "caption" || element === "text") {
       return normalize(textBoundsRef.current);
     }
     return null;
-  }, [height, logoBoxRef, textBoundsRef, width]);
+  }, [height, logoBoxRef, renderResultRef, textBoundsRef, width]);
 
   const issueBoxOf = useCallback((issue) => {
     if (!issue) return null;

@@ -59,6 +59,63 @@ test("type-size-floor carries the fit-shrunk field so its action can shorten the
   assert.equal(floor.field, "subtext");
 });
 
+test("ready verdict trusts measured platform constraints over stale ready boxes", () => {
+  const signal=signalFor("story",1080,{floored:false});
+  signal.ready={...signal.ready,textBoxes:[]};
+  signal.constraintResult={
+    version:1,status:"blocked",errors:[],deferredRelationIds:[],
+    evaluatedRelationIds:["content:hero-avoids-protected:platform-top"],
+    violations:[{
+      ruleId:"format.platform-occlusion",
+      zoneIds:["content:hero","protected:platform-top"],
+      geometry:{from:{x:0.1,y:0.04,w:0.8,h:0.18},to:{x:0,y:0,w:1,h:0.13}},
+    }],
+  };
+  const {issues}=computeReadyVerdict(signal,"story");
+  assert.ok(issues.some(issue=>issue.id==="safe-area-text"));
+  assert.ok(!issues.some(issue=>issue.id==="safe-zone-violation"));
+});
+
+test("measured clear geometry suppresses the legacy safe-margin false positive", () => {
+  const signal=signalFor("story",1080,{floored:false});
+  signal.safeZoneViolation=true;
+  signal.constraintResult={
+    version:1,status:"clear",errors:[],violations:[],deferredRelationIds:[],
+    evaluatedRelationIds:["content:hero-avoids-protected:platform-top","content:hero-avoids-protected:platform-bottom"],
+  };
+  const findings=runLocalAudit(signal);
+  assert.ok(!findings.some(finding=>finding.id==="safe-zone-violation"));
+});
+
+test("explicit logo clearance uses the shared measured constraint result", () => {
+  const findings=runLocalAudit({
+    dimensionId:"ig_square",hasText:true,hasMedia:false,
+    zoneContrast:{flat:true,mean:8},flooredRoles:[],copy:{},ready:{textBoxes:[],logoBox:null,pinned:[]},
+    logo:{explicit:true,overlapsText:false},
+    constraintResult:{
+      version:1,status:"blocked",errors:[],deferredRelationIds:[],
+      evaluatedRelationIds:["mark-clears:content:hero"],
+      violations:[{ruleId:"logo.no-text-overlap",zoneIds:["mark:primary","content:hero"]}],
+    },
+  });
+  assert.ok(findings.some(finding=>finding.id==="logo-overlap-text"));
+});
+
+test("logo subject protection uses shared measured evidence and an executable move", () => {
+  const findings=runLocalAudit({
+    dimensionId:"ig_square",hasText:false,hasMedia:true,
+    zoneContrast:null,flooredRoles:[],copy:{},ready:{textBoxes:[],logoBox:null,pinned:[]},
+    logo:{explicit:true,inFocalBand:false,suggestPosition:"bottom-left"},
+    constraintResult:{
+      version:1,status:"blocked",errors:[],deferredRelationIds:[],
+      evaluatedRelationIds:["mark:primary-avoids-protected:media-subject"],
+      violations:[{ruleId:"logo.no-subject-overlap",zoneIds:["mark:primary","protected:media-subject"]}],
+    },
+  });
+  const finding=findings.find(item=>item.id==="logo-focal-band");
+  assert.deepEqual(finding.fix,{logoPosition:"bottom-left"});
+});
+
 // ── (2026-07-15) copy-stump: the stored-stump advisor surface ────────────────
 const stumpSignal = (copy, copyAuthors) => ({
   dimensionId: "ig_square", hasText: true,

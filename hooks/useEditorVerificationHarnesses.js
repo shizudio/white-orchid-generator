@@ -60,10 +60,12 @@ export function useEditorVerificationHarnesses({
       };
 
       try {
-        actions.setArchetypeId(null);
-        actions.setPostType("text_post");
-        actions.setHeadline("Format Fit Guard");
-        actions.setSubtext("automated invariant check");
+        actions.applyPatch({
+          archetypeId:"none",
+          postType:"text_post",
+          headline:"Format Fit Guard",
+          subtext:"automated invariant check",
+        },{amendUndo:true,systemFreeVariables:true,preserveSelection:true});
         await settle();
         for (const dimension of dimensions) {
           actions.setDimensionId(dimension.id);
@@ -80,10 +82,12 @@ export function useEditorVerificationHarnesses({
         await settle();
         assertFit("sessionA-return:ig_square");
       } finally {
-        actions.setArchetypeId(restore.archetypeId);
-        actions.setPostType(restore.postType);
-        actions.setHeadline(restore.headline);
-        actions.setSubtext(restore.subtext);
+        actions.applyPatch({
+          archetypeId:restore.archetypeId || "none",
+          postType:restore.postType,
+          headline:restore.headline,
+          subtext:restore.subtext,
+        },{amendUndo:true,systemFreeVariables:true,preserveSelection:true});
         actions.setDimensionId(restore.dimensionId ?? dimensionId);
         await settle();
       }
@@ -102,40 +106,25 @@ export function useEditorVerificationHarnesses({
       const state = stateRef.current;
       const actions = actionsRef.current;
       if (step === "archetype") {
-        actions.materializeArchetype(argument || "petal_window", {
-          postType: state.postType,
-          attribution: state.attribution,
-          subtext: state.subtext,
+        actions.applyPatch({archetypeId:argument || "petal_window"},{
+          amendUndo:true,systemFreeVariables:true,preserveSelection:true,
         });
       } else if (step === "textColor") {
-        actions.noteManualEdit("colour");
-        actions.setTextColorId(argument || "tangerine");
+        actions.applyPatch({textColorId:argument || "tangerine"},{source:"ui"});
       } else if (step === "addOverlay") {
         const asset = state.defaultOverlays.find(item => item.id === (argument || "acc-spark"));
         if (asset) {
-          actions.noteManualEdit("overlay");
-          const transform = actions.suggestPlacement(asset.kind, asset.ratio, state.width, state.height);
-          actions.dispatchDesignCommand({
-            type: "shapes/replace",
-            shapes: state.overlayLayers.filter(layer => layer.assetId !== asset.id),
-          });
-          actions.dispatchDesignCommand({
-            type: "shape/add",
-            shape: {
-              uid: `ol_${Math.random().toString(36).slice(2)}`,
-              assetId: asset.id,
-              mode: "overlay",
-              master: transform,
-              byDim: {},
-            },
-          });
+          actions.applyPatch({
+            replaceShapeCollection:state.overlayLayers.filter(layer=>layer.assetId!==asset.id),
+            addOverlay:{assetId:asset.id,mode:"overlay"},
+          },{source:"ui"});
         }
       } else if (step === "dragHero") {
         actions.updateTextLayout({ x: argument?.x ?? 0.12, y: argument?.y ?? 0.20 });
       } else if (step === "placeLogo") {
         actions.placeLogo(argument || { position: "top-left" });
       } else if (step === "setCopy") {
-        actions.applyDesignPatch(argument || {}, { uiSource: true });
+        actions.applyPatch(argument || {}, { source:"ui" });
       }
       return step;
     };

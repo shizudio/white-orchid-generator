@@ -6,12 +6,23 @@ test("render result exposes stable scene identities for every measured element",
   const result=createRenderResult({
     dimensionId:"ig_square",width:1080,height:1080,
     roleBounds:{ hero:{x:80,y:100,w:500,h:200},furn_date:{x:80,y:340,w:180,h:40} },
-    logoBox:{x:850,y:850,w:120,h:120},photoBox:{x:0,y:0,w:1080,h:1080},
+    logoBox:{x:850,y:850,w:120,h:120},photoBox:{x:0,y:0,w:1080,h:1080},subjectBox:{x:320,y:180,w:420,h:500},
     shapes:[{id:"petal-7",bounds:{x:100,y:700,w:150,h:150},transform:{x:0.16,y:0.72}}],
+    constraints:{status:"clear",violations:[]},
+    contentTypography:{version:1,violations:[]},
+    mediaLogo:{version:1,violations:[]},
+    surface:{version:1,violations:[]},
+    decoration:{version:1,violations:[]},
   });
   assert.deepEqual(result.sceneElements.map(item=>item.id),[
     "photo:primary","shape:petal-7","furniture:date","text:hero","logo:primary",
   ]);
+  assert.equal(result.constraints.status,"clear");
+  assert.equal(result.contentTypography.version,1);
+  assert.equal(result.mediaLogo.version,1);
+  assert.equal(result.surface.version,1);
+  assert.equal(result.decoration.version,1);
+  assert.deepEqual(result.measurements.subjectBox,{x:320,y:180,w:420,h:500});
 });
 
 test("a solver-placed date is a first-class draggable text role, not the textBounds hero fallback", () => {

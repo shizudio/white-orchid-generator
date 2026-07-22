@@ -1,4 +1,6 @@
 import { useCallback } from "react";
+import { isConstraintRemedyCommand } from "@/lib/constraint-remedies.mjs";
+import { fallbackAdvisorEditTarget, hasNonAcknowledgementAction } from "@/lib/advisor-action-policy.mjs";
 
 const FIELD_TO_ROLE = {
   headline: "hero",
@@ -105,6 +107,52 @@ export function useAdvisorFindingActions({
       run: () => onAck ? onAck(issue) : acknowledgeIssue(issue, dimensionId),
     });
 
+    const remedyCommands=Array.isArray(issue.remedyCommands)
+      ? issue.remedyCommands.filter(isConstraintRemedyCommand)
+      : [];
+    if(remedyCommands.length){
+      for(const command of remedyCommands){
+        actions.push({
+          label:command.label,
+          kind:"patch",
+          hint:"Applies as one undoable repair",
+          run:()=>applyReadyFix(command.patch),
+        });
+      }
+      const role=remedyCommands[0]?.target?.role;
+      if(role){
+        actions.push({
+          label:"Move it myself",
+          kind:"deep-link",
+          run:()=>{setAdvisorDot(null);focusTextField(role);},
+        });
+      }else if(remedyCommands[0]?.target?.zoneId?.startsWith("mark:")){
+        actions.push({
+          label:"Edit logo myself",
+          kind:"deep-link",
+          run:()=>{setAdvisorDot(null);selectElement("logo");},
+        });
+      }else if(remedyCommands[0]?.target?.uid){
+        const uid=remedyCommands[0].target.uid;
+        actions.push({
+          label:"Edit decoration",
+          kind:"deep-link",
+          run:()=>{setAdvisorDot(null);selectElement("shape",uid);},
+        });
+      }
+      return actions;
+    }
+
+    if(issue.ruleId==="media.protected-subject"||issue.ruleId==="structural.no-seam-straddle"){
+      const role=issue.element==="headline"?"hero":issue.element==="caption"?"support":issue.element||"hero";
+      actions.push({
+        label:"Edit placement",
+        kind:"deep-link",
+        run:()=>{setAdvisorDot(null);focusTextField(role);},
+      });
+      return actions;
+    }
+
     // (copy-stump · 2026-07-15 stored-stump cleanup) A stored AI-authored fragment too
     // thin for the load-time repair gets the SAME standard copy action row — its
     // `dropped` hint carries {role, field, text} exactly like a dropped-copy finding.
@@ -183,6 +231,21 @@ export function useAdvisorFindingActions({
       return actions;
     }
 
+    if(issue.id==="logo-clear-space"){
+      actions.push({
+        label:"Return to safe position",
+        kind:"patch",
+        run:()=>applyReadyFix({logoFree:null}),
+      });
+      actions.push({
+        label:"Move it myself",
+        kind:"deep-link",
+        run:()=>{setAdvisorDot(null);selectElement("logo");},
+      });
+      actions.push(acknowledge("Keep it this way"));
+      return actions;
+    }
+
     if (issue.id === "archetype-margin-crop" || issue.id === "safe-zone-violation") {
       actions.push({
         label: "Reset placement",
@@ -243,6 +306,12 @@ export function useAdvisorFindingActions({
           },
         });
       }
+    }
+    if((issue.severity==="fail"||String(issue.ruleId||"").startsWith("decoration."))&&!hasNonAcknowledgementAction(actions)){
+      const target=fallbackAdvisorEditTarget(issue);
+      if(target?.kind==="text")actions.push({label:target.label,kind:"deep-link",run:()=>{setAdvisorDot(null);focusTextField(target.role);}});
+      else if(target?.kind==="element")actions.push({label:target.label,kind:"deep-link",run:()=>{setAdvisorDot(null);selectElement(target.element);}});
+      else if(target?.kind==="shape"&&target.uid)actions.push({label:target.label,kind:"deep-link",run:()=>{setAdvisorDot(null);selectElement("shape",target.uid);}});
     }
     actions.push(acknowledge(issue.lossClass ? "Leave it off" : "Keep it this way"));
     return actions;

@@ -16,6 +16,9 @@ test("deterministic audit emits the canonical finding contract", () => {
   assert.ok(finding.fingerprint&&finding.geometryFingerprint&&finding.propertyFingerprint);
   assert.deepEqual(finding.proposedFix,{backdropMode:"band"});
   assert.equal(finding.actions[0].kind,"patch");
+  assert.equal(finding.ruleId,"typography.surface-contrast");
+  assert.equal(finding.policy.severity,"blocking");
+  assert.ok(finding.policy.remedies.includes("switch-approved-ink"));
 });
 
 test("dedup identity is category plus element plus geometry, independent of messenger", () => {
@@ -38,4 +41,12 @@ test("one matching local and AI concern remains one ledger row", () => {
   assert.deepEqual(merged.formats[0].issues[0].sources,["local","ai-audit"]);
   assert.equal(extractAuditFindings(merged).length,1);
   assert.equal(withoutAuditFindings(merged).formats[0].issues.length,1);
+});
+
+test("an AI warning remains reviewable without falsely blocking readiness",()=>{
+  const warning=normalizeAuditFinding({category:"polish",message:"Consider more breathing room",severity:"warn"},{dimensionId:"story",element:"canvas",fingerprint:"nogeo"});
+  const merged=mergeAuditIntoChecklist({formats:[{dimensionId:"story",issues:[],ready:true}]},[warning]);
+  assert.equal(merged.formats[0].issues.length,1);
+  assert.equal(merged.formats[0].ready,true);
+  assert.equal(merged.ready,true);
 });
