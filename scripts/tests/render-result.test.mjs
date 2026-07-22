@@ -49,6 +49,11 @@ test("added content elements register stable per-uid scene identities at z-band 
   // Hit-testing the placed body box returns exactly that element.
   const hit=hitTestScene(result.sceneElements,120,400,{types:["text"]});
   assert.equal(hit.id,"element:el_a");
+  // Complete-or-absent: the placement ledger carries every element (placed + unplaceable);
+  // the unplaceable caption is named (not silently lost) so readiness can surface it.
+  assert.equal(result.contentElements.length,3);
+  assert.deepEqual(result.unplacedElements,[{ uid:"el_c", class:"caption", reason:"no-clean-candidate" }]);
+  assert.equal(result.contentElements.find(e=>e.uid==="el_a").placed,true);
 });
 
 test("a solver-placed date is a first-class draggable text role, not the textBounds hero fallback", () => {
