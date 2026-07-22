@@ -4,7 +4,7 @@ import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
-import { detectBandRemoval, reconcileEditorLayoutClaim } from '@/lib/assistant-intents';
+import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement } from '@/lib/assistant-intents';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -398,51 +398,11 @@ function bumpStep(cur, dir) {
 // ── ADD TEXT ELEMENT (Text Elements slice 4 — spec §5) ───────────────────────
 // The CLOSED, brand-governed element-class enum (10th mirrored surface). MIRRORS
 // lib/text-elements.mjs ELEMENT_CLASSES, lib/design-patch.js PATCH_OPTIONS.elementClass
-// and Generator.jsx ELEMENT_CLASS_IDS — run mirror-check.sh after any edit.
+// and Generator.jsx ELEMENT_CLASS_IDS — run mirror-check.sh after any edit. The pure
+// belt detection lives in lib/assistant-intents.js (detectAddElement) so it is unit-tested.
 const ELEMENT_CLASSES = ['heading', 'subheading', 'body', 'caption', 'cta'];
 // Plain labels a preschool teacher reads at a glance (never "CTA"/"eyebrow").
 const ELEMENT_CLASS_LABEL = { heading: 'heading', subheading: 'subheading', body: 'text', caption: 'caption', cta: 'button' };
-// Class-appropriate starter when the user names a class but no words ("add a button").
-const ELEMENT_STARTER = { heading: 'New heading', subheading: 'New subheading', body: 'New text', caption: 'New caption', cta: 'Learn more' };
-// Map the user's noun to a sanctioned class. Order matters: sub-heading before heading,
-// cta nouns first (a "button/tag/badge/CTA" is a cta, never a body). An UNRECOGNIZED
-// content noun ("quote", "note", "message", "line") maps to the CLOSEST class, body —
-// named honestly in the reply (never a refusal). Returns { class, substituted } or null.
-function classifyElementNoun(text) {
-  const t = String(text || '').toLowerCase();
-  if (/\b(button|cta|call[-\s]?to[-\s]?action|pill|badge|tag)\b/.test(t)) return { class: 'cta', substituted: false };
-  if (/\b(sub[-\s]?heading|sub[-\s]?title|subtitle|subhead)\b/.test(t)) return { class: 'subheading', substituted: false };
-  if (/\b(heading|header|headline|title)\b/.test(t)) return { class: 'heading', substituted: false };
-  if (/\b(caption|eyebrow|footnote|tagline|small\s+(?:text|label|line|caption)|little\s+(?:caps|label|line))\b/.test(t)) return { class: 'caption', substituted: false };
-  if (/\b(body|paragraph|body\s+(?:text|copy)|description|details?|blurb)\b/.test(t)) return { class: 'body', substituted: false };
-  // An unrecognized content noun the brand has no dedicated class for → closest = body.
-  if (/\b(quote|note|message|line|sentence|words?|text|element|copy)\b/.test(t)) return { class: 'body', substituted: true };
-  return null;
-}
-// Detect an ADD-A-NEW-ELEMENT ask and lift the words to show. Runs BEFORE the text-
-// substitution belt so "add a caption saying X" births a NEW element rather than
-// overwriting the existing caption/subtext. Returns { class, text, substituted } or null.
-function detectAddElement(text) {
-  const t = String(text || '').trim();
-  const addIntent = /\b(add|put|include|insert|place|create|drop\s+in|stick\s+in|need|want)\b/i.test(t);
-  if (!addIntent) return null;
-  // A name/phone/contact ask is the contact belt's job, not an element add.
-  if (/\b(name|phone|number|contact|email|handle|whatsapp|mobile|tel)\b/i.test(t)) return null;
-  const noun = classifyElementNoun(t);
-  if (!noun) return null;
-  // Lift the words after "saying / that says / says / reads / to say / :" or quotes.
-  let value = null;
-  let m = t.match(/\b(?:saying|that\s+says?|says?|reads?|to\s+say|which\s+says?)\s+(.+)$/i)
-       || t.match(/[:“"']\s*([^“”"']{2,})["'”]?\s*$/);
-  if (m) value = m[1];
-  if (value) {
-    value = value.replace(/^["'“”‘’]+|["'“”‘’.]+$/g, '').trim();
-    if (value.length < 2 || value.length > 240) value = null;
-  }
-  // No explicit words but a named class → seed the brand starter (matches the UI picker).
-  if (!value) value = ELEMENT_STARTER[noun.class];
-  return { class: noun.class, text: value, substituted: noun.substituted };
-}
 
 // PHOTO CHANGE / REPLACE (2.2) — "change the photo to X", "different picture",
 // "swap the image for Y", "the picture doesnt fit our vibe". This was the last-open
@@ -1650,7 +1610,7 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     //    and the reply names the substitution honestly.
     if (!beltReply) {
       const ae = detectAddElement(lastUserText);
-      if (ae) {
+      if (ae && ELEMENT_CLASSES.includes(ae.class)) {
         patch.addTextElement = { class: ae.class, text: ae.text };
         const label = ELEMENT_CLASS_LABEL[ae.class] || 'text element';
         beltReply = ae.substituted

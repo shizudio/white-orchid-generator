@@ -2969,6 +2969,27 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // per-uid scene records into the render result. Element-free docs return [] here
       // before any paint — the guard-battery invariant (pixel-identity) holds by construction.
       const paintedContentElements=paintContentElements();
+      // (Text Elements slice 4 — spec §4/§3) Feed the added-element ledger into the audit
+      // signal so runLocalAudit can raise (a) the crowding advisory when the placed dynamic
+      // elements exceed the layout's density budget and (b) one complete-or-absent finding
+      // per element the solver could not seat in this format. Only populated on an audit
+      // render (renderTruth.audit exists); element-free docs carry an empty list, so a fresh
+      // generation never births a crowding/unplaced dot (born-clean holds by construction).
+      if(renderTruth.audit){
+        const _added=(Array.isArray(documentElements)?documentElements:[])
+          .filter(el=>el && !el.sourceRole && typeof el.text==="string" && el.text.trim());
+        const _placedByUid=new Map(paintedContentElements.map(p=>[p.uid,p]));
+        const _dyn=_added.map(el=>{
+          const p=_placedByUid.get(el.uid);
+          return { uid:el.uid, class:el.class, priority:Number.isFinite(el.priority)?el.priority:0,
+                   text:el.text.trim(), placed:!p||p.placed!==false, reason:(p&&p.reason)||null };
+        });
+        renderTruth.audit.contentElements=_dyn;
+        renderTruth.audit.dynamicElementCount=_dyn.filter(e=>e.placed).length;
+        // (spec §4 remedy c) A roomier-layout candidate is offered ONLY when solver-verified.
+        // No alternative-layout solve runs in this audit pass, so it stays unset here (never
+        // offered blind); a future pass that verifies one sets renderTruth.audit.roomierLayout.
+      }
       const resolvedLogoBox=renderTruth.logoBox||auditLogo.box;
       const shapeImageMap=new Map();
       const renderedShapes=(_isOverrideRender?[]:overlayLayers).map((layer,index)=>{
