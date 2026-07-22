@@ -34,7 +34,7 @@ import {
   resolveTextSafeMargins,
 } from "@/lib/format-placement-policy.mjs";
 import { createRenderModel, resolveRenderDimension, resolveRenderLayout } from "@/lib/render-model.mjs";
-import { createRenderResult, shapeBounds } from "@/lib/render-result.mjs";
+import { createRenderResult, shapeBounds, hitTestScene } from "@/lib/render-result.mjs";
 import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs";
 import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
@@ -3515,8 +3515,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         });
         if(!sol){ out.push({uid:el.uid,class:el.class,placed:false,reason:"no-clean-candidate"}); continue; }
         // Owner drag pin (roleOff keyed by uid) — the same per-format offset infra the roles use.
+        // A FROZEN entry pins the element CENTRE at (bx+dx, by+dy) so a re-solve that would pick
+        // a different candidate can never move the owner's placement (law 5); a legacy {dx,dy}
+        // entry translates the solver placement. The solver still runs (clean base for obstacles).
         const _off=roleOff(`el:${el.uid}`);
-        const ex=sol.x+_off.dx, ey=sol.y+_off.dy;
+        const ex=_off.frozen ? (_off.bx+_off.dx-sol.w/2) : (sol.x+_off.dx);
+        const ey=_off.frozen ? (_off.by+_off.dy-sol.h/2) : (sol.y+_off.dy);
         beginText();
         if(isCta){
           const bs=sol.px, padX=bs*0.9, padY=bs*0.55, pillW=sol.w, pillH=sol.h, rad=pillH*0.5;
@@ -6607,6 +6611,25 @@ export default function App() {
     // (WP-Y5) per-format Ready-to-post verdicts (verification + future learning pass).
     window.__woReadyCheck = () => computeReadyAll();
   }, [runLocalAudit, auditAllFormats, computeReadyAll]);
+  // (Slice 2b) ADDED-ELEMENT verification hooks — TEST_HOOKS build only, stripped from
+  // production. Drive content/add-element (+ text/remove) and read the painted scene so the
+  // guard driver can prove each class paints, hit-tests to its own uid, and drags/undoes.
+  const _docElRef = useRef(designDocument); _docElRef.current = designDocument;
+  useEffect(() => {
+    if (typeof window === "undefined" || !TEST_HOOKS) return;
+    window.__woAddElement = (cls, text) => {
+      const r = dispatchDesignCommand({ type:"content/add-element", element:{ class:cls, text:text==null?`${cls} sample`:text } });
+      const path = (r.changedPaths||[]).find(p => p.startsWith("content.elements."));
+      return { uid: path ? path.split(".")[2] : null, changedPaths: r.changedPaths };
+    };
+    window.__woSetElementText = (uid, text) => dispatchDesignCommand({ type:"content/set-element-text", uid, value:text }).changedPaths;
+    window.__woRemoveElement = (uid) => dispatchDesignCommand({ type:"content/remove-element", uid }).changedPaths;
+    window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins }));
+    window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
+    window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds }));
+    window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
+    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
+  }, [dispatchDesignCommand]);
   // Refs so the ledger console hooks (installed after runAiAudit is defined, below)
   // read the latest merged ledger + raw store each render without a TDZ on runAiAudit.
   const ledgerRef = useRef(null); ledgerRef.current = ledgerCheck;

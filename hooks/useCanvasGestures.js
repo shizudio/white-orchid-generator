@@ -247,6 +247,33 @@ export function useCanvasGestures({
     }
 
     const sceneTextHit = ["text", "furniture"].includes(pointerTarget?.kind) ? pointerTarget.element : null;
+    // (Slice 2b) ADDED text element — a scene text hit carrying a `uid` is one of the dynamic
+    // content.elements[]. It is NOT one of the fixed archetype roles, so it takes its own branch:
+    // select it (minimal placeholder inspector; full UI is Slice 3) and start a per-uid roleFree
+    // drag keyed by `el:<uid>` through the SAME updateRoleOffset path the date/eyebrow use — so
+    // the pin survives a re-solve (law 5) and one drag is exactly one undo.
+    if (sceneTextHit && sceneTextHit.uid) {
+      const box = sceneTextHit.bounds;
+      const elementWidth = box.w / width, elementHeight = box.h / height;
+      const centerX = (box.x + box.w / 2) / width, centerY = (box.y + box.h / 2) / height;
+      const roleKey = `el:${sceneTextHit.uid}`;
+      const stored = getStoredRoleOffset(roleKey) || null;
+      const frozenBase = Number.isFinite(stored?.bx) && Number.isFinite(stored?.by)
+        ? { bx: stored.bx, by: stored.by }
+        : { bx: centerX - (stored?.dx || 0), by: centerY - (stored?.dy || 0) };
+      selectElement("text", null, roleKey);
+      dragRef.current = {
+        mode: "text", role: roleKey, x: event.clientX, y: event.clientY, ox: box.x / width, oy: box.y / height, rect,
+        downX: event.clientX, downY: event.clientY, downTime: Date.now(), moved: false,
+        elementWidth, elementHeight, roleFree: true,
+        baseCenterX: centerX, baseCenterY: centerY,
+        baseOffset: { dx: stored?.dx || 0, dy: stored?.dy || 0 },
+        frozenBase,
+        original: { key: roleKey, cx: centerX, cy: centerY },
+      };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+      return;
+    }
     const roleBoxes = Object.fromEntries(scene.filter(item => item.type === "text" || item.type === "furniture").map(item => [
       item.type === "furniture" ? `furn_${item.role}` : item.role,
       item.bounds,
