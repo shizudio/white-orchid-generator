@@ -17,14 +17,30 @@ import FeedGallery from "./FeedGallery";
 import ArtDirectorChat from "./ArtDirectorChat";
 import { useBrandKit } from "./BrandProvider";
 import { PATCH_OPTIONS } from "@/lib/design-patch";
+import { compileDesignPatchCommands } from "@/lib/design-patch-commands.mjs";
+import { planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planPalettePinWorkflow, planShapeCollectionWorkflow } from "@/lib/design-composite-workflows.mjs";
+import { planDesignPatchCompositeWorkflows, resolveDesignPatchTransitions } from "@/lib/design-patch-workflow-plan.mjs";
+import { hasUserFormatOverride } from "@/lib/design-document.mjs";
 import { runLocalAudit as computeLocalAudit, partitionIssues, extractAuditFindings, PLATFORM_SAFE } from "@/lib/audit-local";
 import { newTurnId, getCurrentSessionId, localGetSession, logFeedback as logFeedbackClient, looksLikeGuardSession } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
 import { editorSelectionReducer, selectionInspectorKey, selectionSceneId } from "@/lib/editor-selection.mjs";
-import { migrateDesignDocument } from "@/lib/design-document.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
-import { createRenderModel, resolveRenderDimension } from "@/lib/render-model.mjs";
+import {
+  clampNormalizedRoleBox,
+  projectBleedBox,
+  resolveLogoPlacementBase,
+  resolveRoleOffsetsForFormat,
+  resolveTextSafeMargins,
+} from "@/lib/format-placement-policy.mjs";
+import { createRenderModel, resolveRenderDimension, resolveRenderLayout } from "@/lib/render-model.mjs";
 import { createRenderResult, shapeBounds } from "@/lib/render-result.mjs";
+import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs";
+import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
+import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
+import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
+import { contrastAtExtremes, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
+import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
 import { useFormatPreviewQueue } from "@/hooks/useFormatPreviewQueue";
 import { useMobileInspectorSheet } from "@/hooks/useMobileInspectorSheet";
@@ -65,8 +81,29 @@ import { useFormatOverrideActions } from "@/hooks/useFormatOverrideActions";
 import { useInspectorModel } from "@/hooks/useInspectorModel";
 import { useMediaGenerationActions } from "@/hooks/useMediaGenerationActions";
 import { useDesignDocumentController } from "@/hooks/useDesignDocumentController";
+import { useDesignWorkflowExecutor } from "@/hooks/useDesignWorkflowExecutor";
+import { useInspectorRenderTruth } from "@/hooks/useInspectorRenderTruth";
+import { useDesignHistoryActions } from "@/hooks/useDesignHistoryActions";
+import { useManualEditBurst } from "@/hooks/useManualEditBurst";
+import { createDesignHistorySnapshot } from "@/lib/design-history.mjs";
+import { designPatchInteractionTags, isContinuousDesignPatch, prepareDesignPatch, resolveDesignPatchCompletion } from "@/lib/design-patch-preparation.mjs";
+import { executeDesignCommandEntries } from "@/lib/design-workflow-executor.mjs";
 import { createAssetAnalysisCache } from "@/lib/asset-analysis.mjs";
 import { readPersistedDesignPayload, migrateLegacyLayoutShape } from "@/lib/design-persistence.mjs";
+import { explicitMediaHostShapeId, shapeLayerGroup, shapeRoleLabel } from "@/lib/design-layer-contract.mjs";
+import { createExportAuthorization } from "@/lib/readiness-policy.mjs";
+import { buildArchetypeMaterialization } from "@/lib/archetype-materialization.mjs";
+import { solveEditorialLayout } from "@/lib/editorial-layout-solver.mjs";
+import {
+  dodgeMessagePillFromFocal,
+  planScheduleRows,
+  synthesizeMissingEditorialRoles,
+} from "@/lib/editorial-placement-policy.mjs";
+import { planCompleteSupportPlacement } from "@/lib/editorial-support-policy.mjs";
+import {
+  materializeArchetypeLayout,
+  resolveArchetypeVariant as archetypeVariant,
+} from "@/lib/archetype-layout-policy.mjs";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
    DEV_HOOKS — development-only console hooks. NODE_ENV is statically replaced
@@ -1020,97 +1057,6 @@ const ARCHETYPE_IDS=ARCHETYPES.map(a=>a.id);
 // Resolve an archetype's per-dimension element boxes: start from square-authored
 // elements, deep-merge the perDim override for this format class. Returns a fresh
 // elements object (never mutates the source). formatClass maps DIMENSIONS→keys.
-const archetypeFormatClass=(dimId)=> dimId==="ig_square"?"square"
-  : dimId==="ig_portrait"?"portrait" : dimId==="story"?"story"
-  : ["twitter","facebook","banner"].includes(dimId)?(dimId==="banner"?"banner":"wide"):"square";
-function resolveArchetypeElements(arch,dimId){
-  const base=arch.elements||{};
-  const pd=arch.perDim||{};
-  // perDim keys are dimension IDs (story/banner) for precision; when none exists for
-  // this exact dim, fall back to its FORMAT CLASS key (Commit 1). This lets a single
-  // `wide` override serve BOTH twitter (16:9) and facebook (1.91:1) — the two wide
-  // formats the square-authored boxes clipped/collided on — without authoring each id
-  // twice. Precedence: exact dimId → format class → square base.
-  const ov=pd[dimId]||pd[archetypeFormatClass(dimId)]||null;
-  const out={};
-  for(const k of Object.keys(base)) out[k]={...base[k]};
-  if(ov) for(const k of Object.keys(ov)) out[k]={...(out[k]||{}),...ov[k]};
-  return out;
-}
-
-/* ── ARCHETYPE MATERIALIZATION (Commit 1 — full unification) ──────────────────
-   materializeArchetypeLayout(arch, dimId) translates an archetype's element boxes
-   (§2 data) into the CONCRETE role geometry the SINGLE render path consumes:
-     { roles:{hero,support,microLabel} (canvas fractions {x,y,w,h,align}),
-       register, photoTreatment, photoFrame, split, sideFrac, motif, fullBleed,
-       thinBorder, heroCapFrac, heroToSupport, whitespace, centerExclude,
-       gridAnchor, palette, caps }
-   This is used at APPLY time to write typeLayouts[postType].roles (+byDim) and the
-   photoTreatment/photoFrame/heroRegister/microLabel state, so the archetype becomes
-   ordinary editable state — no render fork. It is ALSO consulted per-dim so the
-   materialized square geometry cascades into other formats' safe zones. */
-// Resolve the sanctioned palette variant for an archetype: variantIdx cycles the
-// archetype's `variants` array (picker re-click / rotation). Falls back to the base
-// palette. Returns {bg, ink, accentUse, klass, motifPastels?} — all valid B/BG ids.
-function archetypeVariant(arch,variantIdx){
-  const vs=arch&&Array.isArray(arch.variants)&&arch.variants.length?arch.variants:null;
-  const base=arch?.palette||{bg:"whiteSmoke",ink:"burnham",accent:"softTangerine",klass:"light"};
-  if(!vs) return {bg:base.bg,ink:base.ink,accentUse:base.accent,klass:base.klass||"light"};
-  const v=vs[((variantIdx||0)%vs.length+vs.length)%vs.length];
-  return {bg:v.bg,ink:v.ink,accentUse:v.accentUse,klass:v.klass||"light",motifPastels:v.motifPastels,logoUse:v.logoUse,shapeId:v.shapeId};
-}
-function materializeArchetypeLayout(arch, dimId, variantIdx){
-  const el=resolveArchetypeElements(arch,dimId);
-  const asRole=(b)=> b?{x:b.x,y:b.y,w:b.w,h:b.h,align:b.align||"left"}:null;
-  const V=archetypeVariant(arch,variantIdx);
-  // Photo-frame intent from the archetype's special mode.
-  let photoFrame={type:"none"};
-  if(arch.special==="floatedCard" && el.card){
-    photoFrame={type:"card", box:asRole(el.card), radiusFrac:arch.cardRadiusFrac||0.06,
-      rotationDeg:0 /* (T4) de-tilt: rotation 0 everywhere — client disliked the tilted card */};
-  }else if(arch.special==="petalWindow" && el.mask){
-    const c={x:(el.mask.x+el.mask.w/2),y:(el.mask.y+el.mask.h/2)};
-    photoFrame={type:"petalMask", box:asRole(el.mask), areaFrac:arch.maskAreaFrac||0.30, centroid:c};
-  }else if(arch.special==="shapeCutout" && el.mask){
-    // (R2) photo revealed through a brand-shape silhouette (frame-mode); the
-    // variant picks the shape so the ring rotates field + silhouette together.
-    photoFrame={type:"shapeMask", box:asRole(el.mask), shapeId:V.shapeId||"shape-1"};
-  }
-  return {
-    roles:{ hero:asRole(el.hero), support:asRole(el.support), microLabel:asRole(el.microLabel) },
-    photoRegion: asRole(el.photo),               // split/portrait side photo
-    register: arch.heroRegister==="heavySans"?"heavySans":"serif",
-    caps: !!(arch.caps||arch.usesDateAsHero),
-    usesDateAsHero: !!arch.usesDateAsHero,
-    photoTreatment: arch.photoTreatment||"none",
-    photoFrame,
-    split: arch.split||null, sideFrac: arch.split||null,
-    motif: arch.special==="motifField"?{count:arch.motifCount||3, pastels:V.motifPastels||arch.motifPastels||["sage","butter"]}:null,
-    furniture: Array.isArray(arch.furniture)?arch.furniture:null,   // (T1) anchoring tells
-    cropDrama: typeof arch.cropDrama==="number"?arch.cropDrama:null, // (T8) focal-aware crop zoom
-    fullBleed: !!arch.fullBleed, thinBorder: !!arch.thinBorder,
-    heroCapFrac: arch.scaleRatio?.heroCapFrac||0.3, heroToSupport: arch.scaleRatio?.heroToSupport||8,
-    leading: arch.heroRegister==="heavySans"?1.05:1.02, leadingBody: arch.leadingBody||1.32,
-    heroLeading: arch.heroLeading||null, heroTracking: arch.heroTracking||null, // (r3 fix #3) closing card
-    logoSizeId: arch.elements?.logo?.sizeId||null, logoPos: arch.elements?.logo?.position||null,
-    whitespace: typeof arch.whitespace==="number"?arch.whitespace:null,
-    centerExclude: !!arch.centerExclude, gridAnchor: arch.gridAnchor||"edge",
-    // Palette resolved through the chosen VARIANT (bg/ink). accent = one emphasis ink
-    // name, preserving the spec one-accent rule downstream.
-    palette: {klass:V.klass, bg:V.bg, ink:V.ink, accent:V.accentUse||arch.palette?.accent||"softTangerine"},
-    // (WP-P P1) LOGO RESTRAINT — per-archetype/variant logo policy (feed-grammar §2).
-    // "none"  → no logo at all (statement/manifesto/stat/photo tiles)
-    // "url"   → a small light url line only (furniture-like), no lockup image
-    // "mark"  → the flower mark alone (small)
-    // "lockup"→ the full mark+wordmark lockup (brand/closing cards only)
-    // Variant may override the archetype default (V.logoUse); else arch.logoUse; else "url".
-    logoUse: V.logoUse || arch.logoUse || "url",
-    supportRegister: arch.supportRegister || null, // "serifItalic" for brand/closing taglines
-    special: arch.special || null,                 // "scheduleRows" etc. (P2 feed cards)
-    variantIdx: variantIdx||0, variantCount: (arch.variants?.length||1),
-  };
-}
-
 /* Resolution rule (documented per prompt):
    For a render dimension D and post type P, the effective text layout is:
      1. user override typeLayoutsByDim[D][P]  (written only when the user edits
@@ -1132,32 +1078,12 @@ function resolveTextLayout(dimId,postType,typeLayouts,typeLayoutsByDim,arch){
   }).value;
 }
 
-function resolveRoleOffsets(dimId,postType,offsetsByDim){
-  const master=offsetsByDim?.[MASTER_DIM]?.[postType]||{};
-  const byFormat=Object.fromEntries(Object.entries(offsetsByDim||{}).flatMap(([id,posts])=>id!==MASTER_DIM&&posts?.[postType]?[[id,posts[postType]]]:[]));
-  return resolveInheritedValue({master,byFormat},dimId,MASTER_DIM,value=>value).value||{};
-}
-
 /* ── Per-dimension LOGO placement resolution (spec §1 + collision/focal guard) ──
    Mirror of the text byDim pattern. `userLogoTouched` (UI / template / AI apply)
    pins the logo ONLY for MASTER_DIM; every other format uses its own per-format
    spec default UNLESS the user has placed the logo while THAT format was active
    (logoByDim[dimId]). This is the single clean rule that stops a square-tuned
    position (e.g. Now Enrolling's top-center) from carrying verbatim onto Banner. */
-function resolveLogoBase(dimId,postType,userLogoTouched,logoByDim,globalPos,globalSizeId,globalFree){
-  // `explicit`=true when the placement came from a deliberate user choice for THIS
-  // format (a per-dim override, or the master pin on MASTER_DIM). pickLogoPlacement
-  // honours explicit bases VERBATIM — the auto focal/contrast guard only reshuffles
-  // spec-default / non-explicit bases. The user is the boss (Task 1 fix).
-  // (Refinement 2) `free` = a continuous fractional CENTRE {x,y} the user dragged the
-  // logo to. When present it OVERRIDES the named anchor at draw time (putLogo lands the
-  // mark exactly there); the named `position` is retained as the semantic anchor. A free
-  // pin is by definition explicit — pickLogoPlacement honours it verbatim, never relocates.
-  const defaultMaster=formatLayoutFor(MASTER_DIM,postType).logo;
-  const master=userLogoTouched?{position:globalPos,sizeId:globalSizeId,free:globalFree||null}:{position:defaultMaster.position,sizeId:defaultMaster.sizeId,free:null};
-  const resolved=resolveInheritedValue({master,byFormat:logoByDim||{}},dimId,MASTER_DIM,(_base,id)=>{const logo=formatLayoutFor(id,postType).logo;return{position:logo.position,sizeId:logo.sizeId,free:null};});
-  return{...resolved.value,free:resolved.value?.free||null,explicit:resolved.source==="override"||(resolved.source==="master"&&userLogoTouched)};
-}
 // Focal-exclusion radius: the logo box must not intersect a band around the
 // smart-crop focal point (fx,fy). 0.22×min(W,H) keeps the mark clear of a face
 // (spec §4 subject) even when the text zone is elsewhere. Comment per prompt.
@@ -1370,7 +1296,7 @@ function placeTextElement(ctx){
 // order — rung 0 ink-flip (pickInk), then heavier sanctioned WEIGHT → the most robust
 // brand FACE (the sans body) → SIZE up within range → BAND last resort. Faces/weights
 // reference F (brand fonts), so the class is built at call time (never at module-eval).
-// (§6a shape–band exclusion — RATIFIED 2026-07-13) opts.noBand drops the BAND last-resort
+// opts.noBand drops the BAND last-resort for callers that explicitly disallow it.
 // rung: on a design with an active shape (archetype mask/cutout, or a free shape intersecting
 // the zone) the band rung is disabled by default, so the ladder resolves through ink→weight→
 // face→size only. If none passes, placeTextElement returns null (an HONEST refusal → the
@@ -1383,14 +1309,14 @@ function dateElementClass(preferredPx, opts){
       contrastFloor: 4.5,   // AA for a reading line (the caption's own escalate floor)
       opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
       heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
-      noBand,               // (§6a) shape designs forbid the band rung
+      noBand,
       rungs: [
         { face: F.title, weight: 300 },                 // the elegant light serif (today's default)
         { face: F.title, weight: 700 },                 // rung: heavier SANCTIONED serif weight
         { face: F.body,  weight: 600 },                 // rung: the most robust brand FACE (sans body)
         { face: F.body,  weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
         { face: F.body,  weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ].filter(r => !(noBand && r.band)),               // (§6a) shape design → no band rung
+      ].filter(r => !(noBand && r.band)),
     },
   };
 }
@@ -1403,7 +1329,7 @@ function dateElementClass(preferredPx, opts){
 // → BAND last resort. The caller draws the winning rung via drawMicroLabel(face,weight),
 // so the ladder and the paint never diverge. Built at call time (F references brand fonts).
 function eyebrowElementClass(preferredPx, opts){
-  const noBand = !!(opts && opts.noBand);   // (§6a) shape designs forbid the band rung
+  const noBand = !!(opts && opts.noBand);
   return {
     preferredPx,
     escalate: {
@@ -1417,7 +1343,7 @@ function eyebrowElementClass(preferredPx, opts){
         { face: F.body,     weight: 600 },                 // rung: the most robust brand FACE (sans body, caps)
         { face: F.body,     weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
         { face: F.body,     weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ].filter(r => !(noBand && r.band)),                  // (§6a) shape design → no band rung
+      ].filter(r => !(noBand && r.band)),
     },
   };
 }
@@ -1569,13 +1495,6 @@ function pickBrandLogo({ dimId, slot, fieldLum, seed = 0 }) {
   return ring[idx].id;
 }
 
-// Contrast ratio helper (WCAG relative luminance)
-function getLuminance(r,g,b){
-  const s=[r,g,b].map(v=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);});
-  return 0.2126*s[0]+0.7152*s[1]+0.0722*s[2];
-}
-function contrastRatio(l1,l2){const hi=Math.max(l1,l2),lo=Math.min(l1,l2);return(hi+0.05)/(lo+0.05);}
-function hexLuminance(hex){const h=String(hex||"#000000").replace("#","");return getLuminance(parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0);}
 function hexToRgb(hex){
   const h=String(hex||"#000000").replace("#","").trim();
   const full=h.length===3?h.split("").map(x=>x+x).join(""):h.padEnd(6,"0").slice(0,6);
@@ -2150,333 +2069,15 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offset
    Returns adjusted {heroBox,supBox,labelBox} + fitted sizes + flooredRoles for audit.
    Pure over ctx measurement — reimplements no app maths; uses measureHeroLines/
    MIN_FONT_PX/fitText-style shrink already in this module. */
-function reflowEditorial(ctx, a){
-  const { w, h, S, sm, register, caps, heroText, supportText,
-          heroCapFrac, heroToSupport, cardBox, maskBox, photoRegion } = a;
-  // (Item A) User S/M/L font-size steps scale the START (target) size of the hero and
-  // support; the MIN_FONT_PX floors and the shrink-to-fit loop below still own the
-  // outcome (a bigger step can't crop; a smaller step never drops below the readable
-  // floor). Both default to 1 (born-clean), so a fresh design is unchanged.
-  const heroMult = a.heroMult || 1;
-  const supMult  = a.supMult  || 1;
-  const safeTop=sm.t*h, safeBot=(1-sm.b)*h, safeL=sm.l*w, safeR=(1-sm.r)*w;
-  const clampY=(y)=>Math.max(safeTop,Math.min(safeBot,y));
-  const intersects=(p,q)=>p&&q&&p.x<q.x+q.w&&p.x+p.w>q.x&&p.y<q.y+q.h&&p.y+p.h>q.y;
-  let heroBox=a.heroBox?{...a.heroBox}:null;
-  let supBox=a.supBox?{...a.supBox}:null;
-  let labelBox=a.labelBox?{...a.labelBox}:null;
-  const flooredRoles=[];
-  // Obstacles the hero itself should avoid overlapping (photo/card/mask). If the hero
-  // box overlaps a photo obstacle, shrink its WIDTH to the clear side (never draw the
-  // hero on top of the photo unless full-bleed, which doesn't reach here).
-  const photoObstacle = cardBox||maskBox||photoRegion||null;
-  // A photo obstacle spanning (nearly) the full canvas WIDTH is a top/bottom BAND
-  // (e.g. editorial_split / portrait_credential on Story); text must live in the clear
-  // vertical strip, not on the band. A NARROWER obstacle (a floated card/mask) is a
-  // side object text flows around horizontally.
-  const gapPx=Math.min(w,h)*0.02;
-  const safeW=(1-sm.l-sm.r)*w;
-  const bandFull = photoObstacle && photoObstacle.w>=0.8*safeW;
-  // (C2 · seam-safe text, composition-study-1) SEAM TOLERANCE — a text role whose
-  // bbox comes within 2% of the canvas min-dimension of the photo/background
-  // boundary counts as ON the seam and must be resolved, not just a hard overlap.
-  // The obstacle is inflated by this tolerance for the trigger test AND for the
-  // repositioned edges, so a nudged box always clears the seam by ≥2%.
-  const seamTol=Math.min(w,h)*0.02;
-  const seamObstacle=photoObstacle?{x:photoObstacle.x-seamTol,y:photoObstacle.y-seamTol,
-    w:photoObstacle.w+seamTol*2,h:photoObstacle.h+seamTol*2}:null;
-  const constrainToBand=(box)=>{
-    if(!box||!seamObstacle||!intersects(box,seamObstacle)) return box;
-    if(bandFull){
-      // Clear strip above vs below the band. (C2) Prefer the NEARER field — the
-      // strip holding the box's vertical centre — when it can hold a min-height
-      // box; fall back to the taller strip otherwise. The box's relative Y is
-      // preserved where possible (a support box reflowed below the hero must stay
-      // below it, only capped so it doesn't spill onto the seam).
-      const above=seamObstacle.y-safeTop, below=safeBot-(seamObstacle.y+seamObstacle.h);
-      const boxCy=box.y+box.h/2;
-      const minStrip=0.05*h+gapPx;
-      const nearerIsAbove=boxCy<photoObstacle.y+photoObstacle.h/2;
-      // Nearer strip wins when it can hold a min-height box; else the other strip
-      // if IT can; else whichever is taller (degenerate case — clamp does its best).
-      const useAbove=nearerIsAbove ? (above>=minStrip || above>=below)
-                                   : (below>=minStrip ? false : above>=below);
-      if(useAbove){ const bottom=seamObstacle.y-gapPx; const ny=Math.max(safeTop,Math.min(box.y,bottom-0.05*h)); return {...box,y:ny,h:Math.max(0.05*h,Math.min(box.h,bottom-ny))}; }
-      const top=seamObstacle.y+seamObstacle.h+gapPx; const ny=Math.max(top,box.y); return {...box,y:ny,h:Math.max(0.05*h,safeBot-ny)};
-    }
-    // Side object → clip width to a clear side. (C2) Prefer the NEARER side (the
-    // one holding the box's horizontal centre) when it clears the min width.
-    const leftW=Math.max(0,seamObstacle.x-box.x);
-    const rightClear=Math.max(0,(box.x+box.w)-(seamObstacle.x+seamObstacle.w));
-    const nearerIsLeft=(box.x+box.w/2)<photoObstacle.x+photoObstacle.w/2;
-    if(nearerIsLeft && leftW>0.18*w) return {...box,w:Math.min(box.w,seamObstacle.x-box.x-gapPx)};
-    if(!nearerIsLeft && rightClear>0.18*w){ const nx=seamObstacle.x+seamObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
-    if(leftW>=rightClear && leftW>0.18*w) return {...box,w:Math.min(box.w,seamObstacle.x-box.x-gapPx)};
-    if(rightClear>0.18*w){ const nx=seamObstacle.x+seamObstacle.w+gapPx; return {...box,x:nx,w:(box.x+box.w)-nx}; }
-    return box;
-  };
-  // ── (C3+R4 · shapes are obstacles, or partners — composition studies 1/2) ──
-  // Decor/overlay shapes join the obstacle set so a blob can never clip a text
-  // role (study-1 like-12). Each obstacle: {box (px), canCompose (bool)}.
-  //   • PARTNER (R4, study-2 mood-8): when the text block fits fully INSIDE the
-  //     shape with ≥6% of the shape's short side as padding — and the ink reads
-  //     against the shape's fill (caller sets canCompose) — the text is CENTRED
-  //     on the shape (blob-behind-text, done right).
-  //   • OBSTACLE (C3): otherwise the role is nudged clear (nearer side first,
-  //     seam-tolerant like the photo band) so their bboxes never intersect.
-  // No partial clips ever. Composition never lands outside the text-safe rect.
-  const decorObs=Array.isArray(a.decorObstacles)?a.decorObstacles.filter(d=>d&&d.box):[];
-  const resolveDecor=(box)=>{
-    if(!box||!decorObs.length) return box;
-    for(const d of decorObs){
-      const inf={x:d.box.x-seamTol,y:d.box.y-seamTol,w:d.box.w+seamTol*2,h:d.box.h+seamTol*2};
-      if(!intersects(box,inf)) continue;
-      // R4 COMPOSE — centre the text ON the shape with ≥6% padding inside its bounds.
-      const pad=0.06*Math.min(d.box.w,d.box.h);
-      if(d.canCompose && box.w<=d.box.w-pad*2 && box.h<=d.box.h-pad*2){
-        // Ideal position: dead-centre on the shape. When the shape hugs a canvas
-        // edge that centre can spill the text-safe rect — so CLAMP the centred
-        // block back inside the safe rect first (born-clean: never composed into
-        // a platform action band). The clamped position must ALSO stay inside
-        // the shape's padded interior — a partial blob-clip is exactly what R4
-        // forbids. When even the clamp can't satisfy both, fall THROUGH to the
-        // C3 OBSTACLE branch below so this same shape nudges the role clear in
-        // this same pass: composed or avoided, never stranded off-centre
-        // (ratified gap, asset-pipeline Part V).
-        const cx=Math.max(safeL,Math.min(safeR-box.w, d.box.x+(d.box.w-box.w)/2));
-        const cy=Math.max(safeTop,Math.min(safeBot-box.h, d.box.y+(d.box.h-box.h)/2));
-        if(cx>=d.box.x+pad && cx+box.w<=d.box.x+d.box.w-pad &&
-           cy>=d.box.y+pad && cy+box.h<=d.box.y+d.box.h-pad &&
-           cx>=safeL && cy>=safeTop && cx+box.w<=safeR && cy+box.h<=safeBot){
-          box={...box,x:cx,y:cy,composedOnShape:true};
-          continue;
-        }
-      }
-      // C3 AVOID — pick the axis with the roomier clearance. Horizontal clip when
-      // a clear side strip ≥18% of canvas width exists; else vertical nudge to the
-      // nearer clear strip (mirrors the photo-band logic).
-      const leftW=inf.x-box.x, rightClear=(box.x+box.w)-(inf.x+inf.w);
-      const nearerLeft=(box.x+box.w/2)<d.box.x+d.box.w/2;
-      if(nearerLeft && leftW>0.18*w){ box={...box,w:Math.min(box.w,inf.x-box.x-gapPx)}; continue; }
-      if(!nearerLeft && rightClear>0.18*w){ const nx=inf.x+inf.w+gapPx; box={...box,x:nx,w:(box.x+box.w)-nx}; continue; }
-      const above=inf.y-safeTop, below=safeBot-(inf.y+inf.h);
-      const nearerAbove=(box.y+box.h/2)<d.box.y+d.box.h/2;
-      const minStrip=0.04*h;
-      const goAbove=nearerAbove ? (above>=minStrip||above>=below) : (below>=minStrip?false:above>=below);
-      if(goAbove){
-        const bottom=inf.y-gapPx;
-        const ny=Math.max(safeTop,Math.min(box.y,bottom-Math.min(box.h,minStrip)));
-        box={...box,y:ny,h:Math.max(minStrip,Math.min(box.h,bottom-ny))};
-      }else{
-        const top=inf.y+inf.h+gapPx;
-        const ny=Math.min(Math.max(top,box.y),safeBot-minStrip);
-        box={...box,y:ny,h:Math.max(minStrip,Math.min(box.h,safeBot-ny))};
-      }
-    }
-    return box;
-  };
-  if(heroBox) heroBox=constrainToBand(heroBox);
-  if(heroBox) heroBox=resolveDecor(heroBox);
-  // (C2) The eyebrow is a text role too — it must be seam-safe like hero/support
-  // (it was previously never constrained against the photo obstacle).
-  if(labelBox) labelBox=constrainToBand(labelBox);
-  if(labelBox) labelBox=resolveDecor(labelBox);
-  // Reserve vertical room for the support caption BELOW the hero when both share the
-  // lower zone: cap the hero box height so hero_bottom + gap + a min caption fits above
-  // the bottom safe margin. This prevents the tall-format (Story) case where a big hero
-  // pushes the reflowed caption past the margin or back onto the hero.
-  const supMinPre=supportText?minFloor("body",h,0.02*h,24*S)*1.3:0;
-  if(heroBox && supportText && supBox){
-    const gapPre=Math.max(h*0.03,0.05*h);
-    // When a full-width photo band sits BELOW the hero, the caption must fit between the
-    // hero and the band (not below the band) — so cap the hero against the band top too.
-    let effBottom=safeBot;
-    if(bandFull && photoObstacle && photoObstacle.y>heroBox.y) effBottom=Math.min(effBottom,photoObstacle.y-gapPx);
-    const heroBottomCap=effBottom-supMinPre-gapPre;
-    if(heroBox.y+heroBox.h>heroBottomCap) heroBox.h=Math.max(0.06*h,heroBottomCap-heroBox.y);
-  }
-  // ── Measure the hero at its target size, shrink-to-fit W×H, MIN floored. ──
-  let heroStart=Math.max(24,(heroCapFrac||0.3)*h*1.35*heroMult);
-  const heroMin=minFloor("headline",h,heroStart,38*S);
-  let heroPx=heroMin, heroUsedH=0, heroLineH=0;
-  if(heroText && heroBox){
-    const words = caps
-      ? stripHeroMarkers(heroText).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:true}))
-      : heroWords(heroText);
-    const lr=register==="serif"?1.02:1.05;
-    // Word-width floor: canvas can't break inside a word, so a single word wider than
-    // the box would crop at the edge. Compute the largest size at which the WIDEST
-    // word still fits heroBox.w — the hero may shrink BELOW the height-based min to
-    // honour this (spec: nothing crops at the canvas edge). This kills the "SEPTEMBER"
-    // clipped-at-right-edge bug on long content in a narrow hero box.
-    const widestWordFits=(size)=>{ let ok=true; for(const wt of words){ ctx.font=heroFont(register,size,wt.italic); if(ctx.measureText(wt.text).width>heroBox.w){ ok=false; break; } } return ok; };
-    const multiWord=words.length>=3; // orphan-shrink only helps when ≥3 words can re-pack
-    let size=Math.max(heroStart,heroMin);
-    // ── (R5 · headline scale floor — composition-study-2 §4 "scale courage") ──
-    // On PHOTO-LED archetypes with a DISPLAY hero the moodboard's headlines span
-    // 70–100% of their free zone; the generator's were timid because a short
-    // headline stopped at the capFrac start size even when its quiet zone could
-    // hold far more. heroWidthTarget is a FILL FRACTION (≈0.92) of the RESOLVED
-    // hero box — applied HERE, after constrainToBand/resolveDecor carved the
-    // photo/decor obstacles out of heroBox — so the floor tracks the width the
-    // headline ACTUALLY has (the old ≈0.70×canvas target ignored obstacle
-    // narrowing, leaving carved-box headlines timid). Raise the STARTING size so
-    // the headline drawn on one line would span that width (the type-size
-    // equivalent for very short words), capped at 0.42×H. The EXISTING
-    // shrink-to-fit loop below still owns the outcome — it reduces the size
-    // whenever the role's box (the quiet zone) genuinely can't hold it, so
-    // nothing new can collide, crop, or cross a floor (born-clean holds by
-    // construction).
-    if(a.heroWidthTarget && words.length && heroBox.w>0){
-      let oneW=0;
-      for(let i=0;i<words.length;i++){
-        const wt=words[i];
-        ctx.font=heroFont(register,100,wt.italic);
-        oneW+=ctx.measureText(wt.text).width;
-        if(i<words.length-1 && wt.space!==false) oneW+=ctx.measureText(" ").width;
-      }
-      if(oneW>0){
-        const sizeForWidth=100*(a.heroWidthTarget*heroBox.w)/oneW;
-        // (Item A) the user's size step scales the fill floor too — otherwise a short
-        // headline on a photo-led archetype would always fill its width and never
-        // reflect S/M/L. The shrink-to-fit loop below still clamps to the box.
-        size=Math.max(size, Math.min(sizeForWidth, 0.42*h)*heroMult);
-      }
-    }
-    let hitFloor=false;
-    while(size>=heroMin){
-      const fit=measureHeroLines(ctx,words,register,size,heroBox.w);
-      if(fit.lineCount*size*lr<=heroBox.h && widestWordFits(size)){ heroPx=size; heroLineH=size*lr; heroUsedH=fit.lineCount*heroLineH; break; }
-      size-=2;
-    }
-    // (R3a) ORPHAN-LINE SHRINK — when the chosen size leaves a lone short line (any
-    // line <35% of the widest, e.g. the "to" in "Freedom / to / explore" in a narrow
-    // box), try a modestly smaller size that re-wraps two short words onto one line.
-    // Bounded to ≥84% of the fitting size (and ≥heroMin) so the hero stays oversized;
-    // only accepted if it does NOT increase the line count. Fixes board v4 tiles 2/5/12.
-    if(heroPx>=heroMin && multiWord){
-      const worst=(sz)=>{ const g=greedyHeroWrap(ctx,words,register,sz,heroBox.w); const wmax=Math.max(...g.widths,1); return {frac:Math.min(...g.widths)/wmax,lines:g.lineCount}; };
-      const cur=worst(heroPx);
-      if(cur.frac<0.35){
-        const lo=Math.max(heroMin,Math.floor(heroPx*0.84));
-        for(let sz=heroPx-2; sz>=lo; sz-=2){
-          const c=worst(sz);
-          if(c.lines<=cur.lines && c.frac>=0.35 && sz*c.lines*lr<=heroBox.h && widestWordFits(sz)){
-            heroPx=sz; heroLineH=sz*lr; heroUsedH=c.lines*heroLineH; break;
-          }
-        }
-      }
-    }
-    if(size<heroMin){
-      // Height/width still not satisfied at the min: keep shrinking (below the min)
-      // ONLY as far as needed for the widest word to fit, so nothing crops. Cap the
-      // absolute floor at a hard legibility minimum so we never vanish.
-      hitFloor=true;
-      const hardFloor=Math.max(14,0.02*h);
-      size=heroMin;
-      // (Crops ext) COMPLETE-OR-ABSENT: keep shrinking below the readable min until
-      // the widest word fits the box width AND every wrapped line fits the box
-      // height — a hero renders whole; a mid-sentence clamp never ships.
-      while(size>hardFloor){
-        if(widestWordFits(size)){
-          const f=measureHeroLines(ctx,words,register,size,heroBox.w);
-          if(f.lineCount*size*lr<=heroBox.h) break;
-        }
-        size-=2;
-      }
-      heroPx=size; heroLineH=size*lr;
-      const fit=measureHeroLines(ctx,words,register,size,heroBox.w); heroUsedH=fit.lineCount*heroLineH;
-      flooredRoles.push({label:"Headline"});
-    }
-    // Clamp the hero's drawn height to its box so no line spills below it (the box is
-    // itself inside the safe margins). If the fitted text is taller than the box, trim
-    // to the number of lines that fit — a controlled truncation, never an edge crop.
-    if(heroLineH>0 && heroUsedH>heroBox.h){ const maxLines=Math.max(1,Math.floor(heroBox.h/heroLineH)); heroUsedH=maxLines*heroLineH; }
-  }
-  const heroBottom = heroBox ? heroBox.y+Math.max(heroUsedH,0) : safeTop;
-  // (rev: calibration r1) ONE consistent hero↔support rhythm gap. Board v3 tile 4
-  // (full_bleed) sat title+caption too close; tile 9 (label_headline) left too small
-  // a gap. Rule: gap = clamp(0.35×heroLineHeight, min 24px@1080). Applied whenever
-  // support sits below the hero — not only on a hard collision — so the vertical
-  // rhythm is uniform across archetypes.
-  const rhythmGap = Math.max(0.35*(heroLineH||heroPx*1.02), 24*(h/1080));
-  const gap = rhythmGap;
-  // ── microLabel (eyebrow): must sit clear of the hero. If it overlaps the hero,
-  //    move it ABOVE the hero (its own height above heroBox.y); if no room, drop it. ──
-  let labelSize = labelBox ? Math.max(minFloor("body",h,labelBox.h,20*S),0.022*h) : 0;
-  if(labelBox){
-    labelSize=Math.min(labelSize,labelBox.h);
-    const lb={x:labelBox.x,y:labelBox.y,w:labelBox.w,h:labelSize*1.4};
-    if(heroBox && intersects(lb,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
-      const above=heroBox.y-labelSize*1.5;
-      if(above>=safeTop) labelBox={...labelBox,y:above};
-      else labelBox=null; // no room above → drop the eyebrow (lowest text priority after support)
-    }
-  }
-  // ── support: reflow below the hero's REAL bottom if it overlaps the hero. Then
-  //    clamp to the bottom safe margin; shrink target size to fit; floor + audit. ──
-  // (rev: calibration r1) Caption SIZE FLOOR. The support target used to be purely
-  // heroPx/heroToSupport, which rendered captions microscopically on board v3 (client:
-  // "content too small" on tiles 2,4,7,9,10,11,12). Start the caption at the LARGER of
-  // that ratio target and the raised body floor (~62px@1080) so short captions like
-  // "Every child" fill out to a legible size instead of shrinking to the ratio. The
-  // 8–10× hierarchy still holds because the hero itself is far larger.
-  const supTarget=(heroPx||heroBox?.h*0.5||0.1*h)/(heroToSupport||8);
-  const supFloor=MIN_FONT_PX.body(h);
-  // (Item A) apply the support size step AFTER the readable floor so a bigger step
-  // grows the caption even when it sat at the floor; a smaller step is re-floored by
-  // supMin (below) so the caption never drops below legibility.
-  let supStart=Math.max(0.02*h,supTarget,supFloor)*supMult;
-  // (born-clean 2026-07-06) The caption's RATIO target (heroPx/heroToSupport) was
-  // OVERRIDDEN by the legibility floor — i.e. the archetype wanted a caption smaller
-  // than the body floor, so the system raised it to stay readable. When this happens
-  // the achieved hero:support ratio is FORCED below the archetype's target BY DESIGN,
-  // not by drift: the archetype-hero-ratio advisor must not scold the system for its
-  // own legibility decision (that would put an advisor dot on a fresh, correct design).
-  // Flag it so runArchetypeDrift can suppress the ratio finding (mirrors the existing
-  // multi-word-hero legibility exception).
-  const bodyAtFloor = supTarget < supFloor - 0.5;
-  let supMin=minFloor("body",h,supStart,24*S);
-  if(supBox){
-    // (rev: calibration r1) Normalise the hero↔support rhythm: whenever the support
-    // box sits BELOW the hero (its authored top is past the hero's top) and the
-    // measured gap is off by >25% from the target rhythm gap, snap it to
-    // heroBottom+gap. This fixes tile 4's too-tight and tile 9's too-small gaps at
-    // the engine level (skipped when support sits ABOVE/beside the hero, e.g. splits).
-    if(heroBox && supBox.y>=heroBox.y-0.01*h && heroBottom>heroBox.y){
-      const curGap=supBox.y-heroBottom;
-      if(curGap<gap*0.75 || curGap>gap*1.6){ supBox={...supBox,y:clampY(heroBottom+gap)}; }
-    }
-    // If support overlaps the hero (their authored boxes collide), push it below.
-    if(heroBox && intersects(supBox,{x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(heroUsedH,heroBox.h*0.3)})){
-      supBox={...supBox,y:clampY(heroBottom+gap)};
-    }
-    // Keep the WHOLE support box inside the bottom safe margin: first cap its height to
-    // the room below its y, and if that leaves less than a min line, pull the box UP so
-    // a min-height caption fits entirely above safeBot (never draw past the margin).
-    const minSupH=supMin*1.3;
-    if(supBox.y+supBox.h>safeBot){
-      const room=safeBot-supBox.y;
-      if(room>=minSupH) supBox={...supBox,h:room};
-      else supBox={...supBox,y:Math.max(safeTop,safeBot-minSupH),h:minSupH};
-    }
-    // Avoid a photo obstacle (side clip, or move out of a full-width band).
-    supBox=constrainToBand(supBox);
-    // (C3+R4) then compose-or-avoid against decor shapes (after the rhythm snap so
-    // the final caption position is what gets de-collided).
-    supBox=resolveDecor(supBox);
-    // Re-clamp inside the bottom safe margin after any band move.
-    if(supBox.y+supBox.h>safeBot){
-      const room=safeBot-supBox.y;
-      if(room>=minSupH) supBox={...supBox,h:room};
-      else supBox={...supBox,y:Math.max(safeTop,safeBot-minSupH),h:minSupH};
-    }
-    if(supBox.h<supMin*1.3) flooredRoles.push({label:"Body text"});
-  }
-  return { heroBox, supBox, labelBox, heroStart:Math.max(heroStart,heroMin), heroMin,
-           heroPx, labelSize, supStart, supMin, flooredRoles, bodyAtFloor };
-}
-
+const EDITORIAL_MEASUREMENT_ADAPTER={
+  minimumFloor:minFloor,
+  bodyFloor:MIN_FONT_PX.body,
+  stripMarkers:stripHeroMarkers,
+  parseWords:heroWords,
+  fontFor:heroFont,
+  measureLines:measureHeroLines,
+  wrapLines:greedyHeroWrap,
+};
 function sampleOverallLuminance(source){
   const size=64,c=document.createElement("canvas");c.width=size;c.height=size;
   const ctx=c.getContext("2d");ctx.drawImage(source,0,0,size,size);
@@ -2540,57 +2141,6 @@ function suggestLogoColor(bgLuminance) {
 // Logo positions use semantic anchors.
 // Actual canvas coordinates are computed at draw time based on logo size,
 // so the outer edge of the logo always sits at a consistent 5% inset (clear space).
-const LOGO_PAD = 0.05; // 5% of canvas edge = 54px on 1080px canvas
-const LOGO_POSITIONS = {
-  "top-left":      { label:"Top Left",     anchorX:"left",   anchorY:"top"    },
-  "top-center":    { label:"Top Center",   anchorX:"center", anchorY:"top"    },
-  "top-right":     { label:"Top Right",    anchorX:"right",  anchorY:"top"    },
-  "mid-left":      { label:"Mid Left",     anchorX:"left",   anchorY:"center" },
-  "mid-right":     { label:"Mid Right",    anchorX:"right",  anchorY:"center" },
-  "center":        { label:"Center",       anchorX:"center", anchorY:"center" },
-  "bottom-left":   { label:"Bottom Left",  anchorX:"left",   anchorY:"bottom" },
-  "bottom-center": { label:"Bottom Center",anchorX:"center", anchorY:"bottom" },
-  "bottom-right":  { label:"Bottom Right", anchorX:"right",  anchorY:"bottom" },
-};
-
-// Compute logo center (cx, cy) from anchor + size so clear space is always respected.
-// (BORN-CLEAN RULE, 2026-07-06) When a format has platform action zones (safeZone =
-// {top,bottom,left,right} fractions, e.g. Story's top/bottom bands), the per-edge inset
-// grows to clear the band: top-row positions land just BELOW the top band, bottom-row
-// just ABOVE the bottom band. Every NAMED position (all 9) stays available and legal by
-// construction — for auto placement AND for semantic user picks ("bottom right" = the
-// visible bottom-right of the design, never under the platform's buttons). Only a manual
-// pixel-deep DRAG into a band raises the action-zone dot. A small breathing gap (0.015)
-// past the band edge keeps the logo box fully clear, not flush against the UI.
-function logoCenter(pos, canvasW, canvasH, lSz, safeZone) {
-  const basePadX = LOGO_PAD * canvasW, basePadY = LOGO_PAD * canvasW; // pad is edge-relative (canvasW) as before
-  const GAP = 0.015; // extra breathing room past a platform band, in canvas fractions
-  const padTop    = safeZone && safeZone.top    ? Math.max(basePadY, (safeZone.top + GAP) * canvasH)    : basePadY;
-  const padBottom = safeZone && safeZone.bottom ? Math.max(basePadY, (safeZone.bottom + GAP) * canvasH) : basePadY;
-  const padLeft   = safeZone && safeZone.left   ? Math.max(basePadX, (safeZone.left + GAP) * canvasW)   : basePadX;
-  const padRight  = safeZone && safeZone.right  ? Math.max(basePadX, (safeZone.right + GAP) * canvasW)  : basePadX;
-  const half = lSz / 2;
-  let cx, cy;
-  switch (pos.anchorX) {
-    case "left":   cx = padLeft + half; break;
-    case "right":  cx = canvasW - padRight - half; break;
-    default:       cx = canvasW / 2;
-  }
-  switch (pos.anchorY) {
-    case "top":    cy = padTop + half; break;
-    case "bottom": cy = canvasH - padBottom - half; break;
-    default:       cy = canvasH / 2;
-  }
-  return [cx, cy];
-}
-
-const LOGO_SIZES = [
-  { id:"s",  label:"S",  pct:0.12 },
-  { id:"m",  label:"M",  pct:0.22 },
-  { id:"l",  label:"L",  pct:0.38 },
-  { id:"xl", label:"XL", pct:0.55 },
-];
-
 // Canvas dimensions per social channel. w/h are export pixels.
 const DIMENSIONS = [
   // (format order — client ask 2026-07-10) IG Portrait leads: it is the default
@@ -2693,7 +2243,7 @@ function resolveFirstPaintDimensionId() {
 // Clamp a normalized focal point (0..1) so a cover-filled image at the given
 // zoom always covers the frame — no empty edges. Returns [fx, fy].
 // Drawable intrinsic dims (works for <img>, <video>, or {width,height})
-function srcDims(img) { return { iw: img.videoWidth || img.width, ih: img.videoHeight || img.height }; }
+const srcDims=drawableDimensions;
 
 // Geometry of the photo within the frame for transform t = { zoom, cx, cy }.
 // zoom multiplies the cover-fit scale (zoom<1 shrinks below cover → bg shows).
@@ -2701,27 +2251,9 @@ function srcDims(img) { return { iw: img.videoWidth || img.width, ih: img.videoH
 // still covers an axis it's clamped so no gap shows; when smaller it floats free.
 // Photo geometry: center (cx,cy in px), size (dw,dh), rotation (deg).
 // At rotation 0 and covering, the center is clamped so no gap shows.
-function photoGeom(img, w, h, t) {
-  const { iw, ih } = srcDims(img);
-  if (!iw || !ih) return null;
-  const s = Math.max(w/iw, h/ih) * (t?.zoom ?? 1);
-  const dw = iw*s, dh = ih*s;
-  let cx = (t?.cx ?? 0.5)*w, cy = (t?.cy ?? 0.5)*h;
-  const rot = t?.rotation || 0;
-  if (rot === 0) { // clamp center to avoid gaps when the image covers an axis
-    if (dw >= w) cx = Math.max(w-dw/2, Math.min(dw/2, cx));
-    if (dh >= h) cy = Math.max(h-dh/2, Math.min(dh/2, cy));
-  }
-  return { cx, cy, dw, dh, rot };
-}
+const photoGeom=photoGeometry;
 function drawPhotoFramed(ctx, img, w, h, t) {
-  const g = photoGeom(img, w, h, t);
-  if (!g) return;
-  ctx.save();
-  ctx.translate(g.cx, g.cy);
-  if (g.rot) ctx.rotate(g.rot*Math.PI/180);
-  ctx.drawImage(img, -g.dw/2, -g.dh/2, g.dw, g.dh);
-  ctx.restore();
+  drawPhotoWithTransform(ctx,img,w,h,t);
 }
 
 /* ───────── SMART CROP / FOCAL POINT (design spec §4) ─────────
@@ -2879,9 +2411,6 @@ function fitCopyClient(s, max){
   const cut = t.slice(0, max).replace(/\s+\S*$/, '').trim();
   return cut || t.slice(0, max).trim();
 }
-// (copy-fit spec) The copy fields authorship keys off (Tier 2 authorship map + fits).
-const COPY_AUTHOR_FIELDS = ['headline','subtext','attribution','dateText','microLabel','pillText'];
-
 // Built-in brand overlay shapes (always available in the library). Fallback =
 // lib/brand-defaults.js DEFAULT_OVERLAY_ASSETS (identical values — pixel-
 // identity contract). Official brand-assets uploads are merged in at load
@@ -3167,6 +2696,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // hot-module transition. Initialise the render value before any render work.
     let postType=model.document.composition.postType;
     const dimId = resolveRenderDimension(model,opts.dimensionId);
+    const layoutCapability = resolveRenderLayout(model,dimId);
     const live = opts.live !== false;
     const {
       content:{ headline,subtext,attribution,dateText,microLabel,pillText,authorship:copyAuthors },
@@ -3199,7 +2729,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // (they render the archetype verbatim). Applied to each rendered role's box top-left
     // so a dragged eyebrow/date/support/pill sits exactly where the user dropped it.
     const _roleOffSrc = (opts.calibrationContent||opts.legacyForce) ? null
-      : resolveRoleOffsets(dimId,postType,roleOffsetsByDimRef.current);
+      : resolveRoleOffsetsForFormat({
+          formatId:dimId,
+          postType,
+          offsetsByFormat:roleOffsetsByDimRef.current,
+          masterFormatId:MASTER_DIM,
+        });
     const roleOff = (role) => {
       const o = _roleOffSrc && _roleOffSrc[role];
       if(!o) return { dx:0, dy:0, frozen:false };
@@ -3230,7 +2765,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // overflow the safe zone, and record which fields were dropped for a UI hint.
     const dropped=[];
     const fontMeta={};   // resolved font px per role for this render (Task 4)
-    const renderTruth={ textBounds:null,roleBounds:{},logoBox:null,photoBox:null,deadRoles:[],audit:null,logoOverlap:false };
+    const renderTruth={
+      textBounds:null,roleBounds:{},logoBox:null,photoBox:null,deadRoles:[],audit:null,logoOverlap:false,
+      surface:{
+        resolved:{background:curBg?.color||null,field:curBg?.color||null,text:tc||null,backdrop:"none"},
+        requestedResolved:{text:tc||null},
+        appliedTreatments:[],bandCount:0,
+      },
+    };
     // AUDIT accumulators (live only) — engine decisions surfaced to runLocalAudit().
     const auditLogo={explicit:false,overlapsText:false,inFocalBand:false};
     const flooredRoles=[]; // roles whose fitText result landed at its readable floor
@@ -3286,7 +2828,17 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     const effLogoByDim=_calibRender?{}:logoByDim;
     // (Refinement 2) the master free pin is suppressed on calibration renders (born-clean).
     const effLogoFree=_calibRender?null:logoFreePos;
-    const logoBase=resolveLogoBase(dimId,postType,effUserLogoTouched,effLogoByDim,logoPosition,logoSize,effLogoFree);
+    const logoBase=resolveLogoPlacementBase({
+      formatId:dimId,
+      postType,
+      masterFormatId:MASTER_DIM,
+      masterPinned:effUserLogoTouched,
+      placementsByFormat:effLogoByDim,
+      masterPosition:logoPosition,
+      masterSizeId:logoSize,
+      masterFree:effLogoFree,
+      defaultPlacementForFormat:(id,type)=>formatLayoutFor(id,type).logo,
+    });
     const logoFocal=mediaObj?analyzeAsset(mediaObj).focal:null;
     // The logo's actual ink luminance drives the contrast score (Failure 3): an
     // ivory mark over white clothing scores low and gets relocated; green over the
@@ -3410,26 +2962,15 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           const sw=Math.min(w-sx,_drawnBox.w),sh=Math.min(h-sy,_drawnBox.h);
           if(sw>2&&sh>2){
             sctx.drawImage(ctx.canvas,sx,sy,sw,sh,0,0,N,N);
-            const d=sctx.getImageData(0,0,N,N).data;let sum=0,sq=0,n=0,lo=1,hi=0;
-            for(let i=0;i<d.length;i+=4){const L=getLuminance(d[i],d[i+1],d[i+2]);sum+=L;sq+=L*L;n++;if(L<lo)lo=L;if(L>hi)hi=L;}
-            const mean=n?sum/n:0.3, variance=n?Math.max(0,sq/n-mean*mean):0;
-            // Worst-case cell contrast: the darkest (or lightest) sampled cell vs ink —
-            // whichever is closer to the ink is where a stroke would vanish.
-            const worst=Math.min(contrastRatio(lo,drawInkLum),contrastRatio(hi,drawInkLum));
-            backing={mean,variance,worst};
+            const d=sctx.getImageData(0,0,N,N).data,values=[];
+            for(let i=0;i<d.length;i+=4)values.push(getLuminance(d[i],d[i+1],d[i+2]));
+            backing=summarizeLuminanceSamples(values);
           }
         }catch(_){/* canvas tainted / headless — skip; nothing fabricated regardless */}
         if(backing){
           // BUSY = enough luminance spread that some region will fight the ink even when
           // the average is fine (stddev threshold tuned to the client's ~0.2 case).
-          const busy=Math.sqrt(backing.variance)>0.14;
-          const legibleAt=(inkLum)=>{
-            const crMean=contrastRatio(backing.mean,inkLum);
-            const crWorst=busy
-              ? Math.min(contrastRatio(backing.mean-Math.sqrt(backing.variance),inkLum),contrastRatio(backing.mean+Math.sqrt(backing.variance),inkLum))
-              : crMean;
-            return { ok: crMean>=3 && (!busy||crWorst>=3), cr: busy?Math.min(crMean,crWorst):crMean };
-          };
+          const legibleAt=inkLum=>{const result=evaluateInkLegibility(backing,inkLum);return{ok:result.ok,cr:result.contrast,busy:result.busy};};
           let lg=legibleAt(effInkLum);
           // (a) OFFICIAL-VARIANT SWAP — the only legibility lever besides position. Swap
           // to the opposite-ink brand variant when THAT reads and the user hasn't pinned a
@@ -3447,8 +2988,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           if(live||opts.captureAudit){
             auditLogo.overPhoto=true;
             auditLogo.photoContrast=+lg.cr.toFixed(2);
-            auditLogo.photoBusy=busy;
-            auditLogo.photoWorst=+backing.worst.toFixed(2);
+            auditLogo.photoBusy=lg.busy;
+            auditLogo.photoWorst=+contrastAtExtremes(backing,drawInkLum).toFixed(2);
             auditLogo.illegible=!lg.ok;   // ← drives the ledger logo-legibility finding
             // Suggest a CLEARER legal spot for the "Move to a clearer spot" action: score
             // the standard corners' backing for the effective ink (worst-case contrast on
@@ -3478,10 +3019,9 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
                   const N=10,sc2=document.createElement("canvas");sc2.width=N;sc2.height=N;
                   const s2=sc2.getContext("2d",{willReadFrequently:true});
                   s2.drawImage(ctx.canvas,bx,by,bw,bh,0,0,N,N);
-                  const dd=s2.getImageData(0,0,N,N).data;let sm=0,sq2=0,nn=0;
-                  for(let i=0;i<dd.length;i+=4){const L=getLuminance(dd[i],dd[i+1],dd[i+2]);sm+=L;sq2+=L*L;nn++;}
-                  const mn=nn?sm/nn:0.5,vr=nn?Math.max(0,sq2/nn-mn*mn):0,sd=Math.sqrt(vr);
-                  const crW=Math.min(contrastRatio(mn-sd,effInkLum),contrastRatio(mn+sd,effInkLum));
+                  const dd=s2.getImageData(0,0,N,N).data,values=[];
+                  for(let i=0;i<dd.length;i+=4)values.push(getLuminance(dd[i],dd[i+1],dd[i+2]));
+                  const crW=evaluateInkLegibility(summarizeLuminanceSamples(values),effInkLum).contrast;
                   if(!best||crW>best.cr) best={pos:p,cr:crW};
                 }
                 // Only suggest a move if a corner is MEANINGFULLY clearer than where it is.
@@ -3542,27 +3082,135 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // live session's shape paints into every board cell (__woArchStress overlaps).
     const _isOverrideRender=!!(opts.archOverride&&ARCHETYPES_BY_ID[opts.archOverride]);
     const frameLayers=_isOverrideRender?[]:overlayLayers.filter(l=>(l.mode||"frame")==="frame"&&overlayImgs.current[l.assetId]);
+    const frameHostId=explicitMediaHostShapeId(frameLayers,layoutCapability.mediaHostShapeId);
+    const frameHostLayer=frameHostId?frameLayers.find(layer=>layer.uid===frameHostId):null;
     const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
-    const finishRender=()=>createRenderResult({
-      dimensionId:dimId,width:w,height:h,
-      textBounds:renderTruth.textBounds,
-      roleBounds:renderTruth.roleBounds,
-      logoBox:renderTruth.logoBox||auditLogo.box,
-      photoBox:renderTruth.photoBox,
-      shapes:overlayLayers.map((layer,index)=>{
+    const finishRender=()=>{
+      const resolvedLogoBox=renderTruth.logoBox||auditLogo.box;
+      const shapeImageMap=new Map();
+      const renderedShapes=(_isOverrideRender?[]:overlayLayers).map((layer,index)=>{
         const t=resolveT(layer);
         const asset=overlays.find(item=>item.id===layer.assetId);
         const image=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId];
+        const id=layer.uid||layer.id||`${layer.assetId}:${index}`;
+        if(image)shapeImageMap.set(id,image);
         const ratio=(image?.width&&image?.height)?image.width/image.height:(asset?.ratio||1);
-        return { id:layer.uid||layer.id||`${layer.assetId}:${index}`,bounds:shapeBounds(t,ratio,w,h),transform:t,z:(layer.mode||"frame")==="frame"?15:60 };
-      }),
-      deadRoles:renderTruth.deadRoles,
-      textMetrics:fontMeta,
-      contrast:renderTruth.audit?.zoneContrast||null,
-      auditSignal:renderTruth.audit,
-      findings:renderTruth.audit?computeLocalAudit(renderTruth.audit):[],
-    });
+        return {
+          id,
+          assetId:layer.assetId,
+          role:layer.role,
+          owner:layer.owner,
+          bounds:shapeBounds(t,ratio,w,h),
+          transform:t,
+          painted:!!image,
+          paintFraction:layer.structural?1:decorationPaintFraction(decorationAlphaGrid(image)),
+          z:(layer.mode||"frame")==="frame"?15:60,
+        };
+      });
+      // Guard/calibration renders paint a temporary archetype without mutating the
+      // live document. Give contract evaluation the SAME temporary structural shape;
+      // otherwise a live shape leaks into every offscreen cell even though its pixels
+      // are absent from that cell (the former 112/114 arch-stress false positive).
+      let overrideShapeLayer=null;
+      if(_isOverrideRender&&(mat?.photoFrame?.type==="shapeMask"||mat?.photoFrame?.type==="petalMask")){
+        const assetId=mat.photoFrame.type==="shapeMask"?(mat.photoFrame.shapeId||"shape-1"):"orchid-petal";
+        const image=archAssetImgs.current[assetId];
+        const ratio=(image?.width&&image?.height)?image.width/image.height:1;
+        const bounds=fittedFrameBounds(mat.photoFrame.box,w,h,sm,ratio);
+        if(bounds){
+          const uid=`layout:override:${opts.archOverride}`;
+          const transform={x:(bounds.x+bounds.w/2)/w,y:(bounds.y+bounds.h/2)/h,scale:bounds.w/w,rotation:0,opacity:1};
+          overrideShapeLayer={uid,assetId,mode:"frame",role:"image-frame",owner:"layout",origin:"layout",structural:true,master:transform,byDim:{}};
+          renderedShapes.push({id:uid,assetId,role:"image-frame",owner:"layout",bounds,transform,painted:!!image,paintFraction:1,z:15});
+          if(image)shapeImageMap.set(uid,image);
+        }
+      }
+      const effectiveHostId=overrideShapeLayer?.uid||frameHostId;
+      const renderedHost=effectiveHostId?renderedShapes.find(shape=>shape.id===effectiveHostId):null;
+      const subjectWindow=renderTruth.photoBox
+        || (renderedHost?.bounds?{...renderedHost.bounds,eff:imgT}:null)
+        || (mediaObj?{x:0,y:0,w,h,eff:imgT}:null);
+      const mediaDimensions=mediaObj?srcDims(mediaObj):{iw:0,ih:0};
+      const subjectBox=projectFocalSubjectBox({sourceWidth:mediaDimensions.iw,sourceHeight:mediaDimensions.ih,photoBox:subjectWindow,focal:logoFocal,radiusFraction:LOGO_FOCAL_RADIUS});
+      const contractModel=_isOverrideRender?createRenderModel({
+        document:{
+          ...model.document,
+          content:{
+            ...model.document.content,
+            ...Object.fromEntries(["headline","subtext","attribution","dateText"].map(field=>[
+              field,
+              typeof opts.calibrationContent?.[field]==="string"?opts.calibrationContent[field]:model.document.content[field],
+            ])),
+          },
+          composition:{...model.document.composition,archetypeId:opts.archOverride,mediaHostShapeId:overrideShapeLayer?.uid||null},
+          typography:{
+            ...model.document.typography,
+            heroRegister:mat.register||model.document.typography.heroRegister,
+            formatLayouts:{
+              ...model.document.typography.formatLayouts,
+              [dimId]:{...(model.document.typography.formatLayouts?.[dimId]||{}),[postType]:{...layout,roles:mat.roles}},
+            },
+          },
+          media:{
+            ...model.document.media,
+            source:mediaObj?(model.document.media.source||"override-media"):null,
+            treatment:mat.photoTreatment||"none",
+            frame:overrideShapeLayer?{type:"none"}:(mat.photoFrame||{type:"none"}),
+          },
+          logo:{...model.document.logo,hidden:!resolvedLogoBox},
+          shapes:overrideShapeLayer?[overrideShapeLayer]:[],
+        },
+        dimensionId:dimId,
+        runtime:model.runtime,
+        assets:model.assets,
+        layoutContext:model.layoutContext,
+      }):model;
+      const contractEvaluation=evaluateRenderContracts({
+        model:contractModel,dimensionId:dimId,width:w,height:h,
+        textBounds:renderTruth.textBounds,
+        roleBounds:renderTruth.roleBounds,
+        logoBox:resolvedLogoBox,
+        photoBox:renderTruth.photoBox,
+        subjectBox,subjectWindow,shapes:renderedShapes,
+        textMetrics:fontMeta,deadRoles:renderTruth.deadRoles,
+        mediaSource:{width:mediaDimensions.iw,height:mediaDimensions.ih},
+        logoEvidence:auditLogo,
+        surfaceEvidence:{
+          ...renderTruth.surface,
+          contrast:renderTruth.audit?.zoneContrast||null,
+          doubleBackdrop:renderTruth.audit?.archetypeDrift?.doubleBackdrop||0,
+          bandOverShape:renderTruth.audit?.archetypeDrift?.bandOverShape||0,
+        },
+        resolvedTextColor:zoneTc,
+        imageForShape:uid=>shapeImageMap.get(uid)||null,
+        paintIntersects:decorationPaintIntersectsRect,
+        paintStraddles:structuralPaintStraddlesRect,
+      });
+      const {constraints,contentTypography,mediaLogo,surface,decoration}=contractEvaluation;
+      const auditSignal=attachRenderContractAudit(renderTruth.audit,contractEvaluation,{
+        subjectWindow,imageTransform:imgT,width:w,height:h,
+      });
+      return createRenderResult({
+        dimensionId:dimId,width:w,height:h,
+        textBounds:renderTruth.textBounds,
+        roleBounds:renderTruth.roleBounds,
+        logoBox:resolvedLogoBox,
+        photoBox:renderTruth.photoBox,
+        subjectBox,
+        shapes:renderedShapes,
+        deadRoles:renderTruth.deadRoles,
+        textMetrics:fontMeta,
+        contrast:auditSignal?.zoneContrast||null,
+        auditSignal,
+        findings:auditSignal?computeLocalAudit(auditSignal):[],
+        constraints,
+        contentTypography,
+        mediaLogo,
+        surface,
+        decoration,
+      });
+    };
     // ── MATERIALIZED VISUAL STATE (Commit 2 — single render path) ──
     // `mat` is the resolved editorial-visual intent for THIS render, read from
     // first-class state (photoTreatment/photoFrame/heroRegister/microLabel + the
@@ -3678,10 +3326,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // the reflow obstacle set (maskBox/_activeShapeBoxes), so the snap must not
     // relocate editorial text — that was half of the "override each other" conflict.
     if(hasFrame && !mat.editorial){
-      // Widest frame box (union not needed — a single frame is the norm; use the
-      // largest so the clear strips are conservative when several are stacked).
+      // Only the declared media host defines the photo boundary. Decorative or
+      // inactive frame-mode silhouettes must not move the text layout.
       let fb=null;
-      for(const l of frameLayers){
+      for(const l of frameHostLayer?[frameHostLayer]:[]){
         const t=resolveT(l),a=overlays.find(o=>o.id===l.assetId),ratio=(overlayImgs.current[l.assetId]?.width/overlayImgs.current[l.assetId]?.height)||a?.ratio||1;
         const ow=(t.scale??0.2)*w, oh=ow/ratio;
         const box={x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh};
@@ -3743,7 +3391,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     }
     // Seed the resolved zone colour with the forced frame-bg colour (texture_text /
     // photo_logo read zoneTc directly; the tc-branches use (frameBgTextColor||tc)).
-    if(frameBgTextColor)zoneTc=frameBgTextColor;
+    if(frameBgTextColor&&(!textColorId||textColorId==="auto"))zoneTc=frameBgTextColor;
     const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
     // Per-format readable-font floor for a fitText call (Task 4). `start` is the
     // call's start size. The ceiling is the SQUARE-baseline design size (start with
@@ -3818,7 +3466,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // canvas so dark hair → light text, bright wall → dark text. Assigns the closure
     // `zoneTc`. Call AFTER drawPhoto() and BEFORE drawBackdrop()/text.
     const resolveZoneTc=(box)=>{
-      if(frameBgTextColor){zoneTc=frameBgTextColor;return;}   // snapped onto flat bg → forced hi-contrast colour
+      if(textColorId&&textColorId!=="auto"){zoneTc=tc;return;} // explicit/pinned ink is the owner's invariant
+      if(frameBgTextColor){zoneTc=frameBgTextColor;return;}   // auto ink on flat bg → forced hi-contrast colour
       // (Item 4) OFFSCREEN first-shot re-solve: the landing gate flips the ink pole by
       // rendering with opts.tcOverride. Non-live only — never affects the live canvas or
       // any existing offscreen render (guards/proposal never pass tcOverride). The band
@@ -3876,37 +3525,25 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       if(_bandColors.length>1)_doubleBackdrop++;
     };
     // ── (§6a THE SHAPE–BAND EXCLUSION — RATIFIED 2026-07-13) ────────────────────
-    // "When we are using a shape, we don't use the text band by default — they are
-    // conflicting visually." On any design with an ACTIVE SHAPE (an archetype mask/
-    // cutout — photoFrame.type shapeMask/petalMask — or a free overlay shape that
-    // intersects a text zone) the BAND rung of the legibility ladder is disabled by
-    // default across EVERY legibility path. The remaining free variables (placement
-    // clear of the shape, ink flip, weight, robust face, size) do the work. A band may
-    // appear on a shape design ONLY by the owner's explicit ask (backdropMode:'band'),
-    // and even then a band must NEVER clip / overlap / slice a shape's silhouette.
-    // `_archShapeActive` is the archetype mask/cutout; `_activeShapeBoxes` collects the
-    // drawn silhouette boxes (the archetype mask + free decor shapes) for the overlap
-    // guard — populated where maskBox / decorObstacles are computed below, read here at
-    // band-paint time (bands always paint AFTER those are set). `_bandOverShape` counts
+    // A band must never clip / overlap / slice a shape's silhouette. This exclusion is
+    // geometric: an unrelated shape elsewhere on the canvas does not suppress a valid
+    // accessibility treatment. `_activeShapeBoxes` collects the drawn silhouettes for
+    // the overlap guard and `_bandOverShape` counts
     // any band the guard had to BLOCK because it would have overlapped a silhouette — it
     // must stay 0 in normal operation; __woArchStress asserts it (sabotage-testable).
-    // (§2.9.2) The archetype cutout is now an EMITTED frame layer (origin:"layout");
-    // legacy docs / override renders still carry it on mat.photoFrame. Either form
-    // disables the auto band (§6a) — the archetype shape is the design's device.
-    const _archShapeActive = !!(mat && mat.photoFrame && (mat.photoFrame.type==="shapeMask" || mat.photoFrame.type==="petalMask"))
-      || frameLayers.some(l=>l.origin==="layout");
     let _activeShapeBoxes = [];
     let _bandOverShape = 0;
     const _rectsHit=(a,b)=>!!(a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y);
     // The single choke point for every contrast band. Enforces §6a: auto band suppressed
-    // on shape designs; any band (auto OR explicit) that would overlap a silhouette is
+    // any band (auto OR explicit) that would overlap a silhouette is
     // blocked and counted. Records the paint via _bandRole so the double-band assertion
-    // still holds. `explicit` = an owner backdropMode:'band' ask (the only sanctioned band
-    // on a shape design). Returns true when a band was actually painted.
+    // still holds. Returns true when a band was actually painted.
     const _paintBand=(box,color,op,explicit)=>{
-      if(_archShapeActive && !explicit) return false;                        // (§6a) auto band disabled on shape designs
       if(box && _activeShapeBoxes.some(sb=>_rectsHit(box,sb))){ _bandOverShape++; return false; }  // (§6a) never over a silhouette
       drawSolidBand(ctx,w,h,box,color,(op==null?0.92:op)); _bandRole(box,color);
+      renderTruth.surface.resolved.backdrop="band";
+      renderTruth.surface.bandCount++;
+      if(!renderTruth.surface.appliedTreatments.includes("band"))renderTruth.surface.appliedTreatments.push("band");
       return true;
     };
     const drawBackdrop=(box,tintedType)=>{
@@ -3918,8 +3555,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       if(mode==="none")return;                 // shadow-only (beginText adds it)
       if(mode==="band"){
         // Solid brand band. Burnham for light text, ivory for dark text (spec §5).
-        // (§6a) An EXPLICIT owner band is the one sanctioned band on a shape design —
-        // routed through _paintBand so it is still blocked if it would slice a silhouette.
+        // Route explicit owner choices through the same geometric exclusion guard.
         _paintBand(box,bandColor,0.92,true);
         return;
       }
@@ -3932,15 +3568,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // deepening of the existing tint, not a new treatment. If it's still failing
         // at max, a band replaces the extra tint (last resort).
         if(!zoneFails(box))return;             // tint alone is legible
-        // (§6a) On a shape design the AUTO band last-resort is disabled — the deepened
-        // tint is the terminal treatment (the tint sits INSIDE the mask, never a band
-        // slicing the silhouette). Non-shape designs keep the band fallback.
+        // A terminal band is still rejected when its actual box intersects a silhouette.
         for(let step=0.04;step<=TINT_DEEPEN_MAX+1e-6;step+=0.03){
           drawSolidBand(ctx,w,h,box,(curBg?.color)||B.burnham,Math.min(step,TINT_DEEPEN_MAX));
           if(!zoneFails(box))return;           // deepened tint now legible
         }
         // Tint at max still fails → drop a solid brand band as the last resort (suppressed
-        // on shape designs by _paintBand; the deepened tint stands as the final treatment).
+        // by _paintBand when it intersects a structural silhouette).
         _paintBand(box,bandColor,0.92,false);
         return;
       }
@@ -3951,7 +3585,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // ⇒ light text + dark band; bright zone ⇒ dark text + ivory band.
       const q=analyzeQuietRegion(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},zoneTc);
       if(q.mode==="skip")return;               // legible as-is → shadow only
-      _paintBand(box,bandColor,0.92,false);    // (§6a) suppressed on shape designs
+      _paintBand(box,bandColor,0.92,false);    // (§6a) rejected only on geometric conflict
     };
     const setTextBounds=used=>{renderTruth.textBounds={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
     // Frame pre-pass — LEGACY (non-editorial) designs only. Editorial designs render
@@ -3962,7 +3596,19 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     if(hasFrame && !mat.editorial){
       ctx.fillStyle=withAlpha((curBg?.color)||B.burnham,bgAlpha); ctx.fillRect(0,0,w,h);
       const fcv=document.createElement("canvas"); fcv.width=w; fcv.height=h;
-      frameLayers.forEach(l=>drawFrameLayer(ctx,fcv,overlayImgs.current[l.assetId],mediaObj,w,h,resolveT(l),imgT));
+      frameLayers.forEach(layer=>{
+        const source=overlayImgs.current[layer.assetId];
+        if(!source)return;
+        if(layer.uid===frameHostId){
+          drawFrameLayer(ctx,fcv,source,mediaObj,w,h,resolveT(layer),imgT);
+          return;
+        }
+        // A frame-mode shape that is not the declared media host is a structural
+        // colour silhouette, never a second accidental copy of the photo.
+        const fallback=hexLuminance(curBg?.color||B.burnham)>0.5?B.tangerine:B.whiteSmoke;
+        const fill=(layer.fillColor&&B[layer.fillColor])||fallback;
+        drawFrameLayer(ctx,fcv,tintedAccessory(source,fill)||source,null,w,h,resolveT(layer),imgT);
+      });
     }
 
     // ═══ SINGLE RENDER PATH — EDITORIAL MODE (Commit 2 / 3) ═════════════════════
@@ -3992,6 +3638,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const fieldOverrideId = (!overrideArch && fieldColorOverride && BG_ID_SET.has(fieldColorOverride)) ? fieldColorOverride : null;
       const fieldColor=(fieldOverrideId ? BG_OPTIONS.find(b=>b.id===fieldOverrideId)?.color : null)
         ||(BG_OPTIONS.find(b=>b.id===(pal.bg))?.color)||curBg?.color||B.whiteSmoke;
+      renderTruth.surface.resolved.field=fieldColor;
       // Ink resolves for contrast against the FIELD (solid) unless the user forced a
       // colour. textColorId!=="auto" is honoured here so the manual text-colour picker
       // applies on materialized designs (the client's exact bug). When the field is
@@ -4038,34 +3685,15 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // Photo/card/mask boxes keep the un-tightened `sm` (a photo SHOULD bleed to the
       // story edge under the chrome); only the drawn TEXT roles use these margins.
       const _psafe=PLATFORM_SAFE[dimId]||null;
-      const smText=_psafe
-        ? { t:Math.max(sm.t,_psafe.top), b:Math.max(sm.b,_psafe.bottom), l:Math.max(sm.l,_psafe.left||0), r:Math.max(sm.r,_psafe.right||0) }
-        : sm;
-      const clampText=(b)=>{
-        if(!b) return null;
-        const minW=0.05, minH=0.03;
-        let bw2=Math.max(minW,Math.min((b.w??0.8),1-smText.l-smText.r));
-        let bh2=Math.max(minH,Math.min((b.h??0.2),1-smText.t-smText.b));
-        let x0=Math.max(smText.l,Math.min(1-smText.r-bw2,(b.x??smText.l)));
-        let y0=Math.max(smText.t,Math.min(1-smText.b-bh2,(b.y??smText.t)));
-        return {x:x0*w,y:y0*h,w:bw2*w,h:bh2*h};
-      };
+      const smText=resolveTextSafeMargins(sm,_psafe);
+      const clampText=(box)=>clampNormalizedRoleBox(box,{width:w,height:h,safe:smText});
       // Bleed-aware box for SIDE/SPLIT photos (§2.2 editorial_split, §2.10
       // portrait_credential): a photo block authored to touch a canvas edge must
       // BLEED to the true edge (0 / 1), not float inside the safe margin — a "true
       // split" per spec. Only edges the box actually reaches (within 1.5%) bleed;
       // the seam edge stays where authored. This fixes the floating-photo-column
       // bug (photo had ivory gutters on every side instead of reaching the frame).
-      const bleedBox=(b)=>{
-        if(!b) return null;
-        const EPS=0.015;
-        let x0=b.x??0, y0=b.y??0, x1=x0+(b.w??0), y1=y0+(b.h??0);
-        if(x0<=EPS) x0=0;
-        if(x1>=1-EPS) x1=1;
-        if(y0<=EPS) y0=0;
-        if(y1>=1-EPS) y1=1;
-        return {x:x0*w,y:y0*h,w:(x1-x0)*w,h:(y1-y0)*h};
-      };
+      const bleedBox=(box)=>projectBleedBox(box,{width:w,height:h});
       const treatOf=id=>PHOTO_TREATMENTS[id]||PHOTO_TREATMENTS.none;
       const frame=mat.photoFrame||{type:"none"};
       // (B2) record the drawn photo window (live only) for pan hit-testing. `eff` is the
@@ -4153,7 +3781,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             if(mh>m0.h){ mh=m0.h; mw=mh*ar; }
             return {x:m0.x+(m0.w-mw)/2, y:m0.y+(m0.h-mh)/2, w:mw, h:mh};
           })() : null;
-          if(m) jobs.push({rect:m, shapeImg, fillColor:null, rotation:0});
+          if(m) jobs.push({uid:null,rect:m, shapeImg, fillColor:null, rotation:0});
         }
         for(const l of frameLayers){
           const img=overlayImgs.current[l.assetId]||archAssetImgs.current[l.assetId];
@@ -4162,13 +3790,16 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           const a=overlays.find(o=>o.id===l.assetId);
           const ratio=(img.width&&img.height)?img.width/img.height:(a?.ratio||1);
           const ow=(t.scale??0.2)*w, oh=ow/ratio;
-          jobs.push({rect:{x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh},
+          jobs.push({uid:l.uid,rect:{x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh},
                      shapeImg:img, fillColor:l.fillColor||null, rotation:t.rotation||0,
                      opacity:t.opacity});
         }
-        jobs.forEach((job,i)=>{
+        const jobHostId=explicitMediaHostShapeId(frameLayers,layoutCapability.mediaHostShapeId);
+        jobs.forEach(job=>{
           const m=job.rect;
-          const isPhotoJob=(i===jobs.length-1);   // newest frame-kind shape holds the photo
+          // Explicit host wins. A uid-less job is the one sanctioned compatibility
+          // case: a synthesized legacy/override mask. Array position is never intent.
+          const isPhotoJob=jobHostId?job.uid===jobHostId:job.uid==null;
           _activeShapeBoxes.push(m);   // (§6a) every frame silhouette is a band-exclusion obstacle
           if(isPhotoJob) maskBox=m;                     // THE photo obstacle for reflow
           else _extraFrameObstacles.push(m);            // older silhouettes → decor obstacles
@@ -4317,16 +3948,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // short format is the §6 controlled-degradation contract (surfaced via
       // deadRoles / dropHint honestly, never re-invented into a collision).
       // scheduleRows is excluded: its subtext IS the rows, drawn in the hero zone.
-      const hasIdxCarrier = !mat.roles?.microLabel && (mat.furniture||[]).some(it=>it&&it.type==="index");
-      if(supportText && !supBox && heroBox && !provArch?.elements?.support && mat.special!=="scheduleRows"){
-        const belowY=(heroBox.y+heroBox.h)/h+0.015;
-        const fitsBelow = belowY <= 1-smText.b-0.055;
-        const synthY = fitsBelow ? belowY : Math.max(smText.t, heroBox.y/h-0.075);
-        supBox=clampText({x:heroBox.x/w, y:synthY, w:heroBox.w/w, h:0.06});
-      }
-      if(eyebrow && !labelBox && heroBox && !hasIdxCarrier && !provArch?.elements?.microLabel){
-        labelBox=clampText({x:heroBox.x/w, y:Math.max(smText.t, heroBox.y/h-0.075), w:heroBox.w/w, h:0.05});
-      }
+      const synthesizedRoles=synthesizeMissingEditorialRoles({
+        width:w,height:h,safe:smText,heroBox,supportBox:supBox,labelBox,
+        supportText,eyebrowText:eyebrow,roles:mat.roles,furniture:mat.furniture,
+        provenanceElements:provArch?.elements,special:mat.special,
+      });
+      supBox=synthesizedRoles.supportBox;
+      labelBox=synthesizedRoles.labelBox;
+      const hasIdxCarrier=synthesizedRoles.hasIndexCarrier;
       const register = mat.register==="heavySans" ? "heavySans" : "serif";
       let heroInk=inkColor;
       // (R3) messagePill text sits on the PILL, not the photo — the photo-zone colour
@@ -4344,23 +3973,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // Saliency is advisory: any failure leaves the authored centre placement.
       if(mat.special==="messagePill" && mediaObj && heroBox){
         try{
-          const _f=analyzeAsset(mediaObj).focal;
-          if(_f && _f.confidence>=0.35){
-            const _g=photoGeom(mediaObj,w,h,effImgTFor(w,h,false));
-            if(_g){
-              const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh;
-              const _fr=0.20*Math.min(w,h);                    // focal exclusion radius (≈ logo guard's band)
-              const _pTop=heroBox.y-0.05*h;                    // pill top ≈ hero top − padding
-              const _overX=fxC+_fr>heroBox.x && fxC-_fr<heroBox.x+heroBox.w;
-              if(_overX && fyC+_fr>_pTop){
-                const _l=smText.l*w, _r=(1-smText.r)*w;
-                const _nx=fxC>w/2 ? _l : (_r-heroBox.w);       // slide to the emptier side
-                const _dx=Math.max(_l,Math.min(_r-heroBox.w,_nx))-heroBox.x;
-                const _sh=(b)=>b?{...b,x:Math.max(_l,Math.min(_r-b.w,b.x+_dx))}:b;
-                supBox=_sh(supBox); labelBox=_sh(labelBox); heroBox=_sh(heroBox);
-              }
-            }
-          }
+          const pillPlacement=dodgeMessagePillFromFocal({
+            width:w,height:h,safe:smText,heroBox,supportBox:supBox,labelBox,
+            focal:analyzeAsset(mediaObj).focal,
+            photoGeometry:photoGeom(mediaObj,w,h,effImgTFor(w,h,false)),
+          });
+          heroBox=pillPlacement.heroBox;
+          supBox=pillPlacement.supportBox;
+          labelBox=pillPlacement.labelBox;
         }catch(_){/* saliency unavailable → authored placement stands */}
       }
 
@@ -4377,7 +3997,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // priority hero > support > microLabel > logo > motifs. Overlapping lower-
       // priority elements move below the hero (or shrink to their MIN floor); nothing
       // renders outside the safe margins. Returns adjusted boxes + fitted sizes.
-      const reflow = reflowEditorial(ctx, {
+      const reflow = solveEditorialLayout(ctx, {
         // (B4) reflow clamps ONLY text roles (hero/support/label) — pass the
         // platform-safe-aware text margins so a de-collision never repositions a
         // role back into the Story action band (photo/card obstacles are passed
@@ -4410,7 +4030,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // intact) — it shrinks only when the quiet zone genuinely can't hold it.
         heroWidthTarget: ((mat.photoRegion||mat.fullBleed||frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||frameLayers.length>0)
           && (mat.heroCapFrac||0)>=0.10 && mat.special!=="scheduleRows") ? 0.92 : null,
-      });
+      }, EDITORIAL_MEASUREMENT_ADAPTER);
       heroBox=reflow.heroBox; supBox=reflow.supBox; labelBox=reflow.labelBox;
       // (Refinement 1) FREE PLACEMENT wins over reflow. The reflow engine de-collides the
       // BASE archetype layout; a user who dragged a role has explicitly overruled that, so
@@ -4449,35 +4069,29 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // split on " | " (or newlines). Renders inside the hero box zone; skips the normal
       // hero/support draw for this archetype.
       if(isSchedule && heroBox){
-        const raw=stripHeroMarkers(String(ccSubtext||heroFinal||"")).trim();
-        const rows=raw.split(/\s*\|\s*|\n+/).map(r=>r.trim()).filter(Boolean).slice(0,8).map(r=>{
-          const m=r.match(/^(\S+)\s+(.+)$/); return m?{t:m[1],a:m[2]}:{t:"",a:r};
+        const schedulePlan=planScheduleRows({
+          raw:ccSubtext||heroFinal||"",box:heroBox,width:w,height:h,
+          stripMarkers:stripHeroMarkers,
         });
-        if(rows.length){
-          const zx=heroBox.x, zw=heroBox.w, zy=heroBox.y, zh=heroBox.h;
-          const rowH=zh/rows.length;
-          const timeSz=Math.min(rowH*0.42, zw*0.11);
-          const actSz=Math.min(rowH*0.30, zw*0.058); // (r3 fix #4) slightly larger activity text
-          const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009));
-          const timeX=zx, actX=zx+zw*0.38;
+        if(schedulePlan){
+          const {box:zone,timeSize,activitySize,hairline,timeX,activityX,rows}=schedulePlan;
           ctx.save();
-          rows.forEach((r,ri)=>{
-            const cy=zy+rowH*ri+rowH*0.5;
+          rows.forEach((r)=>{
             // hairline rule below each row (except the last)
-            if(ri<rows.length-1){ ctx.globalAlpha=0.28; ctx.fillStyle=heroInk; ctx.fillRect(zx,zy+rowH*(ri+1)-hair,zw,hair); }
+            if(r.ruleY!=null){ ctx.globalAlpha=0.28; ctx.fillStyle=heroInk; ctx.fillRect(zone.x,r.ruleY,zone.w,hairline); }
             ctx.globalAlpha=1; ctx.textBaseline="middle"; ctx.textAlign="left";
-            ctx.fillStyle=heroInk; ctx.font=`400 ${timeSz}px ${F.title}`;
-            ctx.fillText(r.t, timeX, cy);
+            ctx.fillStyle=heroInk; ctx.font=`400 ${timeSize}px ${F.title}`;
+            ctx.fillText(r.time, timeX, r.centerY);
             // (r3 fix #4) activity text a touch heavier (400 not 300) so it reads darker
             // and clearer against the ivory field, matching the reference schedule tile.
-            ctx.font=`400 ${actSz}px ${F.body}`; ctx.letterSpacing=`${0.008*actSz}px`;
-            ctx.fillText(r.a, actX, cy);
+            ctx.font=`400 ${activitySize}px ${F.body}`; ctx.letterSpacing=`${0.008*activitySize}px`;
+            ctx.fillText(r.activity, activityX, r.centerY);
             ctx.letterSpacing="0px";
           });
           ctx.restore();
-          fontMeta.headline=timeSz; fontMeta.subtext=actSz;
-          setTextBounds(zh);
-          if(_roleB) _roleB.support={x:zx,y:zy,w:zw,h:zh}; // schedule rows edit via the Details field
+          fontMeta.headline=timeSize; fontMeta.subtext=activitySize;
+          setTextBounds(zone.h);
+          if(_roleB) _roleB.support={...zone}; // schedule rows edit via the Details field
         }
       }
       // (Bug B fix) FULL-BLEED TEXT LEGIBILITY — the editorial branch draws hero/support
@@ -4526,14 +4140,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           if(supportText && supBox){
             const _sf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
             const _floorP=_supFree?h:(1-sm.b)*h;   // fullBleed → no photo-band floor
-            let _rlP=Math.max(1,Math.floor((_floorP-supBox.y-_sf.size*0.28)/_sf.lineHeight));
-            const _lbP=(n)=>supBox.y+_sf.size+(n-1)*_sf.lineHeight+_sf.size*0.28;
-            while(_rlP>1 && _lbP(_rlP)>_floorP) _rlP--;
-            let _syP=supBox.y;
-            if(_lbP(_rlP)>_floorP){ _syP=Math.max(_pBot+0.008*h,supBox.y-(_lbP(_rlP)-_floorP)); }
-            const _sobP=_syP+_sf.size+(_rlP-1)*_sf.lineHeight+_sf.size*0.28;
-            const _willDraw=!(_sobP>_floorP+0.005*h || _sf.lines.length>Math.min(3,_rlP));
-            if(_willDraw){
+            const supportPlan=planCompleteSupportPlacement({
+              fit:_sf,box:supBox,floor:_floorP,canvasHeight:h,
+              heroBottom:_pBot+0.008*h,
+            });
+            if(supportPlan.willDraw){
               const _sTop=Math.max(supBox.y,_pBot+Math.max(0.012*h,0.10*reflow.heroPx));
               _pBot=Math.max(_pBot,_sTop+Math.max(_sf.size,_sf.lines.length*_sf.lineHeight)+_sf.size*0.28);
             }
@@ -4605,14 +4216,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
               // so an un-nudged prediction never under-covers a caption that really draws.
               const _uf=fitText(ctx,supportText,s=>`300 ${s}px ${F.body}`,reflow.supStart,supBox.w,supBox.h,mat.leadingBody||1.32,reflow.supMin);
               const _uFloor=_supFree?h:(1-sm.b)*h;
-              let _uRoom=Math.max(1,Math.floor((_uFloor-supBox.y-_uf.size*0.28)/_uf.lineHeight));
-              const _uBot=(n)=>supBox.y+_uf.size+(n-1)*_uf.lineHeight+_uf.size*0.28;
-              while(_uRoom>1 && _uBot(_uRoom)>_uFloor) _uRoom--;
-              const _uWillDraw=!(_uBot(_uRoom)>_uFloor+0.005*h || _uf.lines.length>Math.min(3,_uRoom));
-              if(_uWillDraw){
+              const supportPlan=planCompleteSupportPlacement({
+                fit:_uf,box:supBox,floor:_uFloor,canvasHeight:h,allowLift:false,
+              });
+              if(supportPlan.willDraw){
                 ux=Math.min(ux,supBox.x); uy=Math.min(uy,supBox.y);
                 ur=Math.max(ur,supBox.x+supBox.w);
-                ub=Math.max(ub,Math.min(_uBot(_uRoom),_uFloor));
+                ub=Math.max(ub,Math.min(supportPlan.bottom,_uFloor));
               }
             }
             const _unionBox={x:ux,y:uy,w:ur-ux,h:ub-uy};
@@ -4710,7 +4320,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         candsE.push({id:"corner-br", at:(bw,bh)=>({x:(1-safRE)*w-bw, y:(1-safBE)*h-bh})});
         const _ebOff=roleOff("eyebrow");
         const solE=placeElement({align:ebAlign},{
-          w,h, cfg:eyebrowElementClass(ebPref,{noBand:_archShapeActive}),   // (§6a) shape design → ladder resolves without a band
+          w,h, cfg:eyebrowElementClass(ebPref),
           candidates:candsE, hardObstacles:hardObstaclesE, softObstacles:softObstaclesE,
           safe:{x0:safLE*w,y0:safTE*h,x1:(1-safRE)*w,y1:(1-safBE)*h,tolX:0,tolY:0},
           focalBox:_focalBoxE, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
@@ -4735,7 +4345,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // the pin; STYLING stays the system's free variable (M3 forbids auto-MOVING, not
       // restyling): ink follows heroInk (palette re-solves recolour it), size follows the
       // class floor (format re-solves rescale it). No legibility ladder and NEVER a band
-      // (§6a-safe on shape designs by construction) — an illegible or rule-violating pinned
+      // for a pinned role — an illegible or rule-violating pinned
       // spot surfaces as the pinned-placement advisor dot, the honest surface, never a
       // silent correction. Box convention mirrors the rescue draw (top-anchored, h=1.4·px);
       // a pin grabbed from a PRIOR-path eyebrow (h=1.8·px convention) settles ≤0.3·px once
@@ -4905,7 +4515,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
           const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
           const sol=placeElement({align:dAlign},{
-            w,h, cfg:dateElementClass(dSz,{noBand:_archShapeActive}),   // (§6a) shape design → ladder resolves without a band
+            w,h, cfg:dateElementClass(dSz),
             candidates:cands, hardObstacles, softObstacles,
             safe:{x0:safL*w,y0:safT*h,x1:(1-safR)*w,y1:(1-safB)*h,tolX:0,tolY:0},
             focalBox:_focalBox, measure, surface, baseInk:heroInk, inkPoles:[B.burnham,B.whiteSmoke],
@@ -5009,36 +4619,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           // Max whole lines whose stacked height fits from the box top to the floor. A
           // ~0.28em descender allowance keeps the LAST line's tails inside the margin
           // (drawTextLines sets each baseline, so the visual bottom sits below the box row).
-          let _roomLines=Math.max(1,Math.floor((_floor-supBox.y-sf.size*0.28)/sf.lineHeight));
-          // Hard guard: the LAST drawn line's baseline is supBox.y+size+(n-1)*lineHeight;
-          // its visual bottom (baseline + ~0.28em descender) must not cross the floor. Drop
-          // trailing lines until it fits — a bulletproof no-clip guarantee (min 1 line).
-          const _lineBottom=(n)=>supBox.y+sf.size+(n-1)*sf.lineHeight+sf.size*0.28;
-          while(_roomLines>1 && _lineBottom(_roomLines)>_floor) _roomLines--;
-          // (Matrix hardening) even a SINGLE line at its floored size can cross the
-          // floor by a few px (short wide formats, e.g. a quote-margined 16:9). Lift
-          // the box just enough — never above the hero's real bottom — and if there
-          // is genuinely no room for one clean line, DROP the caption (controlled
-          // degradation, spec §6) rather than clipping at the margin.
-          let _supY=supBox.y;
-          if(_lineBottom(_roomLines)>_floor){
-            const _lift=_lineBottom(_roomLines)-_floor;
-            const _heroBot=(heroBox&&usedH>0)?heroBox.y+usedH+0.008*h:sm.t*h;
-            _supY=Math.max(_heroBot,supBox.y-_lift);
-          }
-          const _supOneBottom=_supY+sf.size+(_roomLines-1)*sf.lineHeight+sf.size*0.28;
+          const supportPlan=planCompleteSupportPlacement({
+            fit:sf,box:supBox,floor:_floor,canvasHeight:h,
+            heroBottom:(heroBox&&usedH>0)?heroBox.y+usedH+0.008*h:sm.t*h,
+          });
           // (Crops ext) COMPLETE-OR-ABSENT: the caption renders ALL its wrapped
           // lines or not at all — a mid-sentence cut never ships (client rule).
-          if(_supOneBottom>_floor+0.005*h || sf.lines.length>Math.min(3,_roomLines)){
+          if(!supportPlan.willDraw){
             dropped.push("Details");
             ctx.letterSpacing="0px";
           }else{
-          const _lines=sf.lines;
-          drawTextLines(ctx,_lines,supBox.x,_supY+sf.size,supBox.w,sf.lineHeight,supAlign);
+          const _lines=supportPlan.lines;
+          drawTextLines(ctx,_lines,supBox.x,supportPlan.y+sf.size,supBox.w,sf.lineHeight,supAlign);
           ctx.letterSpacing="0px";
           fontMeta.subtext=sf.size;
-          supUsedH=Math.max(sf.size, _lines.length*sf.lineHeight);
-          if(_supY!==supBox.y) supBox={...supBox,y:_supY};
+          supUsedH=supportPlan.usedHeight;
+          if(supportPlan.y!==supBox.y) supBox={...supBox,y:supportPlan.y};
           }
         }
         if(!supUsedH) supUsedH=fontMeta.subtext||supBox.h*0.4;
@@ -5422,17 +5018,6 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // zones are already checked independently from normalized `ready.textBoxes`.
         const tolX=0.005*w,tolY=0.005*h;
         const outOfMargin=textRoles.some(t=>t.x<-tolX||t.y<-tolY||t.x+t.w>w+tolX||t.y+t.h>h+tolY);
-        // (Crops addendum) SEAM STRADDLE — every text role must render fully within
-        // ONE background zone: for each zone box (split photo band, floated card,
-        // petal mask) a role either clears it entirely or is fully contained — a box
-        // PARTIALLY crossing the zone boundary sits on the seam. Full-bleed tiles
-        // have one zone and are exempt.
-        let seamStraddles=0;
-        if(!mat.fullBleed){
-          const zones=[photoObs,cardBox,maskBox].filter(Boolean);
-          const contains=(z,t)=>t.x>=z.x-tolX&&t.y>=z.y-tolY&&t.x+t.w<=z.x+z.w+tolX&&t.y+t.h<=z.y+z.h+tolY;
-          for(const z of zones) for(const t of textRoles) if(ix(t,z)&&!contains(z,t)) seamStraddles++;
-        }
         // (Crops addendum) DEGENERATE PHOTO REGION — a split/band photo below 18% of
         // the canvas reads as a sliver; the format adaptation must restructure or
         // drop the photo cleanly instead. (Framed card/mask treatments are exempt —
@@ -5495,7 +5080,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             heroCentroid, centerExclude:!!(provArch?.centerExclude),
             whitespaceFrac, whitespaceTarget:(typeof provArch?.whitespace==="number"?provArch.whitespace:null), fullBleed:!!mat.fullBleed,
             warmthDevices, pastelClash, boxOverlaps, outOfMargin, midCut:_midCut,
-            seamStraddles, degeneratePhoto, logoDominant, logoLowContrast,
+            degeneratePhoto, logoDominant, logoLowContrast,
             doubleBackdrop:_doubleBackdrop,   // (single-owner) a role banded >1× per render
             bandOverShape:_bandOverShape,     // (§6a) a band the guard BLOCKED because it would slice a shape silhouette — must be 0
             decorOverlapsText:_decorOverlapsText, decorInFocal:_decorInFocal,  // (item 4a) decor law
@@ -5805,8 +5390,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // retired. The solver was never consulted even on a near-empty canvas. Now the
     // date is PLACED through the SAME placeElement()/dateElementClass ladder the
     // editorial path uses, on ANY legacy layout: it lands as a quiet corner / under-
-    // block line, born-clean by construction (ink-flip → weight → face → size; §6a
-    // band suppressed on shape designs). `event` keeps its native big-date treatment
+    // block line, born-clean by construction (ink-flip → weight → face → size → a
+    // geometrically guarded band). `event` keeps its native big-date treatment
     // (it draws the date as its hero) and is excluded. A frozen owner drag pins the
     // date (law 5). A GENUINE no-candidate refusal (rare) leaves legacyDateDrawn null
     // and the honest switch-layout offer fires exactly as before (§2 step 5 / law 3).
@@ -5858,7 +5443,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
         const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
         const sol=placeElement({align},{
-          w,h, cfg:dateElementClass(dSz,{noBand:_archShapeActive}),
+          w,h, cfg:dateElementClass(dSz),
           candidates:cands, hardObstacles, softObstacles:[],
           safe:{x0:safL*w,y0:safT*h,x1:(1-safR)*w,y1:(1-safB)*h,tolX:0,tolY:0},
           focalBox:_focalBox, measure, surface, baseInk, inkPoles:[B.burnham,B.whiteSmoke],
@@ -6146,7 +5731,7 @@ export default function App() {
   // the former flat compatibility-setter return API was removed at R8.1.
   const {
     designDocument, commandPathCollectorRef,
-    dispatchDesignCommand, commands:designCommands,
+    dispatchDesignCommand,
     headline, subtext, attribution, dateText,
     microLabel, pillText, copyAuthors, bgColor, fieldColorOverride, bgAlpha,
     textColorId, backdropMode, pinnedProps, heroRegister, fontSizes,
@@ -6389,11 +5974,14 @@ export default function App() {
   const effectiveFieldOpt = BG_OPTIONS.find(b => b.id === effectiveFieldId) || curBg;
   const mediaObj = videoObj || imageObj;   // active canvas background (video wins)
   const hasFrameLayer = overlayLayers.some(l => (l.mode||"frame")==="frame");
+  const systemPatchRef = useRef(null);
   const accessibilityActionsRef = useRef({});
   accessibilityActionsRef.current = {
-    setLogoPosition:designCommands.setLogoPosition,
-    setLogoSize:designCommands.setLogoSize,
-    setSelectedLogoId:designCommands.setSelectedLogoId,
+    applyLogoPatch: patch => systemPatchRef.current?.(patch,{
+      amendUndo:true,
+      systemFreeVariables:true,
+      preserveSelection:true,
+    }),
   };
   const {
     suggestedTextColor,
@@ -6432,7 +6020,16 @@ export default function App() {
   // Resolved logo base for the CURRENT dimension (spec §1), used by the UI so the
   // "Logo placement" summary + active dot reflect what THIS format actually uses —
   // the per-dim override / master pin / per-format default — not stale global state.
-  const resolvedLogo = resolveLogoBase(dimensionId,postType,userLogoTouched,logoByDim,logoPosition,logoSize);
+  const resolvedLogo = resolveLogoPlacementBase({
+    formatId:dimensionId,
+    postType,
+    masterFormatId:MASTER_DIM,
+    masterPinned:userLogoTouched,
+    placementsByFormat:logoByDim,
+    masterPosition:logoPosition,
+    masterSizeId:logoSize,
+    defaultPlacementForFormat:(id,type)=>formatLayoutFor(id,type).logo,
+  });
   // Effective photo transform for the CURRENT dimension (drag/handles/UI use this).
   // MASTER_DIM → master imgT; a per-dim manual override wins; otherwise the auto
   // smart-crop transform so the editor baseline matches what renderScene draws
@@ -6449,107 +6046,28 @@ export default function App() {
     return {...focalToImgT(imageObj,W,H,f,targetFx,targetFy,uz),rotation:imgT.rotation||0};
   })();
   const photoT = resolveInheritedValue({master:imgT,byFormat:imgTByDim},dimensionId,MASTER_DIM,()=>autoPhotoT).value;
-  // RAW photo-transform writer — routes to the right target (master vs per-dim
-  // override). Only the patch pipeline calls this; UI gestures use patchPhoto.
-  const setPhotoT = (patchOrFn) => {
-    const base=dimensionId===MASTER_DIM ? imgT : (imgTByDim[dimensionId]||imgT);
-    const patch=typeof patchOrFn==="function"?patchOrFn(base):patchOrFn;
-    if(dimensionId===MASTER_DIM){
-      dispatchDesignCommand({ type:"media/merge-master-transform", patch });
-      return;
-    }
-    dispatchDesignCommand({ type:"media/merge-format-transform", dimensionId, base:imgT, patch });
-  };
   // UI photo reframes (drag / handles / keyboard / quick chips) emit patches
   // through THE pipeline — same undo + harmonizer path as everything else. The pin
   // that makes an explicit reframe stick is applied inside applyDesignPatch's
   // photoTransform handler (below), so EVERY reframe entry point (panel, keyboard,
   // quick chips, chat) shares it — see the (b0d13d8 / Item 2) note there.
   const patchPhoto = (t) => applyPatch({ photoTransform: t }, { source: "ui" });
-  // (B2) Pin the CURRENT dimension's photo transform as user-owned so effImgTFor
-  // honours it verbatim over the auto focal crop (user is the boss). Seeds the pin's
-  // base from the transform the window ACTUALLY drew with (`base`, incl. the cropDrama
-  // zoom) so pinning doesn't snap the photo back to imgT's zoom=1 — the reframe
-  // continues from exactly what was on screen. Idempotent within a gesture.
-  const pinPhotoTouched = (base) => {
-    const seed = base && typeof base === "object"
-      ? { zoom: base.zoom ?? 1, cx: base.cx ?? 0.5, cy: base.cy ?? 0.5, rotation: base.rotation ?? 0 }
-      : null;
-    dispatchDesignCommand({
-      type:"media/pin-format",
-      dimensionId,
-      masterDimensionId:MASTER_DIM,
-      seed:seed || { ...photoT },
-    });
-  };
-
   // Effective layout for the CURRENT dimension (spec resolution rule). The ACTIVE
   // ARCHETYPE must travel into the resolution (template-revert fix): without it the
   // non-master resolution falls back to the LEGACY per-format default, which has no
   // materialized roles.
   const activeArchForLayout = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
   const textLayout = resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim,activeArchForLayout);
-  // Edits target the master on MASTER_DIM, else a per-dimension override (spec §1).
-  // RAW text-geometry writer — only the patch pipeline (applyDesignPatch) calls
-  // this. UI surfaces go through updateTextLayout below, which emits a patch.
-  const writeTextLayout = patch => {
-    if(dimensionId===MASTER_DIM){
-      dispatchDesignCommand({
-        type:"typography/merge-master-layout",
-        postType,
-        base:TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post,
-        patch,
-      });
-    }else{
-      // (TEMPLATE-REVERT FIX) Seed the per-dim override from the SAME resolution the
-      // render uses — INCLUDING the active archetype. The old call omitted the
-      // archetype, so the first manual drag on a non-master format seeded a legacy
-      // (role-less) base; the render then classified that dim non-editorial and the
-      // WHOLE design flipped to the legacy stacked path (the client's template-revert).
-      const base=typeLayoutsByDim[dimensionId]?.[postType]||resolveTextLayout(dimensionId,postType,typeLayouts,typeLayoutsByDim,activeArchForLayout);
-      dispatchDesignCommand({
-        type:"typography/set-format-layout",
-        dimensionId,
-        postType,
-        base,
-        patch,
-      });
-    }
-  };
   // UI text-geometry edits (canvas drag / slider / grid / keyboard nudge) emit a
   // patch through THE pipeline — same grammar, same undo, same harmonizer (WP-V).
   const updateTextLayout = patch => applyPatch({ textLayout: patch }, { source: "ui" });
-  // (Refinement 1) RAW writer for a per-role free-placement offset. Scoped by the
-  // ACTIVE dim + postType (MASTER_DIM writes the master row, mirroring writeTextLayout).
-  // {dx,dy} are the role's centre delta in fractions. Only the patch pipeline calls this.
-  // (P1 slice 3 — owner rails) The entry may also carry a FROZEN BASE {bx,by} (fractions):
-  // the solver-governed centre captured at the FIRST explicit drag of a solver-placed
-  // date/eyebrow/badge. Final position = (bx+dx, by+dy) — invariant under any re-solve
-  // (law 5: a pin is never moved by the system's own re-layout). Both entry shapes are
-  // legal everywhere ({dx,dy} legacy, {dx,dy,bx,by} frozen); a write that omits bx/by
-  // PRESERVES an existing frozen base (a later delta update must not thaw the pin).
-  // dx===null clears the entry entirely — the one sanctioned unpin (the element returns
-  // to solver governance; used by the pinned-placement finding's "Put it back" remedy).
-  const writeRoleOffset = (role, dx, dy, bx, by) => {
-    if(!role) return;
-    dispatchDesignCommand({ type:"typography/set-role-offset", dimensionId, postType, role, dx, dy, bx, by });
-  };
   // Pipeline wrapper — a canvas role-drag emits ONE patch grammar through applyPatch so
   // the whole gesture folds into a single undo burst + runs the manual harmonizer, exactly
   // like updateTextLayout for the hero. (P1 slice 3) bx/by carry the frozen solver base for
   // date/eyebrow/pill drags; riding the SAME patch means base + delta land in ONE undo
   // entry / session snapshot / restore — atomically, never one without the other.
   const updateRoleOffset = (role, dx, dy, bx, by) => applyPatch({ roleOffset: { role, dx, dy, bx, by } }, { source: "ui" });
-  const resetTextLayout = () => {
-    noteManualEdit("text");   // undoable + harmonized like any other manual edit
-    dispatchDesignCommand({
-      type:"typography/reset-layout",
-      dimensionId,
-      masterDimensionId:MASTER_DIM,
-      postType,
-      defaultLayout:TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post,
-    });
-  };
+  const resetTextLayout = () => applyPatch({ resetTextLayout:true }, { source:"ui" });
 
   // Apply a logo placement change from the UI (Failure 2 rule): emits a patch
   // through THE pipeline; the uiSource branch inside applyDesignPatch keeps the
@@ -6624,51 +6142,6 @@ export default function App() {
   const copyAuthorsRef = useRef({});
   copyAuthorsRef.current = copyAuthors;
 
-  // Raw shape writers are declared before the patch pipeline that dispatches
-  // them, keeping the extracted pipeline free of forward/TDZ dependencies.
-  // (§2.9.2 pins law) An explicit edit to a GENERATED (origin:"layout") shape pins
-  // it: userTouched survives re-solves and makes a layout swap keep the shape
-  // instead of replacing it (law 5 — never revert explicit user choice).
-  const pinLayoutShapeIfNeeded = (uid, editDimId) => {
-    const layer=overlayLayers.find(item=>item.uid===uid);
-    if(!layer || layer.origin!=="layout") return;
-    const patch={};
-    if(!layer.userTouched) patch.userTouched=true;
-    // A per-format edit marks THAT format user-adjusted (the "adjusted" badge +
-    // reset-to-master affordance) — the system-authored byDim cascade alone doesn't.
-    if(editDimId && editDimId!==MASTER_DIM && !layer.touchedByDim?.[editDimId]){
-      patch.touchedByDim={...(layer.touchedByDim||{}),[editDimId]:true};
-    }
-    if(Object.keys(patch).length) dispatchDesignCommand({ type:"shape/update", uid, patch });
-  };
-  const writeLayerMode = (uid, mode) => {
-    const layer=overlayLayers.find(item=>item.uid===uid); if(!layer)return;
-    pinLayoutShapeIfNeeded(uid);
-    dispatchDesignCommand({ type:"shape/update", uid, patch:{
-      mode,
-      ...(mode==="outline" ? { outlineColor:layer.outlineColor||"tangerine", outlineWidth:layer.outlineWidth??0.08 } : {}),
-      ...(mode==="lineart" ? { lineArtColor:layer.lineArtColor||layer.outlineColor||"burnham", lineArtThreshold:layer.lineArtThreshold??0.72 } : {}),
-    } });
-    setOverlayDirty(true);
-  };
-  const writeLayerStyle = (uid, patch) => {
-    pinLayoutShapeIfNeeded(uid);
-    dispatchDesignCommand({ type:"shape/update", uid, patch });
-    setOverlayDirty(true);
-  };
-  const writeLayerT = (uid, patch) => {
-    const layer=overlayLayers.find(item=>item.uid===uid); if(!layer)return;
-    pinLayoutShapeIfNeeded(uid, dimensionId);
-    const asset=overlays.find(item=>item.id===layer.assetId);
-    const base=layer.byDim?.[dimensionId]||deriveFromMaster(layer.master,asset?.kind||"center",asset?.ratio||1,W,H);
-    dispatchDesignCommand({ type:"shape/update-transform", uid, dimensionId, isMaster:dimensionId===MASTER_DIM, base, patch });
-    setOverlayDirty(true);
-  };
-  const writeDeleteLayer = uid => {
-    dispatchDesignCommand({ type:"shape/remove", uid });
-    dispatchEditorSelection({ type:"clear-if", elementType:"shape", id:uid });
-    setOverlayDirty(true);
-  };
   const removeVideo = () => {
     if (videoObj) videoObj.pause();
     setVideoObj(null);
@@ -6685,7 +6158,7 @@ export default function App() {
      Returns the list of change keys actually applied. */
   const {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
-    applyPatchRef, buildMaterialized, genBrief, harmonizeRef, manualHarmRef,
+    applyPatchRef, buildMaterialized, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
     setGenBrief, snapshotApplyableState, startNewPost,
     undoLastAiChange,
@@ -6698,36 +6171,24 @@ export default function App() {
     heroRegister, image, imgT, imgTByDim, logoBoxRef, logoByDim, logoFreePos,
     logoHidden, logoPosition, logoSize, markTab, microLabel, overlayLayers,
     overlays, photoFrame, photoT, photoTouchedByDim, photoTreatment,
-    photoWindowRef, pillText, pinPhotoTouched, pinnedProps, postType, redoStack,
+    photoWindowRef, pillText, pinnedProps, postType, redoStack,
     removeVideo, roleOffsetsByDim, selectedLogoId, setActiveTemplateName,
-    setAdvisorDot, setAiUndoStack, setArchVariant:designCommands.setArchVariant,
-    setArchetypeId:designCommands.setArchetypeId, setAttribution:designCommands.setAttribution,
-    setBackdropMode:designCommands.setBackdropMode, setBgAlpha:designCommands.setBgAlpha,
-    setBgColor:designCommands.setBgColor, setCurrentLiked, setDateText:designCommands.setDateText,
-    setDimensionId, setExportNudge, setFieldColorOverride:designCommands.setFieldColorOverride,
-    setHeadline:designCommands.setHeadline, setHeroRegister:designCommands.setHeroRegister,
-    setImage:designCommands.setImage, setImageObj, setImgTByDim:designCommands.setImgTByDim,
+    setAcknowledgements:setAcks, setAdvisorDot, setAiUndoStack,
+    setCurrentLiked,
+    setDimensionId, setExportFormat, setExportNudge,
+    setImageObj,
     setInspectorEl:selectionCommands.selectInspector, setInspectorNotes,
-    setLogoFreePos:designCommands.setLogoFreePos, setLogoHidden:designCommands.setLogoHidden,
-    setLogoPosition:designCommands.setLogoPosition, setLogoSize:designCommands.setLogoSize,
-    setLogoVariantTouched:designCommands.setLogoVariantTouched, setMarkTab,
-    setMicroLabel:designCommands.setMicroLabel,
+    setMarkTab,
     setOverlayChromeVisible:selectionCommands.setShapeChromeVisible, setOverlayDirty,
-    setPhotoFrame:designCommands.setPhotoFrame, setPhotoSel:selectionCommands.setPhotoSelected,
-    setPhotoT, setPhotoTouchedByDim:designCommands.setPhotoTouchedByDim,
-    setPhotoTreatment:designCommands.setPhotoTreatment, setPillText:designCommands.setPillText,
-    setPinnedProps:designCommands.setPinnedProps, setPostType:designCommands.setPostType,
-    setRedoStack, setRoleOffsetsByDim:designCommands.setRoleOffsetsByDim,
-    setSelOverlay:selectionCommands.setShape,
-    setSelectedLogoId:designCommands.setSelectedLogoId,
+    setPhotoSel:selectionCommands.setPhotoSelected,
+    setRedoStack, setSelOverlay:selectionCommands.setShape,
     setSessionConversation, setSessionId, setSessionInitialMessages,
-    setSessionRestoreKey, setSessionTitle, setSubtext:designCommands.setSubtext,
-    setTextColorId:designCommands.setTextColorId, setTypeLayoutsByDim:designCommands.setTypeLayoutsByDim,
-    setUserLogoTouched:designCommands.setUserLogoTouched,
-    subtext, textColorId, typeLayouts,
-    typeLayoutsByDim, userLogoTouched, writeDeleteLayer, writeLayerMode,
-    writeLayerStyle, writeLayerT, writeRoleOffset, writeTextLayout,
+    setSessionRestoreKey, setSessionTitle,
+    subtext, textColorId, typeLayouts, resolvedTextLayout:textLayout,
+    typeLayoutsByDim, userLogoTouched,
   });
+  systemPatchRef.current = applyDesignPatch;
+  const setMediaHostShape = uid => applyPatch({ mediaHostShapeId:uid }, { source:"ui" });
 
   /* ── (WP-W0) RENDER TRUTH ── what is ACTUALLY on the canvas after the last
      live render: archetype, the drawn logo box/position, per-role drawn boxes
@@ -6756,6 +6217,9 @@ export default function App() {
     dimensionId: truthStateRef.current.dimensionId,
     fontMeta: { ...(fontMetaRef.current || {}) },
     fontSizes: { ...(truthStateRef.current.fontSizes || {}) },
+    surface: renderResultRef.current?.surface
+      ? JSON.parse(JSON.stringify(renderResultRef.current.surface))
+      : null,
   });
 
   // Compact, blob-free design snapshot for the assistant API (no dataUrls).
@@ -6773,6 +6237,9 @@ export default function App() {
     fontSizes: JSON.parse(JSON.stringify(fontSizes)),
     overlayLayers: overlayLayers.map(l => ({ assetId: l.assetId, mode: l.mode || "frame" })),
     hasImage: !!(imageObj || videoObj),
+    resolvedSurface: renderResultRef.current?.surface
+      ? JSON.parse(JSON.stringify(renderResultRef.current.surface))
+      : null,
     // (copy-fit Tier 1) The active slot's measured character budget, so every server
     // copy-writer (editor prompt, caption writer) writes copy that fits by construction.
     copyBudget: computeCopyBudgets(archetypeId, dimensionId, postType),
@@ -6784,12 +6251,6 @@ export default function App() {
   landingActionsRef.current = {
     applyDesignPatch,
     setGenerationBrief: setGenBrief,
-    setImageSource: designCommands.setImage,
-    loadImage: imgFrom,
-    setImageObject: setImageObj,
-    rearmHarmonizer: () => {
-      harmonizeRef.current = { armed: true, rounds: 0, applied: [] };
-    },
     setChatSeed,
     setGalleryOpen,
   };
@@ -6813,17 +6274,15 @@ export default function App() {
     getRoleBounds: () => roleBoundsRef.current,
     getRenderTruth: renderTruth,
     setArchetype: (id, content = {}) => {
-      if (content.headline !== undefined) designCommands.setHeadline(content.headline);
-      if (content.subtext !== undefined) designCommands.setSubtext(content.subtext);
-      if (content.attribution !== undefined) designCommands.setAttribution(content.attribution);
-      if (content.dateText !== undefined) designCommands.setDateText(content.dateText);
-      if (content.postType) designCommands.setPostType(content.postType);
-      if (content.dimensionId) setDimensionId(content.dimensionId);
-      materializeArchetype(id === "none" ? null : id, {
-        postType: content.postType || postType,
-        attribution: content.attribution ?? attribution,
-        subtext: content.subtext ?? subtext,
-      });
+      (applyPatchRef.current || (()=>{}))({
+        archetypeId:id === "none" ? "none" : id,
+        ...(content.headline !== undefined ? {headline:content.headline} : {}),
+        ...(content.subtext !== undefined ? {subtext:content.subtext} : {}),
+        ...(content.attribution !== undefined ? {attribution:content.attribution} : {}),
+        ...(content.dateText !== undefined ? {dateText:content.dateText} : {}),
+        ...(content.postType ? {postType:content.postType} : {}),
+        ...(content.dimensionId ? {dimensionId:content.dimensionId} : {}),
+      },{amendUndo:true,systemFreeVariables:true,preserveSelection:true});
     },
     getAudit: () => auditRef.current,
     getFontMeta: () => fontMetaRef.current,
@@ -6909,7 +6368,9 @@ export default function App() {
     hiddenStarters,
     setHiddenStarters,
     builtinOverlays: DEFAULT_OVERLAYS,
-    onRestoreLegacyShapes: shapes => dispatchDesignCommand({ type:"shapes/replace", shapes }),
+    onRestoreLegacyShapes: shapes => executeWorkflowGroups(planShapeCollectionWorkflow({
+      patch:{replaceShapeCollection:shapes},
+    })),
     onLegacyWorkFound: () => setGalleryOpen(false),
   });
 
@@ -7036,6 +6497,7 @@ export default function App() {
   const renderModel = createRenderModel({
     document:designDocument,
     dimensionId,
+    layoutContext:{ platformSafeByDimension:PLATFORM_SAFE },
     runtime:{
       suggestedTextColor,textMinContrast,photoSelected:photoSel,selectedShapeId:selOverlay,
       brandKit,overlays,
@@ -7140,6 +6602,7 @@ export default function App() {
     logoBoxRef,
     textBoundsRef,
     roleBoundsRef,
+    renderResultRef,
     acknowledgements: acks,
     setAcknowledgements: setAcks,
     sessionId,
@@ -7192,13 +6655,15 @@ export default function App() {
   const ledgerRef = useRef(null); ledgerRef.current = ledgerCheck;
   const auditFindingsRef = useRef([]); auditFindingsRef.current = extractAuditFindings(ledgerCheck);
   const acksRef = useRef(acks); acksRef.current = acks;
+  const refreshReadyCheckRef = useRef(refreshReadyCheck);
+  refreshReadyCheckRef.current = refreshReadyCheck;
 
   // (WP-Y5) Recompute the checklist whenever the Export popover opens. Fresh on
   // every open so it reflects the latest design; cleared on close to avoid stale
   // verdicts flashing on the next open before the sweep runs.
   useEffect(() => {
-    if (topMenu === "export") { setReadyExpanded(null); refreshReadyCheck(); }
-  }, [topMenu, refreshReadyCheck]);
+    if (exportOpen) { setReadyExpanded(null); refreshReadyCheckRef.current(); }
+  }, [exportOpen]);
   useRenderVerificationBoards({
     renderScene,
     devHooks: DEV_HOOKS,
@@ -7250,19 +6715,10 @@ export default function App() {
       defaultOverlays: DEFAULT_OVERLAYS,
     },
     editorActions: {
-      setArchetypeId:designCommands.setArchetypeId,
-      setPostType:designCommands.setPostType,
-      setHeadline:designCommands.setHeadline,
-      setSubtext:designCommands.setSubtext,
       setDimensionId,
-      materializeArchetype,
-      noteManualEdit,
-      setTextColorId:designCommands.setTextColorId,
-      suggestPlacement,
-      dispatchDesignCommand,
+      applyPatch,
       updateTextLayout,
       placeLogo,
-      applyDesignPatch,
       undoLastAiChange,
       redoLastChange,
     },
@@ -7378,11 +6834,15 @@ export default function App() {
     postType,
     deriveShapeTransform:deriveFromMaster,
     suggestShapePlacement:suggestPlacement,
-    resolveRoleOffsets,
+    resolveRoleOffsets:(formatId,type,offsets)=>resolveRoleOffsetsForFormat({
+      formatId,
+      postType:type,
+      offsetsByFormat:offsets,
+      masterFormatId:MASTER_DIM,
+    }),
     updateRoleOffset,
     updateTextLayout,
     patchPhoto,
-    pinPhotoTouched,
     applyPatch,
     selectElement,
     focusTextField,
@@ -7390,7 +6850,6 @@ export default function App() {
     setInspectorElement:selectionCommands.selectInspector,
     setTextSelected:selectionCommands.setTextSelected,
     setPhotoSelected:selectionCommands.setPhotoSelected,
-    dispatchDesignCommand,
     setShapeDirty:setOverlayDirty,
   });
   const {
@@ -7401,9 +6860,9 @@ export default function App() {
     saveDesignTemplate, saveEditedAsNew, saveEditedTemplate, startEditTemplate,
     toggleLike,
   } = useProductWorkflows({
-    acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
+    AI_UNDO_DEPTH, acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
     archetypeId, attribution, buildMaterialized, canvasRef, closeInspector,
-    cloudTplConfigured, curType, currentLiked, dateText, designDocument,
+    cloudTplConfigured, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
     designTemplates, dimensionId, dispatchDesignCommand,
     dispatchEditorSelection, draw, drawRef, editingTemplate, exportFormat,
     firstShotResolveRef, fontsLoaded, genBrief, headline, image, imgT,
@@ -7412,34 +6871,18 @@ export default function App() {
     noteManualEdit, nudgeDismissedRef, overlayLayers, postActionsRef, postType,
     proposal, proposalBusy, ready, refreshPostTiles, renderScene,
     replaceTemplateId, saveOverlays, selOverlay, sessionBootstrapActionsRef,
-    sessionConversation, sessionId, sessionSaveActionsRef, sessionTitle,
-    setAcks, setActiveTemplateName,
-    setArchVariant:designCommands.setArchVariant,
-    setArchetypeId:designCommands.setArchetypeId,
-    setArchivedTiles,
-    setBgColor:designCommands.setBgColor,
+    sessionConversation, sessionId, sessionSaveActionsRef, sessionTitle, snapshotApplyableState,
+    setAcks, setActiveTemplateName, setAiUndoStack, setArchivedTiles,
     setConfirmRemoveTpl, setCurrentLiked,
     setDesignTemplates, setDimensionId, setEditingTemplate, setExportFail,
     setExportFormat, setExportNudge, setFeedOpen, setGalleryOpen, setGenBrief,
-    setHeroRegister:designCommands.setHeroRegister,
-    setHiddenStarters, setImageObj,
-    setLogoVariantTouched:designCommands.setLogoVariantTouched,
-    setMarkTab,
-    setMicroLabel:designCommands.setMicroLabel,
+    setHiddenStarters,
     setMoodEnlarged, setMoodboard, setMoodboardCfg,
-    setNewerDraft, setOverlayDirty,
-    setPhotoFrame:designCommands.setPhotoFrame,
-    setPhotoTreatment:designCommands.setPhotoTreatment,
-    setPostTiles,
-    setPostType:designCommands.setPostType,
+    setNewerDraft, setOverlayDirty, setPostTiles,
     setProposal, setProposalBusy, setProposalErr,
     setSessionCloudCfg, setSessionConversation, setSessionId,
-    setSessionInitialMessages, setSessionRestoreKey, setSessionTitle,
-    setTextColorId:designCommands.setTextColorId,
-    setTopMenu, setTplNotice,
-    setTypeLayouts:designCommands.setTypeLayouts,
-    setTypeLayoutsByDim:designCommands.setTypeLayoutsByDim,
-    setVideoObj, startNewPost, subtext, videoObj,
+    setRedoStack, setSessionInitialMessages, setSessionRestoreKey, setSessionTitle,
+    setTopMenu, setTplNotice, startNewPost, subtext, videoObj,
     templateGuardRef, topMenu, tplNotice, typeLayoutsByDim,
   });
 
@@ -7484,9 +6927,8 @@ export default function App() {
     overlays, patchPhoto, photoFrame, photoSel, pillText, placeLogo, postType,
     renderResultRef, resetLayer, resetTextLayout, resolvedLogo, selOverlay,
     selectElement, selectedLogoId, selectedLogoVariant, setFontSize,
-    setFontSizes:designCommands.setFontSizes,
     setLayerMode, setLayerStyle, setLayoutShapeFlash, setMarkTab,
-    setMediaKind:designCommands.setMediaKind,
+    setMediaHostShape,
     setPhotoSel:selectionCommands.setPhotoSelected,
     setSelOverlay:selectionCommands.setShape,
     setShowLibPicker,
@@ -7518,7 +6960,7 @@ export default function App() {
     mediaObj, microLabel, moodEnlarged, moodInputRef, moodboard, moodboardCfg,
     newerDraft, openSession,
     postTiles, postType, readyExpanded, removeTemplate, renderResultRef,
-    resolvedLogo, runAiAudit, saveDesignTemplate, selectedSceneId,
+    resolvedLogo, runAiAudit, saveDesignTemplate, selectedSceneId, refreshReadyCheck,
     sessionCloudCfg, sessionId, setAuditOpen, setConfirmRemoveTpl, setDimensionId,
     setExportFormat, setExportOpen, setFeedFolder, setFeedOpen,
     setHiddenStarters, setMoodEnlarged, setNewerDraft, setReadyExpanded,
@@ -7557,9 +6999,9 @@ export default function App() {
 
 function useProductWorkflows(workspace) {
   const {
-    acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
+    AI_UNDO_DEPTH, acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
     archetypeId, attribution, buildMaterialized, canvasRef, closeInspector,
-    cloudTplConfigured, curType, currentLiked, dateText, designDocument,
+    cloudTplConfigured, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
     designTemplates, dimensionId, dispatchDesignCommand,
     dispatchEditorSelection, draw, drawRef, editingTemplate, exportFormat,
     firstShotResolveRef, fontsLoaded, genBrief, headline, image, imgT,
@@ -7568,19 +7010,15 @@ function useProductWorkflows(workspace) {
     noteManualEdit, nudgeDismissedRef, overlayLayers, postActionsRef, postType,
     proposal, proposalBusy, ready, refreshPostTiles, renderScene,
     replaceTemplateId, saveOverlays, selOverlay, sessionBootstrapActionsRef,
-    sessionConversation, sessionId, sessionSaveActionsRef, sessionTitle,
-    setAcks, setActiveTemplateName, setArchVariant, setArchetypeId,
-    setArchivedTiles, setBgColor, setConfirmRemoveTpl, setCurrentLiked,
+    sessionConversation, sessionId, sessionSaveActionsRef, sessionTitle, snapshotApplyableState,
+    setAcks, setActiveTemplateName, setAiUndoStack, setArchivedTiles, setConfirmRemoveTpl, setCurrentLiked,
     setDesignTemplates, setDimensionId, setEditingTemplate, setExportFail,
     setExportFormat, setExportNudge, setFeedOpen, setGalleryOpen, setGenBrief,
-    setHeroRegister, setHiddenStarters, setImageObj, setLogoVariantTouched,
-    setMarkTab, setMicroLabel, setMoodEnlarged, setMoodboard, setMoodboardCfg,
-    setNewerDraft, setOverlayDirty, setPhotoFrame, setPhotoTreatment,
-    setPostTiles, setPostType, setProposal, setProposalBusy, setProposalErr,
-    setSessionCloudCfg, setSessionConversation, setSessionId,
+    setHiddenStarters, setMoodEnlarged, setMoodboard, setMoodboardCfg,
+    setNewerDraft, setOverlayDirty, setPostTiles, setProposal, setProposalBusy, setProposalErr,
+    setRedoStack, setSessionCloudCfg, setSessionConversation, setSessionId,
     setSessionInitialMessages, setSessionRestoreKey, setSessionTitle,
-    setTextColorId, setTopMenu, setTplNotice, setTypeLayouts,
-    setTypeLayoutsByDim, setVideoObj, startNewPost, subtext, videoObj,
+    setTopMenu, setTplNotice, startNewPost, subtext, videoObj,
     templateGuardRef, topMenu, tplNotice, typeLayoutsByDim
   } = workspace;
   const {
@@ -7615,9 +7053,7 @@ function useProductWorkflows(workspace) {
     archetypeIds: ARCHETYPE_IDS,
     starterTemplates: STARTER_TEMPLATES,
     buildMaterialized,
-    freshTypeLayouts,
     typeLayoutDefaults: TYPE_LAYOUT_DEFAULTS,
-    imageFromSource: imgFrom,
     guardRef: templateGuardRef,
     editingTemplate,
     setEditingTemplate,
@@ -7627,28 +7063,7 @@ function useProductWorkflows(workspace) {
     topMenu,
     templateNotice: tplNotice,
     setTemplateNotice: setTplNotice,
-    actions: {
-      setPostType,
-      setArchetypeId,
-      setArchVariant,
-      setDimensionId,
-      dispatchDesignCommand,
-      setExportFormat,
-      setLogoVariantTouched,
-      setBgColor,
-      setHeroRegister,
-      setMicroLabel,
-      setPhotoTreatment,
-      setPhotoFrame,
-      setTypeLayouts,
-      setTypeLayoutsByDimension: setTypeLayoutsByDim,
-      clearSelection: () => dispatchEditorSelection({ type:"clear" }),
-      setImageObject: setImageObj,
-      setVideoObject: setVideoObj,
-      setMarkTab,
-      setAcknowledgements: setAcks,
-      setOverlayDirty,
-    },
+    actions: { executeWorkflowGroups },
   });
   useFirstShotGate({
     resolveRef: firstShotResolveRef,
@@ -7659,8 +7074,7 @@ function useProductWorkflows(workspace) {
     archetypeVariant: archVariant,
     postType,
     copy: { headline, subtext, attribution, dateText },
-    materializeArchetype,
-    setTextColorId,
+    applyPatch,
     sessionId,
   });
   const { resolveProposal, dismissProposalLater } = useTemplateProposalReview({
@@ -7781,6 +7195,10 @@ function useProductWorkflows(workspace) {
     setActiveTemplateName,
     setGalleryOpen,
     applyDesignTemplate,
+    beforeApply: () => {
+      setAiUndoStack(previous => [snapshotApplyableState(), ...previous].slice(0, AI_UNDO_DEPTH));
+      setRedoStack([]);
+    },
   });
   templateGuardRef.current = applyTemplateWithGuard;
 
@@ -7797,15 +7215,10 @@ function useProductWorkflows(workspace) {
     newerDraft,
     setNewerDraft,
     setGalleryOpen,
-    dispatchDesignCommand,
     masterDimensionId: MASTER_DIM,
     dimensionId,
-    typeLayoutsByDimension: typeLayoutsByDim,
-    logoByDimension: logoByDim,
-    imageTransformByDimension: imgTByDim,
-    shapeLayers: overlayLayers,
-    noteManualEdit,
-    setShapeDirty: setOverlayDirty,
+    designDocument,
+    applyPatch,
   });
   return {
     addMoodboardFile, applyTemplateWithGuard, deleteMoodboardItem,
@@ -7828,7 +7241,7 @@ function createEditorChromeModel(workspace) {
     mediaObj, microLabel, moodEnlarged, moodInputRef, moodboard, moodboardCfg,
     newerDraft, openSession,
     postTiles, postType, readyExpanded, removeTemplate, renderResultRef,
-    resolvedLogo, runAiAudit, saveDesignTemplate, selectedSceneId,
+    resolvedLogo, runAiAudit, saveDesignTemplate, selectedSceneId, refreshReadyCheck,
     sessionCloudCfg, sessionId, setAuditOpen, setConfirmRemoveTpl, setDimensionId,
     setExportFormat, setExportOpen, setFeedFolder, setFeedOpen,
     setHiddenStarters, setMoodEnlarged, setNewerDraft, setReadyExpanded,
@@ -7914,8 +7327,15 @@ function createEditorChromeModel(workspace) {
      save-template) rendered inside the below-canvas popover. Moved here verbatim
      from the old top-bar Export menu; the only change is the AI-audit button now
      closes the below-canvas popover (setExportOpen) instead of the top menu. */
+  const exportAuthorization=createExportAuthorization(ledgerCheck,dimensionId);
+  const resolveBlockedExport=(scope)=>{
+    refreshReadyCheck();
+    const target=scope==="all"?exportAuthorization.firstBlockedDimensionId:dimensionId;
+    if(target){setReadyExpanded(target);if(target!==dimensionId)setDimensionId(target);}
+  };
   const renderExportPanel = () => <ExportPanel sizeLabel={`${W} × ${H} px · ${dim.label}`}
       format={exportFormat} onFormat={setExportFormat} onDownloadAll={downloadAll} onDownloadOne={download}
+      authorization={exportAuthorization} onResolveAll={()=>resolveBlockedExport("all")} onResolveOne={()=>resolveBlockedExport("one")}
       formatCount={DIMENSIONS.length} palette={B} fonts={F}
       guardrail={brandKit?.guardrails?<GuardrailTooltip text={brandKit.guardrails}/>:null}
       readiness={<ReadinessPanel
@@ -8663,10 +8083,10 @@ function EditorShell({ workspace }) {
           <div className="generator-format-strip" style={{width:"100%",maxWidth:820,marginTop:18}}>
             <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:9,flexWrap:"wrap"}}>
               <span style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase",color:B.burnham}}>Your post in every format</span>
-              {/* (WP-Y5b) Calm header — "needs a look" reads as a gentle nudge, not an
-                  error. Muted celadon-deep ink (never tangerine; accent is CTA-only). */}
+              {/* Export readiness is policy state: warnings can be reviewed without
+                  blocking, while acknowledged blockers still require approval. */}
               <span style={{fontSize:10.5,fontFamily:F.body,color:readyCheck==null?B.ash:(need?B.celadonDeep:B.burnham),fontWeight:600}}>
-                {readyCheck==null ? "Checking every format…" : need ? `${need} to review` : "All 6 ready to post"}
+                {readyCheck==null ? "Checking every format…" : need ? `${need} blocked` : "All 6 formats pass"}
               </span>
             </div>
             <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
@@ -8675,12 +8095,9 @@ function EditorShell({ workspace }) {
               const tw=Math.max(1,Math.round(72*d.w/d.h));
               const v=readyByDim[d.id];
               const adjusted=dimHasOverride(d.id);
-              // (WP-Y5b) readiness dot: quiet celadon check = ready · soft wisteria dot
-              // (no "!", no red) = worth a glance · dim while the sweep hasn't reported.
+              // Readiness dot: quiet celadon check = publishable; a reviewed blocker
+              // remains an approval state and must never masquerade as ready.
               const dotReady=v?v.ready:null;
-              // (Advisor dots) The ready dot goes "your call" (celadon-outline check)
-              // when the format is NOT ready but every remaining issue has been acked
-              // — a calm mark distinct from a plain ready ✓ only via its tooltip.
               const openIssues = v && !v.ready
                 ? [
                     ...partitionIssues((v.issues||[]).filter(i=>!i._audit), acks, d.id, (iss)=> d.id===dimensionId ? issueBoxOf(iss) : null).open,
@@ -8688,25 +8105,25 @@ function EditorShell({ workspace }) {
                     ...(v.issues||[]).filter(i=>i._audit && !findingAckPinned(i)),
                   ]
                 : [];
-              const yourCall = v && !v.ready && openIssues.length === 0;
+              const approvalRequired = v && !v.ready && openIssues.length === 0;
               return (
                 <div key={d.id} style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
                 <button aria-pressed={on}
                   onClick={()=>{ applyPatch({dimensionId:d.id},{source:"ui"}); }}
-                  title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?(yourCall?" · ready (includes choices you okayed)":" · needs a look"):dotReady?" · ready":""} — tap to adjust`}
+                  title={`${d.label} · ${d.w} × ${d.h}px${dotReady===false?(approvalRequired?" · reviewed — approval required":" · blocked"):dotReady?" · ready":""} — tap to adjust`}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,background:"none",border:"none",padding:0,cursor:"pointer"}}>
                   <span style={{position:"relative",display:"grid",placeItems:"center",width:Math.min(tw,140),height:72,borderRadius:6,overflow:"hidden",border:`2px solid ${on?B.burnham:B.ash+"44"}`,background:B.whiteSmoke,boxShadow:on?"0 2px 10px rgba(43,80,64,0.16)":"none"}}>
                     {formatThumbs[d.id]
                       ? <img src={formatThumbs[d.id]} alt={`${d.label} preview`} style={{maxWidth:"100%",maxHeight:"100%",display:"block"}} />
                       : <span style={{fontSize:9,color:B.ash,fontFamily:FU.subtitle}}>{d.sub}</span>}
                     {dotReady!=null && (
-                      <span aria-hidden="true" title={dotReady?"Ready to post":yourCall?"Ready — includes choices you okayed":"Worth a look"}
-                        style={{position:"absolute",top:4,right:4,width:dotReady||yourCall?11:12,height:dotReady||yourCall?11:12,borderRadius:"50%",display:"grid",placeItems:"center",
+                      <span aria-hidden="true" title={dotReady?"Ready to post":approvalRequired?"Reviewed — approval required":"Blocked — review required"}
+                        style={{position:"absolute",top:4,right:4,width:dotReady||approvalRequired?11:12,height:dotReady||approvalRequired?11:12,borderRadius:"50%",display:"grid",placeItems:"center",
                           fontSize:8,fontWeight:800,lineHeight:1,
-                          color:dotReady?B.burnham:yourCall?B.celadonDeep:"transparent",
+                          color:dotReady?B.burnham:approvalRequired?B.celadonDeep:"transparent",
                           boxShadow:"0 0 0 1.5px #fff",
-                          border:yourCall?`1.5px solid ${B.celadonDeep}`:"none",
-                          background:dotReady?B.celadon:yourCall?"#fff":B.wisteria}}>{dotReady?"✓":yourCall?"✓":""}</span>
+                          border:approvalRequired?`1.5px solid ${B.celadonDeep}`:"none",
+                          background:dotReady?B.celadon:approvalRequired?"#fff":B.wisteria}}>{dotReady?"✓":approvalRequired?"!":""}</span>
                     )}
                   </span>
                   <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:on?700:600,letterSpacing:0.5,color:on?B.burnham:B.ash}}>{d.label}</span>
@@ -8797,25 +8214,35 @@ function useDesignPatchPipeline(workspace) {
     heroRegister, image, imgT, imgTByDim, logoBoxRef, logoByDim, logoFreePos,
     logoHidden, logoPosition, logoSize, markTab, microLabel, overlayLayers,
     overlays, photoFrame, photoT, photoTouchedByDim, photoTreatment,
-    photoWindowRef, pillText, pinPhotoTouched, pinnedProps, postType, redoStack,
+    photoWindowRef, pillText, pinnedProps, postType, redoStack,
     removeVideo, roleOffsetsByDim, selectedLogoId, setActiveTemplateName,
-    setAdvisorDot, setAiUndoStack, setArchVariant, setArchetypeId,
-    setAttribution, setBackdropMode, setBgAlpha, setBgColor, setCurrentLiked,
-    setDateText, setDimensionId, setExportNudge, setFieldColorOverride,
-    setHeadline, setHeroRegister, setImage, setImageObj, setImgTByDim,
-    setInspectorEl, setInspectorNotes, setLogoFreePos, setLogoHidden,
-    setLogoPosition, setLogoSize, setLogoVariantTouched, setMarkTab,
-    setMicroLabel, setOverlayChromeVisible, setOverlayDirty, setPhotoFrame,
-    setPhotoSel, setPhotoT, setPhotoTouchedByDim, setPhotoTreatment,
-    setPillText, setPinnedProps, setPostType, setRedoStack,
-    setRoleOffsetsByDim, setSelOverlay, setSelectedLogoId,
+    setAcknowledgements, setAdvisorDot, setAiUndoStack,
+    setCurrentLiked,
+    setDimensionId, setExportFormat, setExportNudge,
+    setImageObj, setInspectorEl, setInspectorNotes, setMarkTab,
+    setOverlayChromeVisible, setOverlayDirty, setPhotoSel,
+    setRedoStack, setSelOverlay,
     setSessionConversation, setSessionId, setSessionInitialMessages,
-    setSessionRestoreKey, setSessionTitle, setSubtext, setTextColorId,
-    setTypeLayoutsByDim, setUserLogoTouched, subtext, textColorId, typeLayouts,
-    typeLayoutsByDim, userLogoTouched, writeDeleteLayer, writeLayerMode,
-    writeLayerStyle, writeLayerT, writeRoleOffset, writeTextLayout
+    setSessionRestoreKey, setSessionTitle, subtext, textColorId, typeLayouts,
+    typeLayoutsByDim, userLogoTouched, resolvedTextLayout
   } = workspace;
   const AI_UNDO_DEPTH = 8; // >= 5 required
+  const executeWorkflowGroups = useDesignWorkflowExecutor({
+    dispatchCommand:dispatchDesignCommand,
+    dispatchSelection:dispatchEditorSelection,
+    setLogoTab:setMarkTab,
+    setDimension:setDimensionId,
+    setExportFormat,
+    setShapeSelection:setSelOverlay,
+    setPhotoSelection:setPhotoSel,
+    setAcknowledgements,
+    setShapeDirty:setOverlayDirty,
+    setShapeChromeVisible:setOverlayChromeVisible,
+    setInspectorElement:setInspectorEl,
+    removeVideo,
+    setDecodedImage:setImageObj,
+    decodeImage:imgFrom,
+  });
   // ── Silent harmonizer wiring (Commit 1) ──
   // When an AI-driven patch (chat / landing handoff) lands, we arm the harmonizer.
   // It waits for the NEXT completed live render (so runLocalAudit reads fresh
@@ -8826,73 +8253,23 @@ function useDesignPatchPipeline(workspace) {
   // when no fails remain, rounds exhausted, or an identical fix would repeat (loop
   // guard). Audit "apply" flows are EXCLUDED — those are already user-reviewed.
   const harmonizeRef = useRef({ armed: false, rounds: 0, applied: [] });
-  // ── MANUAL-EDIT HARMONIZER (Commit 3) ──
-  // Manual design-affecting edits (inspector/rail picks, canvas drags, colour/
-  // backdrop/logo changes — the same state paths applyDesignPatch touches) get the
-  // SAME silent accessibility pass the AI path runs, debounced ~600ms after the
-  // LAST edit so a drag gesture is never fought mid-move. On the FIRST edit of a
-  // burst we stash a pre-edit snapshot; if the pass finds severity-fail fixes, that
-  // snapshot becomes ONE undo entry and the fixes fold into it (amendUndo) — a
-  // single undo reverts the user's edit and the fix together. `touched` records
-  // WHICH elements the burst moved so the pass never relocates what the user just
-  // placed (geometry fixes apply only to non-user-touched elements; colour/backdrop
-  // fixes are always allowed).
-  const MANUAL_HARMONIZE_DEBOUNCE_MS = 600;
-  const manualHarmRef = useRef({ pending: false, timer: null, snap: null, touched: null });
-  const [manualHarmTick, setManualHarmTick] = useState(0);
-  useEffect(() => () => { const m = manualHarmRef.current; if (m.timer) clearTimeout(m.timer); }, []);
   // (Photo-first) The scene prompt + originating message that produced a landing
   // design, so the chat's "Try another design" chip can regenerate a fresh photo
   // and rotate the archetype variant. Shape: { scene, message } | null.
   const [genBrief, setGenBrief] = useState(null);
-  const snapshotApplyableState = () => ({
-    designDocument: JSON.parse(JSON.stringify(designDocument)),
-    postType, archetypeId, archVariant, dimensionId, headline, subtext, attribution, dateText,
-    bgColor, fieldColorOverride, bgAlpha, textColorId, selectedLogoId, logoPosition, logoSize, backdropMode,
-    // Materialized archetype visuals (Commit 1) travel with the undo snapshot so a
-    // patch that materializes an archetype reverts cleanly as one action.
-    photoTreatment, photoFrame: JSON.parse(JSON.stringify(photoFrame)), microLabel, pillText, heroRegister,
-    copyAuthors: { ...copyAuthors },   // (copy-fit Tier 2) authorship rides undo/redo
-    typeLayouts: JSON.parse(JSON.stringify(typeLayouts)),
-    userLogoTouched, logoByDim: JSON.parse(JSON.stringify(logoByDim)),
-    logoFreePos: logoFreePos ? { ...logoFreePos } : null,   // (Refinement 2) free-logo master pin
-    logoHidden,   // (Scope addendum) logo-removal pin
-    typeLayoutsByDim: JSON.parse(JSON.stringify(typeLayoutsByDim)),
-    roleOffsetsByDim: JSON.parse(JSON.stringify(roleOffsetsByDim)),   // (Refinement 1) per-role offsets
-    fontSizes: JSON.parse(JSON.stringify(fontSizes)),
-    overlayLayers: JSON.parse(JSON.stringify(overlayLayers)),
-    furnitureOverrides: JSON.parse(JSON.stringify(furnitureOverrides)),
+  const snapshotApplyableState = () => createDesignHistorySnapshot({
+    designDocument,
+    dimensionId,
     markTab,
-    // Photo source + transform (Commit 4): an in-chat generated image replaces the
-    // background through the AI path, so undo must restore the previous photo too.
-    // (WP-V Stage 1) + per-dimension reframe overrides, now that photo drags are
-    // first-class undoable patches.
-    image, imgT: JSON.parse(JSON.stringify(imgT)),
-    imgTByDim: JSON.parse(JSON.stringify(imgTByDim)),
-    photoTouchedByDim: JSON.parse(JSON.stringify(photoTouchedByDim)),
-    pinnedProps: JSON.parse(JSON.stringify(pinnedProps)),   // (item 2) user contrast pins
   });
-  const inList = (value, key) => PATCH_OPTIONS[key]?.includes(value);
-
-  // Record one manual design-affecting edit. First edit of a burst stashes the
-  // pre-edit snapshot (closure state — the caller invokes this BEFORE its setter);
-  // every edit within the debounce window resets the timer and tags the element it
-  // touched ("text" | "logo" | "colour" | "overlay").
-  const noteManualEdit = (tag) => {
-    const m = manualHarmRef.current;
-    if (!m.pending) {
-      m.pending = true; m.snap = snapshotApplyableState(); m.touched = new Set();
-      // (WP-V Stage 1) A manual burst is a FIRST-CLASS undo entry: push the
-      // pre-burst snapshot NOW so the top-bar Undo reverts UI edits exactly like
-      // AI patches. The debounced harmonize pass AMENDS this entry (it no longer
-      // pushes its own) — one burst + its silent fixes = one undo.
-      setAiUndoStack(prev => [m.snap, ...prev].slice(0, AI_UNDO_DEPTH));
-      setRedoStack([]);   // (WP-W0) a new manual burst invalidates the redo branch
-    }
-    if (tag) (Array.isArray(tag) ? tag : [tag]).forEach(t => t && m.touched.add(t));
-    if (m.timer) clearTimeout(m.timer);
-    m.timer = setTimeout(() => { m.timer = null; setManualHarmTick(t => t + 1); }, MANUAL_HARMONIZE_DEBOUNCE_MS);
-  };
+  const {
+    manualHarmonizationRef:manualHarmRef,
+    manualHarmonizationTick:manualHarmTick,
+    noteManualEdit,
+  }=useManualEditBurst({
+    captureSnapshot:snapshotApplyableState,setUndoStack:setAiUndoStack,setRedoStack,
+    depth:AI_UNDO_DEPTH,debounceMs:600,
+  });
 
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
   // unification). This is a ONE-SHOT write of concrete per-element values into the
@@ -8909,82 +8286,14 @@ function useDesignPatchPipeline(workspace) {
   // exact same materialization runs regardless of entry point (setState is async, so
   // template apply passes its own copy rather than reading stale closures).
   const buildMaterialized = (id, ctx = {}) => {
-    const arch = ARCHETYPES_BY_ID[id]; if (!arch) return null;
-    const pt = ctx.postType || postType;
-    const attr = ctx.attribution ?? attribution;
-    const sub = ctx.subtext ?? subtext;
-    const variant = ctx.variant ?? archVariant ?? 0;
-    const m = materializeArchetypeLayout(arch, MASTER_DIM, variant);
-    const shortAttr = m.roles.microLabel && attr && attr.length <= 28 && sub;
-    let frame = m.photoFrame || { type: "none" };
-    if (frame.type === "card") {
-      frame = { ...frame, rotationDeg: 0 };  // (T4) de-tilt everywhere
-    }
-    // ── (§2.9.2 · 2026-07-15 client ruling) THE LAYOUT SHAPE IS A GENUINE LAYER ──
-    // An archetype's shape cutout (shapeMask/petalMask) no longer materializes as the
-    // special photoFrame field — it EMITS as an ordinary frame-mode overlay layer
-    // (exactly the motif precedent below: "motifs become normal overlay layers").
-    // Per-format geometry is baked into byDim from each format's OWN archetype
-    // materialization (the 6-format cascade photoFrame had), converted to the overlay
-    // transform of the aspect-locked rect the mask painter would have drawn — so the
-    // emitted layer renders byte-identically to the old photoFrame path. `origin:
-    // "layout"` is provenance for the pins law (a layout swap replaces UNEDITED
-    // generated shapes; a userTouched one is pinned and survives). The card frame is
-    // NOT a layout shape (never surfaced as one in the Shapes panel) and stays as-is.
-    let layoutShapeLayer = null;
-    if (frame.type === "shapeMask" || frame.type === "petalMask") {
-      const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : "orchid-petal";
-      const asset = DEFAULT_OVERLAYS.find(a => a.id === assetId);
-      const ar = asset?.ratio || 1;
-      const byDim = {};
-      let masterT = null;
-      for (const d of DIMENSIONS) {
-        const md = d.id === MASTER_DIM ? m : materializeArchetypeLayout(arch, d.id, variant);
-        const fb = md.photoFrame && md.photoFrame.box;
-        if (!fb) continue;
-        const t = layoutShapeTransformFor(d, pt, fb, ar);
-        if (d.id === MASTER_DIM) masterT = t; else byDim[d.id] = t;
-      }
-      if (masterT) {
-        layoutShapeLayer = {
-          uid: "ol_layout_" + Math.random().toString(36).slice(2, 7),
-          assetId, mode: "frame", origin: "layout",
-          master: masterT, byDim,
-        };
-        frame = { type: "none" };   // the genuine layer replaces the special field
-      }
-    }
-    const layout = {
-      x: m.roles.hero?.x ?? 0.08, y: m.roles.hero?.y ?? 0.18,
-      width: m.roles.hero?.w ?? 0.8, align: m.roles.hero?.align || "left",
-      lineHeight: m.register === "heavySans" ? 1.05 : 1.02, scale: 1,
-      roles: m.roles, register: m.register,
-    };
-    let motifLayers = null;
-    if (m.motif) {
-      // (T7) composed diagonal-arc arrangement (matches the board render path): the
-      // first N spots form a balanced TL→BR diagonal hugging the corners, each rotated
-      // for an organic feel, in ≤2 pastel hues.
-      const spots = [[0.13,0.15,-14,0.105],[0.86,0.82,12,0.105],[0.88,0.20,22,0.085],[0.12,0.85,-8,0.082],[0.90,0.52,4,0.072]];
-      const shapes = ["shape-1","shape-2","shape-3","acc-spark"];
-      const pastels = (m.motif.pastels||["sage","butter"]).slice(0,2);
-      const count = Math.max(2, Math.min(5, m.motif.count||3));
-      motifLayers = [];
-      for (let i=0;i<count;i++){
-        const [x,y,rot,scale]=spots[i%spots.length];
-        motifLayers.push({ uid:"ol_motif_"+i+"_"+Math.random().toString(36).slice(2,5),
-          assetId:shapes[i%shapes.length], mode:"overlay", motif:true,
-          master:{ x, y, scale, rotation:rot, opacity:0.9, colorId:pastels[i%pastels.length] }, byDim:{} });
-      }
-    }
-    return {
-      // bg from the RESOLVED VARIANT palette (m.palette), not the base — this is how the
-      // sanctioned palette rotation lands on the canvas as a real bgColor.
-      postType: pt, bg: (m.palette?.bg && BG_ID_SET.has(m.palette.bg)) ? m.palette.bg : null,
-      register: m.register, microLabel: shortAttr ? attr : null,
-      photoTreatment: m.photoTreatment || "none", photoFrame: frame,
-      layout, motifLayers, layoutShapeLayer,
-    };
+    return buildArchetypeMaterialization({
+      archetype:ARCHETYPES_BY_ID[id],context:ctx,
+      current:{postType,attribution,subtext,variant:archVariant},
+      masterDimensionId:MASTER_DIM,dimensions:DIMENSIONS,overlayAssets:DEFAULT_OVERLAYS,
+      backgroundIds:[...BG_ID_SET],materializeLayout:materializeArchetypeLayout,
+      layoutShapeTransform:layoutShapeTransformFor,
+      createUid:prefix=>prefix+"_"+Math.random().toString(36).slice(2,7),
+    });
   };
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
   // unification). ONE-SHOT write of concrete per-element values into the SAME state
@@ -8993,58 +8302,17 @@ function useDesignPatchPipeline(workspace) {
   // heroRegister, microLabel). Motifs → normal overlay layers. archetypeId is PROVENANCE
   // only — the renderer never forks on it.
   const materializeArchetype = (id, ctx = {}) => {
-    if (id === null || id === "none") { setArchetypeId(null); setArchVariant(0); return; }
-    const mat = buildMaterialized(id, ctx); if (!mat) return;
-    setArchetypeId(id);   // provenance
-    // Sanctioned palette-variant index travels with the materialization so the render
-    // path (specNums) resolves the SAME variant that wrote bgColor here. Explicit
-    // ctx.variant wins (rotation / picker re-click); otherwise reset to the base variant.
-    setArchVariant(ctx.variant ?? 0);
-    if (mat.bg) setBgColor(mat.bg);
-    setFieldColorOverride(null); // (B1) fresh archetype re-seeds its own field palette
-    setTextColorId("auto");
-    setBackdropMode("auto");
-    setLogoVariantTouched(false);
-    setHeroRegister(mat.register);
-    setMicroLabel(mat.microLabel);
-    setPillText(null); // fresh materialization → the archetype's authored pill label
-    setPhotoTreatment(mat.photoTreatment);
-    setPhotoFrame(mat.photoFrame);
-    dispatchDesignCommand({
-      type:"typography/merge-master-layout",
-      postType:mat.postType,
-      base:TYPE_LAYOUT_DEFAULTS[mat.postType] || TYPE_LAYOUT_DEFAULTS.text_post,
-      patch:mat.layout,
+    const mat = id === null || id === "none" ? null : buildMaterialized(id, ctx);
+    const groups = planArchetypeMaterializationWorkflow({
+      archetypeId:id,
+      variant:ctx.variant ?? 0,
+      materialized:mat,
+      currentShapes:overlayLayers,
+      typeLayoutDefault:mat
+        ? (TYPE_LAYOUT_DEFAULTS[mat.postType] || TYPE_LAYOUT_DEFAULTS.text_post)
+        : {},
     });
-    // Fresh materialization on master clears stale per-dim drags so the archetype's
-    // own per-dim geometry cascades (resolveTextLayout re-materializes per format).
-    setTypeLayoutsByDim({});
-    // (Refinement 1) a fresh archetype brings fresh role boxes — stale per-role free
-    // offsets would land nonsensically, so clear them (mirrors typeLayoutsByDim above).
-    setRoleOffsetsByDim({});
-    setPhotoTouchedByDim({});   // (B2) fresh archetype → auto photo crop again
-    setImgTByDim({});
-    setPinnedProps({});         // (item 2) a fresh archetype has no user contrast pins yet
-    // (§2.9.2 · pins law) A layout swap re-seeds ONLY the system's free variables:
-    // previous motifs and UNEDITED layout-origin shapes are replaced; user-added
-    // layers ALWAYS survive, and a user-edited (userTouched) generated shape is
-    // pinned — it wins over the new layout's shape, which then isn't emitted
-    // (law 5: never revert explicit user choice; the layout adapts).
-    const keepLayers = overlayLayers.filter(l => {
-      if (l.motif) return false;                          // motifs re-seed per layout
-      if (l.origin === "layout") return !!l.userTouched;  // unedited generated → replaced
-      return true;                                        // user layers survive a swap
-    });
-    const pinnedLayoutFrame = keepLayers.some(l => l.origin === "layout" && (l.mode || "frame") === "frame");
-    dispatchDesignCommand({type:"shapes/replace",shapes:[
-      ...keepLayers,
-      ...((mat.layoutShapeLayer && !pinnedLayoutFrame) ? [mat.layoutShapeLayer] : []),
-      ...(mat.motifLayers || []),
-    ]});
-    // (WP-W0) a fresh archetype brings fresh furniture — stale per-piece overrides
-    // (keyed by the OLD archetype's item indexes) must not hide/recolour the new set.
-    dispatchDesignCommand({type:"furniture/set",overrides:{}});
-    setSelOverlay(null);
+    executeWorkflowGroups(groups);
   };
   // (Declutter, ratified §3.3) The Templates-popover "Layouts" grid was removed —
   // the chat chip "Try another layout" is the one layout surface, so the picker
@@ -9056,380 +8324,99 @@ function useDesignPatchPipeline(workspace) {
     const priorCommandCollector = commandPathCollectorRef.current;
     const commandPaths = [];
     commandPathCollectorRef.current = commandPaths;
-    // Defensive migration: the gradient backdrop treatment was removed 2026-07-02.
-    // Any incoming patch (old AI schema echo, stale template) asking for "gradient"
-    // is coerced to "auto" so it never hits the (now-deleted) code path.
-    if (patch.backdropMode === "gradient") patch = { ...patch, backdropMode: "auto" };
-    // Canonical AI copy fitting happens ONCE, before state application. The stored
-    // field and the painted field are therefore identical across canvas, inspector,
-    // templates, sessions and exports. Owner-authored fields remain verbatim.
-    if (!opts.uiSource) {
-      const targetArch = ARCHETYPE_IDS.includes(patch.archetypeId) ? patch.archetypeId : archetypeId;
-      const targetDim = inList(patch.dimensionId, "dimensionId") ? patch.dimensionId : dimensionId;
-      const targetType = inList(patch.postType, "postType") ? patch.postType : postType;
-      const budgets = computeCopyBudgets(targetArch, targetDim, targetType);
-      const fitted = { ...patch };
-      for (const field of COPY_AUTHOR_FIELDS) {
-        if (typeof fitted[field] !== "string" || copyAuthorsRef.current?.[field] === "owner" || !Number.isFinite(budgets[field])) continue;
-        const authored = fitted[field];
-        const trimmed = fitCopyClient(authored, budgets[field]);
-        // (invariant 3 — complete or absent) The deterministic fit trims to a whole
-        // sentence within budget, else to the last whole word. When a too-small slot
-        // budget forces that word-cut to collapse into a meaningless mid-phrase stump
-        // (e.g. "We are so" from "We are so grateful for our community…"), storing it
-        // would paint a fragment AND make stored≠intended. Keep the AUTHORED copy
-        // verbatim instead and let the renderer's own complete-or-absent logic decide:
-        // it paints the line whole when the real slot holds it, or drops the role so
-        // the advisor offers a working "tighten it" repair. Never store/paint a stump.
-        const endsClean = /[.!?…]["')\]]?$/.test(trimmed);
-        const trimmedWords = trimmed.split(/\s+/).filter(Boolean).length;
-        // (gap fix) A word-boundary cut can also land on a DANGLING function word —
-        // a conjunction/preposition/article/aux ("…a week of creativity and", "join us
-        // for") — which reads as a stump at ANY length, so the short-fragment test
-        // (< 4 words / < 16 chars) misses it. Treat a trailing function word as a stump
-        // too: keep the authored copy verbatim (complete-or-absent) rather than paint
-        // "…creativity and".
-        const danglesFunctionWord = /\b(?:and|or|but|nor|yet|so|for|of|to|in|on|at|by|as|with|from|into|the|a|an|our|your|their|its|his|her|is|are|was|were|be|been)\s*$/i.test(trimmed);
-        const isFragmentStump = trimmed !== authored && !endsClean && (trimmedWords < 4 || trimmed.length < 16 || danglesFunctionWord);
-        fitted[field] = isFragmentStump ? authored : trimmed;
-      }
-      patch = fitted;
-    }
-    const applied = [];
+    try {
+      patch = prepareDesignPatch(patch, {
+      uiSource:!!opts.uiSource,
+      currentArchetypeId:archetypeId,
+      currentDimensionId:dimensionId,
+      currentPostType:postType,
+      copyAuthors:copyAuthorsRef.current,
+      archetypeIds:ARCHETYPE_IDS,
+      dimensionIds:PATCH_OPTIONS.dimensionId,
+      postTypes:PATCH_OPTIONS.postType,
+      getCopyBudgets:computeCopyBudgets,
+      fitCopy:fitCopyClient,
+    });
+      const applied = [];
+      const semanticPatchPlan = compileDesignPatchCommands(patch);
+      const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
+        dispatchCommand:dispatchDesignCommand,
+      }));
+      const applyWorkflowGroups = groups => {
+        applied.push(...executeWorkflowGroups(groups));
+      };
     // amendUndo: fold this change INTO the current top undo entry rather than
     // pushing a new one (used by the harmonizer so its fixes revert together with
     // the AI patch that triggered them — one user-visible action = one undo).
-    const amendUndo = opts.amendUndo === true;
-
-    if (!amendUndo) {
-      // Snapshot BEFORE mutating so undo restores this exact pre-patch state.
-      setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
-      setRedoStack([]);   // (WP-W0) a new change invalidates the redo branch
-    }
-    // else: no new snapshot — the top entry already captures the pre-AI state, and
-    // undo restoring it also reverts these folded harmonizer fixes.
+      const amendUndo = opts.amendUndo === true;
+    // Capture before mutation, but commit it to history only after a validated
+    // command/effect actually lands. Rejected or echoed no-op patches must not
+    // create dead Undo entries or erase the user's Redo branch.
+      const pendingUndoSnapshot = amendUndo ? null : snapshotApplyableState();
 
     // Only record a field as "applied" when it actually differs from the
     // current value — the model sometimes echoes unchanged fields into the
     // patch, and we don't want those in the "changed: …" summary or undo scope.
-    if (inList(patch.postType, "postType") && patch.postType !== postType) { setPostType(patch.postType); applied.push("postType"); }
-    // archetypeId: enum of archetype ids OR the explicit sentinel "none"/null to
-    // return to the legacy free path. Applying an archetype also seeds its palette
-    // + treatment defaults (mirrors the picker) so a chat patch restyles fully.
-    if (patch.archetypeId !== undefined && patch.archetypeId !== null) {
-      if (patch.archetypeId === "none" && archetypeId !== null) { setArchetypeId(null); applied.push("archetypeId"); }
-      // (WP-V) Same-id with a DIFFERENT archVariant re-materializes — this is the
-      // picker's palette-variant cycling routed through the pipeline.
-      else if (ARCHETYPE_IDS.includes(patch.archetypeId) &&
-               (patch.archetypeId !== archetypeId ||
-                (Number.isInteger(patch.archVariant) && patch.archVariant !== archVariant))) {
-        // Pass the patch's own copy so materialization (register/eyebrow/frame) uses
-        // the SAME values this patch is about to set, not stale closure state.
-        materializeArchetype(patch.archetypeId, {
-          postType: inList(patch.postType,"postType") ? patch.postType : postType,
-          attribution: typeof patch.attribution==="string" ? patch.attribution : attribution,
-          subtext: typeof patch.subtext==="string" ? patch.subtext : subtext,
-          // Server-side measured palette rotation supplies a sanctioned variant index
-          // (§3). Absent → base variant 0. materializeArchetype clamps the index.
-          variant: Number.isInteger(patch.archVariant) ? patch.archVariant : 0,
-        });
-        applied.push("archetypeId");
-      }
+    applySemanticCommands(semanticPatchPlan.beforeMaterialization);
+    const transitions=resolveDesignPatchTransitions({
+      patch,currentArchetypeId:archetypeId,currentArchetypeVariant:archVariant,
+      currentDimensionId:dimensionId,currentPostType:postType,currentAttribution:attribution,
+      currentSubtext:subtext,archetypeIds:ARCHETYPE_IDS,
+      dimensionIds:PATCH_OPTIONS.dimensionId,postTypes:PATCH_OPTIONS.postType,
+    });
+    if (transitions.archetype) {
+      materializeArchetype(transitions.archetype.id,transitions.archetype.context||{});
+      applied.push("archetypeId");
     }
-    if (inList(patch.dimensionId, "dimensionId") && patch.dimensionId !== dimensionId) { setDimensionId(patch.dimensionId); applied.push("dimensionId"); }
-    if (typeof patch.headline === "string" && patch.headline !== headline) { setHeadline(patch.headline); applied.push("headline"); }
-    if (typeof patch.subtext === "string" && patch.subtext !== subtext) { setSubtext(patch.subtext); applied.push("subtext"); }
-    if (typeof patch.attribution === "string" && patch.attribution !== attribution) { setAttribution(patch.attribution); applied.push("attribution"); }
-    if (typeof patch.dateText === "string" && patch.dateText !== dateText) { setDateText(patch.dateText); applied.push("dateText"); }
-    // (WP-V) Eyebrow + pill are first-class patch fields. EXPLICIT-EMPTY sentinel:
-    // "" REMOVES the element (render no longer falls back to attribution / the
-    // archetype's authored badge text); null leaves it unchanged.
-    if (typeof patch.microLabel === "string" && patch.microLabel !== microLabel) { setMicroLabel(patch.microLabel); applied.push("microLabel"); }
-    if (typeof patch.pillText === "string" && patch.pillText !== pillText) { setPillText(patch.pillText); applied.push("pillText"); }
-    // bgColor accepts ANY valid BG field id (BG_ID_SET = the full UI palette, incl.
-    // the pastels beyond the tighter AI-facing enum). The AI's strict schema still
-    // limits IT to the 5 core tokens; the UI Background inspector may pick any pastel.
-    if (typeof patch.bgColor === "string" && BG_ID_SET.has(patch.bgColor) && patch.bgColor !== bgColor) { setBgColor(patch.bgColor); applied.push("bgColor"); }
-    if (inList(patch.textColorId, "textColorId") && patch.textColorId !== textColorId) { setTextColorId(patch.textColorId); applied.push("textColorId"); }
-    if (inList(patch.backdropMode, "backdropMode") && patch.backdropMode !== backdropMode) { setBackdropMode(patch.backdropMode); applied.push("backdropMode"); }
+    if (transitions.dimensionId) { setDimensionId(transitions.dimensionId); applied.push("dimensionId"); }
     // Materialized visuals (Commit 1). A direct tweak to the photo tone or frame on an
     // existing design — applied AFTER any archetypeId materialization above so an
     // explicit override wins. photoFrameType maps to the {type,...} object (card/petal
     // geometry is re-derived from the active archetype's data, or a sensible default).
-    if (inList(patch.photoTreatment, "photoTreatment") && patch.photoTreatment !== photoTreatment) { setPhotoTreatment(patch.photoTreatment); applied.push("photoTreatment"); }
-    // (§2.9.2) petalMask is RETIRED from this field — a shape cutout is a genuine
-    // frame-mode shape layer (addOverlay { assetId, mode:"frame" }); the enum now
-    // carries none/card only, so a legacy 'petalMask' output is silently ignored
-    // by inList and never becomes a new special-field mask.
-    if (inList(patch.photoFrameType, "photoFrameType") && patch.photoFrameType !== (photoFrame?.type || "none")) {
-      if (patch.photoFrameType === "none") setPhotoFrame({ type: "none" });
-      else if (patch.photoFrameType === "card") setPhotoFrame({ type: "card", box: { x:0.54,y:0.32,w:0.38,h:0.42,align:"left" }, radiusFrac:0.06, rotationDeg:0 });
-      applied.push("photoFrameType");
-    }
+    applySemanticCommands(semanticPatchPlan.afterMaterialization);
+    applyWorkflowGroups(planDesignPatchCompositeWorkflows({
+      patch,
+      logo:{assetId:selectedLogoId,position:logoPosition,sizeId:logoSize,hidden:logoHidden},
+      renderedLogo:{position:logoBoxRef.current?.position||logoPosition,drawn:!!logoBoxRef.current},
+      dimensionId,
+      masterDimensionId:MASTER_DIM,
+      systemFreeVariables:!!opts.systemFreeVariables,
+      uiSource:!!opts.uiSource,
+      currentShapes:overlayLayers,
+      mediaHostShapeId:designDocument.composition.mediaHostShapeId,
+      overlayAssets:[...overlays,...DEFAULT_OVERLAYS],
+      allowedOverlayAssetIds:PATCH_OPTIONS.overlayAssetId,
+      canvasWidth:W,
+      canvasHeight:H,
+      suggestShapePlacement:suggestPlacement,
+      createShapeUid:()=>"ol_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+      deriveShapeTransform:deriveFromMaster,
+      postType,
+      resolvedTextLayout,
+      defaultTextLayout:TYPE_LAYOUT_DEFAULTS[postType]||TYPE_LAYOUT_DEFAULTS.text_post,
+      roleOffsetsByFormat:roleOffsetsByDim,
+      hasFormatOverride:hasUserFormatOverride(designDocument,patch.resetFormatToMaster,MASTER_DIM),
+      renderedPhotoTransform:photoWindowRef.current?.eff||photoT,
+      masterPhotoTransform:imgT,
+      photoWindowKind:photoWindowRef.current?.kind||null,
+      validColorIds:Object.keys(B),
+    }));
 
-    if (inList(patch.logoId, "logoId") && patch.logoId !== selectedLogoId) {
-      setSelectedLogoId(patch.logoId);
-      // (Item 1 — born-clean) A HUMAN Logo-panel pick pins the variant; the landing
-      // handoff's AI-chosen logoId is a SYSTEM free variable (systemFreeVariables),
-      // so it must NOT pin — leaving the ink-swap gate (!logoVariantTouched, ~5168)
-      // live to swap to the readable brand pole against the photo.
-      if (!opts.systemFreeVariables) setLogoVariantTouched(true);
-      setMarkTab(patch.logoId.startsWith("s") ? "secondary" : "primary");
-      applied.push("logoId");
-    }
-    // A logo placement patch must behave exactly like a human click: pin the
-    // logo globally on the master dim, or write a per-dim override elsewhere.
-    // (WP-W0 specimen B) RENDER-TRUTH-AWARE PLACEMENT — compare against BOTH the
-    // pinned state field and the position actually RENDERED (the archetype /
-    // format default when un-pinned): "move the logo to the centre" must apply
-    // even when the stale state field already says "center" while the canvas
-    // draws the mark top-left. (Unsolicited placement echoes are stripped
-    // server-side, so a placement field here is always a deliberate ask.)
-    const renderedLogoPos = logoBoxRef.current?.position || logoPosition;
-    // A placement patch with NO logo currently drawn (photo-restraint archetypes,
-    // logoUse:"none") is also a real change: pinning surfaces the lockup there.
-    const logoDrawn = !!logoBoxRef.current;
-    const posChanged = inList(patch.logoPosition, "logoPosition") && (patch.logoPosition !== logoPosition || patch.logoPosition !== renderedLogoPos || !logoDrawn);
-    const sizeChanged = inList(patch.logoSize, "logoSize") && patch.logoSize !== logoSize;
-    if (posChanged || sizeChanged) {
-      const nextPos = posChanged ? patch.logoPosition : logoPosition;
-      const nextSize = sizeChanged ? patch.logoSize : logoSize;
-      if (opts.systemFreeVariables) {
-        // (Item 1 — born-clean, law 4/5) The landing handoff's logoPosition/logoSize
-        // are the AI's OWN placement pick, not human intent. Apply them as ordinary
-        // state WITHOUT pinning (userLogoTouched) and WITHOUT writing a per-dim
-        // explicit override — resolveLogoBase (~1136) then treats the base as
-        // NON-explicit, so pickLogoPlacement's born-clean busy-region relocation
-        // (~1216) stays live and the system moves the mark to a legible spot. A HUMAN
-        // pick (every other call site) still pins, below.
-        if (posChanged) setLogoPosition(nextPos);
-        if (sizeChanged) setLogoSize(nextSize);
-      } else if (dimensionId === MASTER_DIM) {
-        setUserLogoTouched(true);
-        if (posChanged) setLogoPosition(nextPos);
-        if (sizeChanged) setLogoSize(nextSize);
-      } else {
-        // (WP-V) A UI edit on a non-master format writes the per-dimension
-        // override + the global mirror but never PINS the global position
-        // (legacy placeLogo rule); an AI placement keeps the pin as before.
-        if (opts.uiSource) {
-          if (posChanged) setLogoPosition(nextPos);
-          if (sizeChanged) setLogoSize(nextSize);
-        } else {
-          setUserLogoTouched(true);
-        }
-        dispatchDesignCommand({ type:"logo/merge-format-placement", dimensionId, patch:{ position:nextPos, sizeId:nextSize } });
+    const completion=resolveDesignPatchCompletion({patch,appliedFields:applied,options:opts});
+    if (completion.clearPhotoSelection) setPhotoSel(false);
+    if (completion.harmonizer) harmonizeRef.current=completion.harmonizer;
+    if (completion.authorship) executeWorkflowGroups(planCopyAuthorshipWorkflow(completion.authorship));
+
+      applied.changedPaths = [...new Set(commandPaths)];
+      if (pendingUndoSnapshot && completion.commitHistory) {
+        setAiUndoStack(prev => [pendingUndoSnapshot, ...prev].slice(0, AI_UNDO_DEPTH));
+        setRedoStack([]);
       }
-      if (posChanged) applied.push("logoPosition");
-      if (sizeChanged) applied.push("logoSize");
+      return applied;
+    } finally {
+      commandPathCollectorRef.current = priorCommandCollector;
+      if (priorCommandCollector && commandPaths.length) priorCommandCollector.push(...commandPaths);
     }
-    // (Refinement 2) logoFree — a continuous fractional CENTRE {x,y} pin (or null to
-    // clear back to the named anchor). Behaves like a logoPosition patch: it pins the
-    // logo (userLogoTouched) and writes the master free pin on MASTER_DIM or a per-dim
-    // free pin on logoByDim[dim].free elsewhere. The named enum (logoPosition) is left
-    // as the last semantic anchor for chat/inspector; the free pin overrides it at draw.
-    // Client-only (CLIENT_PATCH_KEYS) — the AI grammar cannot produce it.
-    if ("logoFree" in patch) {
-      const lf = patch.logoFree;
-      const valid = lf === null || (lf && typeof lf === "object" && Number.isFinite(lf.x) && Number.isFinite(lf.y));
-      if (valid) {
-        const clamp = v => Math.max(0, Math.min(1, v));
-        const free = lf === null ? null : { x: clamp(lf.x), y: clamp(lf.y) };
-        setUserLogoTouched(true);
-        if (dimensionId === MASTER_DIM) {
-          setLogoFreePos(free);
-        } else {
-          dispatchDesignCommand({
-            type:"logo/merge-format-placement",
-            dimensionId,
-            base:{ position:logoPosition, sizeId:logoSize },
-            patch:free ? { free } : {},
-            removeFree:!free,
-          });
-        }
-        applied.push("logoFree");
-      }
-    }
-    // (Scope addendum) hideLogo — REMOVE the logo (true) or ADD IT BACK (false). Both the
-    // inspector "Remove logo" button and chat "remove the logo" / "add the logo back" emit
-    // this. Removal is a PIN: the render draws no logo and the auto-placement / harmonizer
-    // may never re-add it. Adding it back clears the pin AND marks the logo user-placed so
-    // it surfaces on any archetype (even restraint tiles). Round-trips sessions + undo.
-    if (typeof patch.hideLogo === "boolean" && patch.hideLogo !== logoHidden) {
-      setLogoHidden(patch.hideLogo);
-      // Re-adding pins the logo visible (userLogoTouched) so restraint archetypes
-      // (logoUse:"none"/"url") still show it — mirrors the "＋ add logo" ghost's patch.
-      if (patch.hideLogo === false) setUserLogoTouched(true);
-      applied.push("hideLogo");
-    }
-
-    if (patch.fontSizes && typeof patch.fontSizes === "object") {
-      const clean = {};
-      for (const role of PATCH_OPTIONS.fontRole) {
-        if (inList(patch.fontSizes[role], "fontStep") && patch.fontSizes[role] !== fontSizes?.[role]) clean[role] = patch.fontSizes[role];
-      }
-      if (Object.keys(clean).length) { dispatchDesignCommand({ type:"typography/merge-font-sizes", patch:clean }); applied.push("fontSizes"); }
-    }
-
-    if (patch.removeOverlays === true) { dispatchDesignCommand({type:"shapes/replace",shapes:[]}); setSelOverlay(null); applied.push("removeOverlays"); }
-
-    // (WP-V) The UI may add any asset in the user's overlay LIBRARY (uploads
-    // included), not just the built-in enum the AI is limited to.
-    if (patch.addOverlay && (inList(patch.addOverlay.assetId, "overlayAssetId") || overlays.some(o => o.id === patch.addOverlay.assetId))) {
-      const asset = overlays.find(o => o.id === patch.addOverlay.assetId) || DEFAULT_OVERLAYS.find(o => o.id === patch.addOverlay.assetId);
-      if (asset) {
-        const mode = inList(patch.addOverlay.mode, "overlayMode") ? patch.addOverlay.mode : "overlay";
-        const uid = "ol_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-        // (Free shapes — client 2026-07-10) A UI add drops a NEW instance every time so
-        // the same shape can live many times over (drag/rotate/resize each freely). The
-        // AI grammar keeps one-instance-per-asset (born-clean: an auto pass never stacks
-        // duplicate decor). New instances land nudged off the last same-asset one so they
-        // don't hide underneath it. z-order = add order (latest on top = end of array).
-        const sameCount = opts.uiSource ? overlayLayers.filter(l => l.assetId === asset.id).length : 0;
-        const t = suggestPlacement(asset.kind, asset.ratio, W, H);
-        if (sameCount > 0) { t.x = Math.min(0.9, (t.x ?? 0.5) + 0.06 * sameCount); t.y = Math.min(0.9, (t.y ?? 0.5) + 0.06 * sameCount); }
-        if(!opts.uiSource) dispatchDesignCommand({type:"shapes/replace",shapes:overlayLayers.filter(l=>l.assetId!==asset.id)});
-        dispatchDesignCommand({type:"shape/add",shape:{uid,assetId:asset.id,mode,master:t,byDim:{}}});
-        applied.push("addOverlay");
-        // Select + open the inspector on a UI-added overlay (matches the old
-        // gallery tap behaviour: place → immediately editable).
-        if (opts.uiSource) { setSelOverlay(uid); setOverlayChromeVisible(true); setInspectorEl("shape"); setOverlayDirty(true); }
-      }
-    }
-
-    /* ── CLIENT-ONLY PATCH EXTENSION (WP-V Stage 1 — see lib/design-patch.js
-       CLIENT_PATCH_KEYS). These keys are emitted by UI surfaces only; the AI's
-       strict schema cannot produce them. They flow through the SAME pipeline so
-       undo + harmonizer semantics are uniform by construction. ── */
-    if (typeof patch.bgAlpha === "number" && Number.isFinite(patch.bgAlpha)) {
-      const v = Math.max(0, Math.min(1, patch.bgAlpha));
-      if (v !== bgAlpha) { setBgAlpha(v); applied.push("bgAlpha"); }
-    }
-    // (B1/B3) fieldColor — the editorial panel/field override. "" or null clears it
-    // (back to the archetype variant field). Any valid BG id sets it. This is what
-    // makes the Background swatch drive the visible field on materialized designs.
-    if (patch.fieldColor !== undefined) {
-      const fc = patch.fieldColor;
-      if (fc === null || fc === "") { if (fieldColorOverride !== null) { setFieldColorOverride(null); applied.push("fieldColor"); } }
-      else if (typeof fc === "string" && BG_ID_SET.has(fc) && fc !== fieldColorOverride) { setFieldColorOverride(fc); applied.push("fieldColor"); }
-    }
-    if (patch.textLayout && typeof patch.textLayout === "object") {
-      const t = {};
-      for (const k of ["x", "y", "width", "lineHeight", "scale"]) if (typeof patch.textLayout[k] === "number" && Number.isFinite(patch.textLayout[k])) t[k] = patch.textLayout[k];
-      if (["left", "center", "right"].includes(patch.textLayout.align)) t.align = patch.textLayout.align;
-      if (Object.keys(t).length) { writeTextLayout(t); applied.push("textLayout"); }
-    }
-    // (Refinement 1) roleOffset — a single text/furniture role's free-placement
-    // centre-delta ({role, dx, dy}), scoped to the active dim + postType. Client-only
-    // (CLIENT_PATCH_KEYS); the AI grammar cannot produce it. (P1 slice 3 — owner rails)
-    // Optional {bx,by} freezes the solver base with the delta (one atomic entry);
-    // {clear:true} deletes the entry — the sanctioned unpin (element returns to the
-    // solver), driven by the pinned-placement finding's "Put it back" remedy.
-    if (patch.roleOffset && typeof patch.roleOffset === "object" && typeof patch.roleOffset.role === "string") {
-      const { role, dx, dy, bx, by, clear } = patch.roleOffset;
-      if (clear === true) { writeRoleOffset(role, null); applied.push("roleOffset"); }
-      else if (Number.isFinite(dx) && Number.isFinite(dy)) { writeRoleOffset(role, dx, dy, bx, by); applied.push("roleOffset"); }
-    }
-    if (patch.photoTransform && typeof patch.photoTransform === "object") {
-      const t = {};
-      for (const k of ["zoom", "cx", "cy", "rotation"]) if (typeof patch.photoTransform[k] === "number" && Number.isFinite(patch.photoTransform[k])) t[k] = patch.photoTransform[k];
-      if (Object.keys(t).length) {
-        // (b0d13d8 invariant / Item 2 — masked-photo zoom/pan) A photoTransform patch is
-        // ALWAYS an explicit reframe (autonomous generation never emits one), so PIN this
-        // dim's photo before applying the delta — exactly what the on-canvas drag does via
-        // pinPhotoTouched. Without the pin, effImgTFor's auto focal-crop wins on every
-        // windowed / cropDrama>1 archetype (shape_cutout & petal_window masks, editorial_
-        // split, floated_card, documentary, full_bleed): the panel/keyboard/quick-chip
-        // wrote imgT/imgTByDim but the render recomputed the crop from the focal point and
-        // IGNORED it — the client's "why can't I change the size of the photo?" no-op.
-        // Seeding from the transform ACTUALLY on screen (photoWindowRef.eff, incl. the
-        // cropDrama zoom + focal) keeps the edit continuous with what's drawn (no jump),
-        // and marking the dim touched means the auto focal-crop never overwrites it again
-        // (M3). Fresh generations stay on the auto-fit default (photoTouchedByDim empty
-        // until the first reframe → born-clean). Idempotent within a gesture.
-        pinPhotoTouched((photoWindowRef.current && photoWindowRef.current.eff) || photoT);
-        // (§2.9.2 cover invariant — gesture-level cover-clamp) When the photo is held by
-        // a FRAME shape (mask/card window), a reframe must never zoom BELOW cover: the
-        // zoom control floors at 0.1, and a sub-cover zoom exposes backing inside the
-        // silhouette (client 2026-07-15). Standard crop UIs floor the gesture at cover;
-        // do the same so the STORED transform matches what the cover-clamped painter
-        // draws (render-truth honesty). Full-bleed/split windows are NOT frames — their
-        // intentional zoom-out (field-as-mat) is untouched.
-        const _pwKind = photoWindowRef.current && photoWindowRef.current.kind;
-        if ((_pwKind === "mask" || _pwKind === "card") && typeof t.zoom === "number") t.zoom = Math.max(1, t.zoom);
-        setPhotoT(prev => ({ ...prev, ...t })); applied.push("photoTransform");
-      }
-    }
-    if (patch.overlayUpdate && typeof patch.overlayUpdate === "object" && patch.overlayUpdate.uid) {
-      const { uid, transform, mode, style } = patch.overlayUpdate;
-      if (transform && typeof transform === "object") writeLayerT(uid, transform);
-      if (inList(mode, "overlayMode")) writeLayerMode(uid, mode);
-      if (style && typeof style === "object") writeLayerStyle(uid, style);
-      applied.push("overlayUpdate");
-    }
-    if (typeof patch.removeOverlay === "string" && patch.removeOverlay) {
-      writeDeleteLayer(patch.removeOverlay);
-      applied.push("removeOverlay");
-    }
-    if (typeof patch.imageSrc === "string" && patch.imageSrc) {
-      removeVideo();
-      setImage(patch.imageSrc);
-      imgFrom(patch.imageSrc).then(img => { if (img) setImageObj(img); });
-      applied.push("imageSrc");
-    }
-    if (patch.removeImage === true) {
-      removeVideo();
-      setImage(null);
-      setImageObj(null);
-      applied.push("removeImage");
-    }
-    // (WP-W0 specimen 4) furnitureUpdate — ONE furniture piece (hairline rule /
-    // index token / url line), keyed furn_<type>_<i> on the active archetype's
-    // furniture list: { key, hidden?, color? (brand token), widthScale? }.
-    // Client-only (CLIENT_PATCH_KEYS) — the AI grammar cannot produce it.
-    if (patch.furnitureUpdate && typeof patch.furnitureUpdate === "object" && typeof patch.furnitureUpdate.key === "string") {
-      const { key, hidden, color, widthScale } = patch.furnitureUpdate;
-      dispatchDesignCommand({ type:"furniture/update", key, patch:{
-        ...(typeof hidden==="boolean" ? {hidden:hidden?true:null} : {}),
-        ...(color==="" ? {color:null} : typeof color==="string"&&B[color] ? {color} : {}),
-        ...(typeof widthScale==="number"&&Number.isFinite(widthScale) ? {widthScale:Math.max(0.25,Math.min(3,widthScale))} : {}),
-      } });
-      applied.push("furnitureUpdate");
-    }
-
-    // A UI-sourced patch never clobbers the live selection (photo drags emit
-    // patches mid-gesture); AI patches keep the historical deselect.
-    if (!opts.uiSource) setPhotoSel(false);
-
-    // Arm the silent harmonizer for AI-originated patches (chat / landing). This is
-    // the START of a harmonization sequence, so RESET the round counter + applied-fix
-    // log. Harmonizer re-applies come through with { amendUndo:true } and do NOT
-    // re-arm (they only advance the round counter, handled in the effect). Audit
-    // "apply" flows never pass harmonize:true, so they're excluded by construction.
-    if (opts.harmonize === true && !amendUndo) {
-      harmonizeRef.current = { armed: true, rounds: 0, applied: [],
-        // (WP-W0 specimen B) an explicit logo placement in THIS patch is a
-        // deliberate ask ("move the logo to the centre") — the silent pass must
-        // never immediately relocate it (user is the boss, Task 1). Colour /
-        // backdrop fixes still apply.
-        avoidLogoGeo: patch.logoPosition != null || patch.logoSize != null };
-    }
-
-    // (copy-fit Tier 2) AUTHORSHIP. Stamp every copy field this patch actually changed:
-    // a UI-sourced edit (inspector typing / canvas tap-edit → opts.uiSource) is the
-    // OWNER; anything else (landing / caption / belt / AI chat patch) is the system.
-    // Owner is PERMANENT — a later system patch updates the value but never downgrades
-    // the field back to 'ai', so owner copy is never silently fitted (pins law).
-    const _touchedCopy = applied.filter(f => COPY_AUTHOR_FIELDS.includes(f));
-    if (_touchedCopy.length) {
-      const author = opts.uiSource ? "owner" : "ai";
-      dispatchDesignCommand({ type:"content/stamp-authorship", fields:_touchedCopy, author });
-    }
-
-    applied.changedPaths = [...new Set(commandPaths)];
-    commandPathCollectorRef.current = priorCommandCollector;
-    if (priorCommandCollector && commandPaths.length) priorCommandCollector.push(...commandPaths);
-    return applied;
   };
 
   /* ── applyPatch — THE ONE PATCH PIPELINE (WP-V Stage 1, ux-architecture §4) ──
@@ -9441,8 +8428,8 @@ function useDesignPatchPipeline(workspace) {
 
        source:"ai" (default) — pushes a fresh undo snapshot per patch and (with
          harmonize:true) arms the silent post-render harmonizer.
-       source:"ui" — burst-aware: the FIRST patch of an edit burst pushes ONE
-         undo snapshot (noteManualEdit); further patches inside the debounce
+       source:"ui" — burst-aware: the FIRST validated patch of an edit burst pushes
+         ONE pre-edit snapshot; further patches inside the debounce
          window (a drag gesture, typing) fold into it, and the debounced
          MANUAL-EDIT harmonize pass runs after the burst settles.               */
   const applyPatch = (patch, opts = {}) => {
@@ -9454,20 +8441,20 @@ function useDesignPatchPipeline(workspace) {
     // active — skip the settle for both. CSS-only + prefers-reduced-motion aware
     // (see .wo-canvas-settle). Format-switch redraws don't route through applyPatch,
     // so they're unaffected.
-    const isDragPatch = "textLayout" in patch || "photoTransform" in patch || "roleOffset" in patch || "logoFree" in patch;
+    const isDragPatch = isContinuousDesignPatch(patch);
     if (!isDragPatch && !dragRef.current) pulseCanvasSettle();
     if ((opts.source || "ai") === "ui") {
-      noteManualEdit(uiTagsForPatch(patch));
+      const preEditSnapshot = manualHarmRef.current.pending ? null : snapshotApplyableState();
+      let pinChanged = false;
       // (item 2) Record explicit inspector picks of contrast-governing globals as PINS
       // the silent harmonizer may not overturn. Only genuine user choices pin (a UI
       // patch): "auto" is the system default, so re-selecting Auto CLEARS the pin.
       if ("backdropMode" in patch || "textColorId" in patch) {
-        dispatchDesignCommand({ type:"palette/sync-pins", patch:{
-          ...(Object.prototype.hasOwnProperty.call(patch,"backdropMode") ? { backdropMode:patch.backdropMode !== "auto" } : {}),
-          ...(Object.prototype.hasOwnProperty.call(patch,"textColorId") ? { textColorId:patch.textColorId !== "auto" } : {}),
-        } });
+        pinChanged=executeWorkflowGroups(planPalettePinWorkflow({patch})).length>0;
       }
-      return applyDesignPatch(patch, { amendUndo: true, uiSource: true });
+      const applied = applyDesignPatch(patch, { amendUndo: true, uiSource: true });
+      if (pinChanged || applied.length) noteManualEdit(designPatchInteractionTags(patch), preEditSnapshot);
+      return applied;
     }
     return applyDesignPatch(patch, opts);
   };
@@ -9487,100 +8474,18 @@ function useDesignPatchPipeline(workspace) {
     void el.offsetWidth;
     el.classList.add("wo-canvas-settle");
   };
-  // Which element(s) a UI patch touches — feeds the manual harmonizer's
-  // geometry restraint (it never relocates what the user just placed).
-  const uiTagsForPatch = (patch) => {
-    const tags = [];
-    if (patch.logoId || patch.logoPosition || patch.logoSize || "logoFree" in patch || "hideLogo" in patch) tags.push("logo");
-    if (patch.bgColor || patch.textColorId || patch.backdropMode || typeof patch.bgAlpha === "number") tags.push("colour");
-    if (patch.textLayout || patch.roleOffset || patch.fontSizes || typeof patch.headline === "string" || typeof patch.subtext === "string" ||
-        typeof patch.attribution === "string" || typeof patch.dateText === "string" ||
-        typeof patch.microLabel === "string" || typeof patch.pillText === "string") tags.push("text");
-    if (patch.overlayUpdate || patch.addOverlay || patch.removeOverlay || patch.removeOverlays || patch.furnitureUpdate) tags.push("overlay");
-    if (patch.photoTransform || patch.imageSrc || patch.removeImage || patch.photoTreatment || patch.photoFrameType) tags.push("photo");
-    return tags;
-  };
+  const applyInspectorPatch=useInspectorRenderTruth({
+    canvasRef,applyPatch,setInspectorNotes,archetypeId,dimensionId,
+  });
 
-  /* ── INSPECTOR RENDER-TRUTH (B3, the law: no silently-dead controls) ──────────
-     A lightweight before/after pixel check for inspector edits, mirroring the chat's
-     render-truth honesty. canvasSig() hashes a scoped region of the LIVE canvas (the
-     one the user sees). applyInspectorPatch() snapshots that hash, applies the patch,
-     and — after the resulting draw commits — re-hashes: if the pixels the control
-     CLAIMS to drive did not change, it surfaces an honest inline note in that panel
-     AND logs a render-truth event to the capture layer (gold for the learning pass).
-     No renderScene fork: it reads the same canvasRef the app paints, one tick later.
-     `region` (0..1 fractions | null=whole) scopes the hash to what the control drives. */
-  const canvasSig = (region) => {
-    try {
-      const c = canvasRef.current; if (!c) return null;
-      const cw = c.width, ch = c.height; if (!cw || !ch) return null;
-      const ctx = c.getContext("2d", { willReadFrequently: true });
-      const rx = region ? Math.max(0, Math.floor(region.x * cw)) : 0;
-      const ry = region ? Math.max(0, Math.floor(region.y * ch)) : 0;
-      const rw = region ? Math.max(1, Math.floor(region.w * cw)) : cw;
-      const rh = region ? Math.max(1, Math.floor(region.h * ch)) : ch;
-      const d = ctx.getImageData(rx, ry, Math.min(rw, cw - rx), Math.min(rh, ch - ry)).data;
-      // FNV-1a hash, SUBSAMPLED (every 17th pixel) so the scan stays cheap on a
-      // full-res canvas while still catching a solid-field colour change.
-      let hsh = 0x811c9dc5;
-      for (let i = 0; i < d.length; i += 4 * 17) {
-        hsh ^= d[i]; hsh = Math.imul(hsh, 0x01000193);
-        hsh ^= d[i + 1]; hsh = Math.imul(hsh, 0x01000193);
-        hsh ^= d[i + 2]; hsh = Math.imul(hsh, 0x01000193);
-      }
-      return hsh >>> 0;
-    } catch { return null; }
-  };
-  // Apply an inspector patch WITH a render-truth check. `controlId` keys the note;
-  // `region` scopes the pixel check; `deadNote` is the honest message shown when the
-  // control produced no visible change. The AFTER hash is read on the next two frames
-  // (the draw effect commits after React flushes) and only flags dead if BOTH the
-  // patch applied nothing meaningful AND the pixels didn't move.
-  const applyInspectorPatch = (patch, { controlId, region = null, deadNote } = {}) => {
-    const before = canvasSig(region);
-    const applied = applyPatch(patch, { source: "ui" });
-    const clearNote = () => setInspectorNotes(prev => { if (!(controlId in prev)) return prev; const n = { ...prev }; delete n[controlId]; return n; });
-    if (!deadNote) { clearNote(); return applied; }
-    // Defer to after the commit + draw. Two rAFs: one for React to flush state, one
-    // for the draw effect + paint. Compare the same scoped region.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const after = canvasSig(region);
-      const changed = before == null || after == null ? true : before !== after;
-      if (changed) { clearNote(); return; }
-      setInspectorNotes(prev => ({ ...prev, [controlId]: deadNote }));
-      try {
-        logFeedbackClient({
-          turn_id: newTurnId(), session_id: getCurrentSessionId() || undefined,
-          kind: "inspector-render-truth", control: controlId,
-          patch_keys: Object.keys(patch), archetypeId, dimensionId,
-          verdict: { honest: false, note: deadNote },
-        });
-      } catch { /* never surface */ }
-    }));
-    return applied;
-  };
-
-  // Restore the most recent pre-patch snapshot (LIFO). Undo chips in the editor
-  // chat are only valid in this order — older chips are disabled once a newer
-  // change lands. (WP-W0) Undoing stashes the CURRENT state on the redo stack;
-  // restructured out of the setState updater (side effects in an updater
-  // double-fire under StrictMode) — closure state is fresh per render.
-  const undoLastAiChange = () => {
-    if (!aiUndoStack.length) return;
-    const [snap, ...rest] = aiUndoStack;
-    setRedoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
-    restoreSnapshot(snap);
-    setAiUndoStack(rest);
-  };
-  // (WP-W0) Redo — the inverse walk. Pushes the current state back onto the
-  // undo stack WITHOUT clearing redo (only new changes clear it).
-  const redoLastChange = () => {
-    if (!redoStack.length) return;
-    const [snap, ...rest] = redoStack;
-    setAiUndoStack(prev => [snapshotApplyableState(), ...prev].slice(0, AI_UNDO_DEPTH));
-    restoreSnapshot(snap);
-    setRedoStack(rest);
-  };
+  const {
+    restoreSnapshot,
+    undo:undoLastAiChange,
+    redo:redoLastChange,
+  }=useDesignHistoryActions({
+    undoStack:aiUndoStack,redoStack,setUndoStack:setAiUndoStack,setRedoStack,
+    captureSnapshot:snapshotApplyableState,executeWorkflowGroups,depth:AI_UNDO_DEPTH,
+  });
   useEditorGlobalEffects({
     canvasShellRef,
     canvasRef,
@@ -9590,29 +8495,6 @@ function useDesignPatchPipeline(workspace) {
     undo: undoLastAiChange,
     redo: redoLastChange,
   });
-  const restoreSnapshot = (s) => {
-    if (!s) return;
-    setPostType(s.postType);
-    setArchetypeId("archetypeId" in s ? s.archetypeId : null);
-    setArchVariant(Number.isInteger(s.archVariant) ? s.archVariant : 0);
-    setDimensionId(s.dimensionId);
-    const restoredDocument = s.designDocument
-      ? migrateDesignDocument(s.designDocument)
-      : migrateDesignDocument(s); // compatibility for pre-V1 undo entries
-    dispatchDesignCommand({ type:"document/replace", document:restoredDocument });
-    setSelOverlay(null);
-    setMarkTab(s.markTab || ((restoredDocument.logo.assetId || "p3-ivory").startsWith("s") ? "secondary" : "primary"));
-    // Decoded image objects stay transient; restore them from the canonical source
-    // without touching the saved crop/format transforms.
-    const restoredSource = restoredDocument.media.source;
-    if (restoredSource) imgFrom(restoredSource).then(img => setImageObj(img));
-    else setImageObj(null);
-    // (item 2) Restore the user's contrast pins with the snapshot so undo/redo and
-    // session-restore carry which globals the user explicitly owned.
-    setPinnedProps("pinnedProps" in s ? (s.pinnedProps || {}) : {});
-    setPhotoSel(false);
-  };
-
   const startNewPost = useNewPostAction({
     snapshotApplyableState,
     restoreSnapshot,
@@ -9637,7 +8519,7 @@ function useDesignPatchPipeline(workspace) {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
     applyPatchRef, buildMaterialized, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
-    setGenBrief, snapshotApplyableState, startNewPost,
+    setGenBrief, snapshotApplyableState, startNewPost, executeWorkflowGroups,
     undoLastAiChange
   };
 }
@@ -9654,8 +8536,9 @@ function InspectorWorkspace({ workspace }) {
     overlayLayers, overlays, patchPhoto, photoFrame, photoSel, pillText, placeLogo, postType,
     renderResultRef, resetLayer, resetTextLayout, resolvedLogo, selOverlay,
     selectElement, selectedLogoId, selectedLogoVariant, setFontSize,
-    setFontSizes, setLayerMode, setLayerStyle, setLayoutShapeFlash, setMarkTab,
-    setMediaKind, setPhotoSel, setSelOverlay, setShowLibPicker, setTextSelected,
+    setLayerMode, setLayerStyle, setLayoutShapeFlash, setMarkTab,
+    setMediaHostShape,
+    setPhotoSel, setSelOverlay, setShowLibPicker, setTextSelected,
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
     updateLayerT, updateTextLayout, videoObj
@@ -9768,7 +8651,7 @@ function InspectorWorkspace({ workspace }) {
     const seen=new Map();
     const layers=overlayLayers.map(layer=>{
       const asset=overlays.find(item=>item.id===layer.assetId);seen.set(layer.assetId,(seen.get(layer.assetId)||0)+1);
-      return {id:layer.uid,name:asset?.name,src:asset?.dataUrl||asset?.src,label:(asset?.name||"Shape")+(counts.get(layer.assetId)>1?" · "+seen.get(layer.assetId):""),modeLabel:SHAPE_MODE_LABEL[layer.mode||"frame"]||layer.mode};
+      return {id:layer.uid,name:asset?.name,src:asset?.dataUrl||asset?.src,label:(asset?.name||"Shape")+(counts.get(layer.assetId)>1?" · "+seen.get(layer.assetId):""),modeLabel:SHAPE_MODE_LABEL[layer.mode||"frame"]||layer.mode,roleLabel:shapeRoleLabel(layer),group:shapeLayerGroup(layer),isMediaHost:designDocument.composition.mediaHostShapeId===layer.uid};
     });
     return <ShapeInspectorPanel hasLayoutShapes={hasLayoutShapes} layoutSectionRef={layoutShapeSecRef} layoutFlash={layoutShapeFlash}
       layoutPicker={renderShapeVariantPanel()}
@@ -9786,7 +8669,7 @@ function InspectorWorkspace({ workspace }) {
   // PHOTO (THEME 1 minimal-by-default) — curated primary = the two ways to
   // change the photo (Library / Upload). The sample strip, Midjourney, the
   // image/video toggle and the quick transforms fold under "More options".
-  const renderPhotoPanel = () => <MediaInspectorPanel kind={mediaKind} onKind={setMediaKind}
+  const renderPhotoPanel = () => <MediaInspectorPanel kind={mediaKind} onKind={kind=>applyPatch({mediaKind:kind},{source:"ui"})}
     onLibrary={()=>setShowLibPicker(true)} onUpload={()=>imgRef.current?.click()} hasMedia={!!mediaObj}
     moreOpen={!!foldOpen.photo} onToggleMore={()=>toggleFold("photo")} samples={SAMPLE_IMAGES} currentSource={image}
     onSource={source=>applyPatch({imageSrc:source},{source:"ui"})} onPhotoPatch={patchPhoto}
@@ -9862,7 +8745,7 @@ function InspectorWorkspace({ workspace }) {
             {/* Font size per text category (full XS-XL granularity) */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
               <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
-              <button onClick={()=>setFontSizes(freshFontSizes())} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
+              <button onClick={()=>applyPatch({fontSizes:freshFontSizes()},{source:"ui"})} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
             </div>
             {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
               const meta=FONT_ROLES.find(r=>r.id===role);
@@ -9952,6 +8835,8 @@ function InspectorWorkspace({ workspace }) {
     const asset=layer?overlays.find(item=>item.id===layer.assetId):null;
     if(!layer||!transform)return null;
     return <OverlayInspectorPanel layer={layer} transform={transform} isAccessory={asset?.category==="accessories"}
+      roleLabel={shapeRoleLabel(layer)} isMediaHost={designDocument.composition.mediaHostShapeId===layer.uid}
+      canUseAsMediaHost={asset?.category!=="accessories"} onUseAsMediaHost={()=>setMediaHostShape(layer.uid)}
       accessoryColors={ACCESSORY_COLOR_OPTIONS} accessorySizes={ACCESSORY_SIZE_PRESETS}
       isMaster={dimensionId===MASTER_DIM} isOverride={isOverride} dimensionLabel={dim.label}
       onMode={mode=>setLayerMode(selOverlay,mode)} onStyle={style=>setLayerStyle(selOverlay,style)}

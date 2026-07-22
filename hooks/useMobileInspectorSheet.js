@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { resolveMobileInspectorViewport } from "@/lib/mobile-inspector-geometry.mjs";
 
 // ── (Half-sheet ruling 2026-07-15, ux-architecture §2.11) Mobile sheet
 // orchestration: everything the LIVE canvas band above the half-sheet needs.
@@ -81,26 +82,17 @@ export function useMobileInspectorSheet({
       const bandBottom = window.innerHeight - sheetHeight - BAND_MARGIN;
       if (bandBottom - bandTop < 90) return; // no usable band (tall detent on a short phone)
 
-      // Selected element's viewport box (whole canvas when nothing bounded —
-      // background edits want the canvas itself visible).
-      const b = selectedBounds;
-      const elTop = b ? rect.top + (b.y / canvasHeight) * rect.height : rect.top;
-      const elBottom = b ? rect.top + ((b.y + b.h) / canvasHeight) * rect.height : rect.bottom;
-
-      // Undo side: flip away from the element's horizontal center.
-      if (b && canvasWidth) {
-        const cxViewport = rect.left + ((b.x + b.w / 2) / canvasWidth) * rect.width;
-        setUndoSide(cxViewport < window.innerWidth / 2 ? "right" : "left");
-      } else {
-        setUndoSide("left");
-      }
+      const viewport=resolveMobileInspectorViewport({
+        canvasRect:rect,selectedBounds,canvasWidth,canvasHeight,
+        viewportWidth:window.innerWidth,bandTop,bandBottom,
+      });
+      if(!viewport)return;
+      setUndoSide(viewport.undoSide);
 
       // M3: an explicit user scroll within the window wins — do not fight it.
       if (Date.now() - userScrollTsRef.current < USER_SCROLL_SUPPRESS_MS) return;
 
-      let dy = 0;
-      if (elBottom > bandBottom) dy = elBottom - bandBottom; // bring it up
-      if (elTop - dy < bandTop) dy = elTop - bandTop;        // never lose the TOP
+      const dy=viewport.scrollDelta;
       if (Math.abs(dy) > 1) {
         // Smooth when motion is welcome; instant under prefers-reduced-motion.
         const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
