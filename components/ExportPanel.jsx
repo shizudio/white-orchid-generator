@@ -1,7 +1,9 @@
 import { memo } from "react";
 
-function ExportPanel({ sizeLabel, format, onFormat, onDownloadAll, onDownloadOne, formatCount, guardrail, readiness, onAudit, palette, fonts }) {
+function ExportPanel({ sizeLabel, format, onFormat, onDownloadAll, onDownloadOne, onResolveAll, onResolveOne, authorization, formatCount, guardrail, readiness, onAudit, palette, fonts }) {
   const B=palette,F=fonts;
+  const allAllowed=!!authorization?.allAllowed,currentAllowed=!!authorization?.currentAllowed,known=!!authorization?.known;
+  const authorizationStyle=allowed=>({opacity:allowed?1:0.72,cursor:"pointer"});
   return <>
     <div style={{margin:"4px 0 10px"}}>
       <div style={{fontSize:10,fontFamily:F.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.burnham}}>Export</div>
@@ -11,8 +13,8 @@ function ExportPanel({ sizeLabel, format, onFormat, onDownloadAll, onDownloadOne
       <div style={{display:"flex",gap:6,flex:1}}>{[{id:"png",label:"PNG"},{id:"jpeg",label:"JPG"}].map(item=><button key={item.id} aria-pressed={format===item.id} onClick={()=>onFormat(item.id)} style={{flex:1,padding:8,borderRadius:8,border:`1px solid ${format===item.id?B.burnham:B.ash+"33"}`,background:format===item.id?B.burnham:"#fff",color:format===item.id?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:600,letterSpacing:1,cursor:"pointer"}}>{item.label}</button>)}</div>
       {guardrail}
     </div>
-    <button onClick={onDownloadAll} title={`Export all ${formatCount} formats as ${format.toUpperCase()}`} style={{width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",border:"none",borderRadius:40,fontSize:13,fontWeight:600,cursor:"pointer",letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle}}>Download all {formatCount} formats</button>
-    <button className="wo-export-one" onClick={onDownloadOne} title={`Download only this format as ${format.toUpperCase()}`} style={{width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle}}>Just this one</button>
+    <button data-export-allowed={allAllowed} onClick={allAllowed?onDownloadAll:onResolveAll} title={allAllowed?`Export all ${formatCount} formats as ${format.toUpperCase()}`:"Resolve blocking brand and accessibility issues before exporting all formats"} style={{width:"100%",padding:"13px 40px",background:B.tangerine,color:"#fff",border:"none",borderRadius:40,fontSize:13,fontWeight:600,letterSpacing:2,textTransform:"uppercase",fontFamily:F.subtitle,...authorizationStyle(allAllowed)}}>{!known?"Checking formats…":allAllowed?`Download all ${formatCount} formats`:"Resolve blockers to export"}</button>
+    <button className="wo-export-one" data-export-allowed={currentAllowed} onClick={currentAllowed?onDownloadOne:onResolveOne} title={currentAllowed?`Download only this format as ${format.toUpperCase()}`:"Resolve this format’s blocking issues before exporting"} style={{width:"100%",padding:"10px 40px",marginTop:8,background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,letterSpacing:1.5,textTransform:"uppercase",fontFamily:F.subtitle,...authorizationStyle(currentAllowed)}}>{currentAllowed?"Just this one":"Review this format"}</button>
     {readiness}
     <div style={{display:"flex",gap:8,marginTop:14}}><button onClick={onAudit} title="Review this design for on-brand polish" style={{flex:1,padding:"10px 8px",background:"transparent",color:B.burnham,border:`1px solid ${B.burnham}44`,borderRadius:40,fontSize:11,fontWeight:600,cursor:"pointer",letterSpacing:1.2,textTransform:"uppercase",fontFamily:F.subtitle,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span aria-hidden="true">✓</span> AI audit</button></div>
   </>;
