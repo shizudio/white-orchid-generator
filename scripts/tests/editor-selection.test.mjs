@@ -40,6 +40,23 @@ test("text roles have distinct scene identities and share the text inspector", (
   assert.equal(selectionInspectorKey(caption), "text");
 });
 
+test("an added element rides a text selection but routes to its OWN inspector + scene node", () => {
+  // (Slice 3) The canvas gesture + rail chip select an added content.element as a
+  // text selection whose role is the synthetic el:<uid> key. It must NOT collapse
+  // into the shared "text" panel (that would edit the hero); its inspector key is
+  // the el:<uid> role, and its scene id is the renderer node `element:<uid>` so the
+  // mobile half-sheet auto-scroll resolves the right box.
+  const element = selectionForElement("text", null, "el:el_heading_0");
+  assert.deepEqual(element, { type: "text", id: "text", role: "el:el_heading_0" });
+  assert.equal(selectionInspectorKey(element), "el:el_heading_0");
+  assert.equal(selectionSceneId(element), "element:el_heading_0");
+
+  // A fixed archetype text role is unaffected — still the shared text panel.
+  const hero = selectionForElement("text", null, "hero");
+  assert.equal(selectionInspectorKey(hero), "text");
+  assert.equal(selectionSceneId(hero), "text:hero");
+});
+
 test("furniture keys map to a selectable scene element and their own inspector", () => {
   const furniture = selectionForElement("furn_rule_0");
 

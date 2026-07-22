@@ -352,6 +352,31 @@ test("element text/class/priority commands each change exactly one element in on
   assert.deepEqual(priorityResult.changedPaths, ["content.elements.el_1.priority"]);
 });
 
+test("set-element-size stamps a sanctioned S/M/L step on the element master (one undo)", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_1", class:"heading", text:"Hero" },
+  }).document;
+
+  const large = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_SIZE, uid:"el_1", value:"L",
+  });
+  assert.equal(large.document.content.elements[0].master.sizeStep, "L");
+  assert.deepEqual(large.changedPaths, ["content.elements.el_1.master.sizeStep"]);
+
+  // Re-setting the same step, or a non-sanctioned value, changes nothing (M2).
+  assert.deepEqual(applyDesignCommand(large.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_SIZE, uid:"el_1", value:"L",
+  }).changedPaths, []);
+  assert.deepEqual(applyDesignCommand(large.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_SIZE, uid:"el_1", value:"XL",
+  }).changedPaths, []);
+  // The default (no explicit step) reads as "M" — setting "M" on the default is a no-op.
+  assert.deepEqual(applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_SIZE, uid:"el_1", value:"M",
+  }).changedPaths, []);
+});
+
 test("set-element-class rejects a non-sanctioned class and a self no-op", () => {
   const seeded = applyDesignCommand(createDesignDocumentV1(), {
     type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
