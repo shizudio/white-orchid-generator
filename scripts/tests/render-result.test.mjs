@@ -25,6 +25,32 @@ test("render result exposes stable scene identities for every measured element",
   assert.deepEqual(result.measurements.subjectBox,{x:320,y:180,w:420,h:500});
 });
 
+test("added content elements register stable per-uid scene identities at z-band 40", () => {
+  const result=createRenderResult({
+    dimensionId:"ig_square",width:1080,height:1080,
+    roleBounds:{ hero:{x:80,y:100,w:500,h:200} },
+    contentElements:[
+      { uid:"el_a", class:"body", placed:true, box:{x:80,y:360,w:400,h:120} },
+      { uid:"el_b", class:"cta", placed:true, box:{x:80,y:520,w:220,h:60} },
+      { uid:"el_c", class:"caption", placed:false },   // unplaceable → non-interactive, no box
+    ],
+  });
+  const el=result.sceneElements.find(s=>s.id==="element:el_a");
+  assert.ok(el, "placed element registers a scene node");
+  assert.equal(el.type,"text");
+  assert.equal(el.z,40);
+  assert.equal(el.uid,"el_a");
+  assert.equal(el.elementClass,"body");
+  assert.equal(el.interactive,true);
+  // The cta element is present and interactive.
+  assert.ok(result.sceneElements.some(s=>s.id==="element:el_b"&&s.interactive));
+  // The unplaceable element registers NO scene node (complete-or-absent; no phantom hit box).
+  assert.ok(!result.sceneElements.some(s=>s.id==="element:el_c"));
+  // Hit-testing the placed body box returns exactly that element.
+  const hit=hitTestScene(result.sceneElements,120,400,{types:["text"]});
+  assert.equal(hit.id,"element:el_a");
+});
+
 test("a solver-placed date is a first-class draggable text role, not the textBounds hero fallback", () => {
   // (ISSUE 2 / element-placement-spec §2) On the legacy layouts the date is now placed
   // through the solver and published in roleBounds alongside the hero. Once roleBounds is

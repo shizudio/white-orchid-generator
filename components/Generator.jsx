@@ -39,7 +39,7 @@ import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs
 import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
-import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors } from "@/lib/element-placement-solver.mjs";
+import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { contrastAtExtremes, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
@@ -2557,7 +2557,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     const layoutCapability = resolveRenderLayout(model,dimId);
     const live = opts.live !== false;
     const {
-      content:{ headline,subtext,attribution,dateText,microLabel,pillText,authorship:copyAuthors },
+      content:{ headline,subtext,attribution,dateText,microLabel,pillText,authorship:copyAuthors,elements:documentElements },
       composition:{ archetypeId,archetypeVariant:archVariant },
       palette:{ background:bgColor,field:fieldColorOverride,text:textColorId,backdrop:backdropMode,backgroundOpacity:bgAlpha,pins:pinnedProps },
       typography:{ heroRegister,fontSizes,masterLayouts:typeLayouts,formatLayouts:typeLayoutsByDim,roleOffsetsByFormat:roleOffsetsByDim },
@@ -2945,6 +2945,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     const topLayers=overlayLayers.filter(l=>{const m=l.mode||"frame";return (m==="overlay"||m==="outline"||m==="lineart")&&overlayImgs.current[l.assetId];});
     const hasFrame=frameLayers.length>0;
     const finishRender=()=>{
+      // (Slice 2b) Paint the added content.elements last (z-band 40), then carry their
+      // per-uid scene records into the render result. Element-free docs return [] here
+      // before any paint — the guard-battery invariant (pixel-identity) holds by construction.
+      const paintedContentElements=paintContentElements();
       const resolvedLogoBox=renderTruth.logoBox||auditLogo.box;
       const shapeImageMap=new Map();
       const renderedShapes=(_isOverrideRender?[]:overlayLayers).map((layer,index)=>{
@@ -3070,6 +3074,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         mediaLogo,
         surface,
         decoration,
+        contentElements:paintedContentElements,
       });
     };
     // ── MATERIALIZED VISUAL STATE (Commit 2 — single render path) ──
@@ -3449,6 +3454,95 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       _paintBand(box,bandColor,0.92,false);    // (§6a) rejected only on geometric conflict
     };
     const setTextBounds=used=>{renderTruth.textBounds={x:bx,y:by-h*0.025,w:bw,h:Math.min(maxTextH,Math.max(used+h*0.05,h*0.12))};};
+    /* ── ADDED TEXT ELEMENTS PAINT PASS (docs/text-elements-spec.md §3; Slice 2b) ──────
+       Paints the dynamic content.elements[] on top of the archetype composition, through
+       the pure element-placement solver + the ratified class configs (resolveElementClassConfig).
+       THE GATE: an element-free document short-circuits before any paint, so the render
+       fingerprint / born-clean / arch-stress / legacy-dup guards stay pixel-identical BY
+       CONSTRUCTION (their fixtures carry no content.elements). MIGRATED (sourceRole) elements
+       are NEVER painted here — the archetype slot remains their painter (no double-paint;
+       __woLegacyDupGuard stays 30/30). Guard/calibration/override renders never enter.
+       Complete-or-absent: an element the solver can't place cleanly in this format is not
+       painted and is returned placed:false so readiness can name it (the dead-roles pattern).
+       Called from finishRender (the single result builder) so it covers editorial + legacy
+       paths uniformly; z-order is content-band 40 (painted last within the render). */
+    const paintContentElements=()=>{
+      if(_isOverrideRender) return [];                               // guard/calibration output stays pristine
+      const _els=Array.isArray(documentElements)?documentElements:[];
+      const added=_els.filter(el=>el && !el.sourceRole && typeof el.text==="string" && el.text.trim());
+      if(!added.length) return [];                                   // THE GATE — no elements → no paint, no scene change
+      // Higher priority claims space first; ties keep document order (stable sort).
+      const ordered=added.map((el,i)=>({el,i})).sort((a,b)=>((b.el.priority||0)-(a.el.priority||0))||(a.i-b.i)).map(o=>o.el);
+      const _ps=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
+      const _sm=mergeSafeMargins(sm,_ps);
+      const safeBox={x0:_sm.l*w,y0:_sm.t*h,x1:(1-_sm.r)*w,y1:(1-_sm.b)*h,tolX:0,tolY:0};
+      const noBand=_activeShapeBoxes.length>0;                       // (§6a) active shape → band rung disabled
+      const rb=renderTruth.roleBounds||{};
+      const heroBox=rb.hero||renderTruth.textBounds||{x:_sm.l*w,y:_sm.t*h,w:(1-_sm.l-_sm.r)*w,h:0.10*h};
+      const supBox=rb.support||null;
+      const usedH=heroBox.h||0;
+      const supBottom=supBox?supBox.y+supBox.h:0;
+      const align=(mat&&mat.roles&&mat.roles.hero&&mat.roles.hero.align)||"left";
+      const colW=Math.max(120,(bw||((1-_sm.l-_sm.r)*w)));
+      const baseInk=zoneTc||B.burnham;
+      const inkPoles=[B.burnham,B.whiteSmoke];
+      const CLASS_BASE_PX={ heading:54*S, subheading:38*S, body:30*S, caption:26*S, cta:0.024*h };
+      const CLASS_FLOOR_PX={ heading:34*S, subheading:26*S, body:22*S, caption:18*S, cta:0.016*h };
+      // Obstacle set: every drawn role box + logo + photo window + active shapes; each
+      // newly-placed element joins it so added elements de-collide against one another (reflow).
+      const baseObstacles=[rb.hero,rb.support,rb.eyebrow,rb.date,rb.pill,renderTruth.logoBox,renderTruth.photoBox,..._activeShapeBoxes]
+        .filter(Boolean).map(b=>({x:b.x,y:b.y,w:b.w,h:b.h}));
+      const placedBoxes=[];
+      const out=[];
+      for(const el of ordered){
+        const txt=el.text.trim();
+        const isCta=el.class==="cta";
+        const step=(el.pins&&el.pins.sizeStep)||(el.master&&el.master.sizeStep)||"M";
+        const px=Math.max(CLASS_FLOOR_PX[el.class]||16, elementStepPx(CLASS_BASE_PX[el.class]||30*S, step));
+        const cfg=resolveElementClassConfig(el.class,{ preferredPx:px, F, opts:{ noBand } });
+        if(!cfg){ out.push({uid:el.uid,class:el.class,placed:false,reason:"unknown-class"}); continue; }
+        const geom={ heroBox, usedH, gap:Math.max(0.014*h,px*0.4), dGap:Math.max(0.014*h,px*0.4),
+          ebGap:Math.max(0.012*h,px*0.5), supBelow:!!supBox, supBox:!!supBox, supBottom, safe:_sm, w, h, align };
+        const cands=buildElementAnchors(el.class, geom);
+        // measure adapter — CTA measures its own pill box; text classes wrap at the column width.
+        const measure=isCta
+          ? (mpx,face)=>{ const bs=mpx,padX=bs*0.9,padY=bs*0.55; ctx.font=`600 ${bs}px ${face}`; ctx.letterSpacing=`${0.10*bs}px`; const t=txt.toUpperCase(); const tw=ctx.measureText(t).width+0.10*bs*Math.max(0,t.length-1); ctx.letterSpacing="0px"; return { w:tw+padX*2, h:bs+padY*2 }; }
+          : (mpx,face,weight)=>{ ctx.font=`${weight} ${mpx}px ${face}`; const lines=textLines(ctx,txt,colW); const lw=Math.min(colW,Math.max(0,...lines.map(l=>ctx.measureText(l).width))); return { w:lw, h:mpx*1.28*Math.max(1,lines.length) }; };
+        const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
+        const sol=placeTextElement({
+          cfg, candidates:cands, hardObstacles:[...baseObstacles,...placedBoxes], softObstacles:[],
+          safe:safeBox, focalBox:null, measure, surface, baseInk, inkPoles,
+        });
+        if(!sol){ out.push({uid:el.uid,class:el.class,placed:false,reason:"no-clean-candidate"}); continue; }
+        // Owner drag pin (roleOff keyed by uid) — the same per-format offset infra the roles use.
+        const _off=roleOff(`el:${el.uid}`);
+        const ex=sol.x+_off.dx, ey=sol.y+_off.dy;
+        beginText();
+        if(isCta){
+          const bs=sol.px, padX=bs*0.9, padY=bs*0.55, pillW=sol.w, pillH=sol.h, rad=pillH*0.5;
+          const fill=ARCHETYPE_COLORS.softTangerine||B.tangerine;
+          ctx.globalAlpha=1; ctx.fillStyle=fill;
+          ctx.beginPath();
+          ctx.moveTo(ex+rad,ey); ctx.arcTo(ex+pillW,ey,ex+pillW,ey+pillH,rad);
+          ctx.arcTo(ex+pillW,ey+pillH,ex,ey+pillH,rad); ctx.arcTo(ex,ey+pillH,ex,ey,rad); ctx.arcTo(ex,ey,ex+pillW,ey,rad);
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle=hexLuminance(fill)>0.5?B.burnham:B.whiteSmoke;
+          ctx.font=`600 ${bs}px ${F.subtitle}`; ctx.letterSpacing=`${0.10*bs}px`;
+          ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+          ctx.fillText(txt.toUpperCase(), ex+padX, ey+padY+bs*0.82); ctx.letterSpacing="0px";
+        }else{
+          if(sol.band){ const bc=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:ex,y:ey,w:sol.w,h:sol.h},bc,0.92,false); }
+          ctx.fillStyle=sol.ink; ctx.font=`${sol.weight} ${sol.px}px ${sol.face}`;
+          const lines=textLines(ctx,txt,colW);
+          drawTextLines(ctx,lines,ex,ey+sol.px,sol.w,sol.px*1.28,align);
+        }
+        endText();
+        const box={x:ex,y:ey,w:sol.w,h:sol.h};
+        placedBoxes.push(box);
+        out.push({uid:el.uid,class:el.class,placed:true,box,px:sol.px,face:sol.face,ink:sol.ink,band:!!sol.band});
+      }
+      return out;
+    };
     // Frame pre-pass — LEGACY (non-editorial) designs only. Editorial designs render
     // every frame-kind shape (generated + user-added) through the ONE fitted-window
     // painter inside the editorial branch (§2.9.2 unification) — this pre-pass firing
