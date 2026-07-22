@@ -40,6 +40,7 @@ import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
 import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
+import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
 import { contrastAtExtremes, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
@@ -179,6 +180,20 @@ const ACCESSORY_SIZE_PRESETS = [
   {id:"l",label:"L",scale:0.32},
   {id:"xl",label:"XL",scale:0.48},
 ];
+
+// (docs/text-elements-spec.md §3; Slice 3) The five brand-governed element classes as
+// the "+ Add text" picker offers them: PLAIN labels a preschool teacher reads at a
+// glance ("Button", never "CTA"), each with a short class-appropriate starter so the
+// placement solver seats it easily. The class enum itself is owned by lib/text-elements.
+const ELEMENT_ADD_CHOICES = [
+  { cls:"heading",    label:"Heading",    starter:"New heading" },
+  { cls:"subheading", label:"Subheading", starter:"New subheading" },
+  { cls:"body",       label:"Body",       starter:"New text" },
+  { cls:"caption",    label:"Caption",    starter:"New caption" },
+  { cls:"cta",        label:"Button",     starter:"Learn more" },
+];
+const ELEMENT_CLASS_LABELS = { heading:"Heading", subheading:"Subheading", body:"Body", caption:"Caption", cta:"Button" };
+const ELEMENT_SIZE_UI_STEPS = [{ id:"S", label:"S" }, { id:"M", label:"M" }, { id:"L", label:"L" }];
 
 function applyBrandKit(kit) {
   if (!kit) return;
@@ -5600,6 +5615,11 @@ export default function App() {
   const photoWindowRef = useRef(null);
   const deadRolesRef = useRef([]);
   const [deadRoles, setDeadRoles] = useState([]);
+  // (Slice 3) The added-element placement ledger as REACTIVE state (published by
+  // useLiveCanvasRender after each draw): [{uid,class,placed,reason,box}]. Drives the
+  // element inspector's honest "placed / no room in this format" note and the rail's
+  // ∅ tell — a ref alone would leave the panel stale on the render right after an add.
+  const [contentLedger, setContentLedger] = useState([]);
   const fontMetaRef = useRef({});   // last live-render resolved font px per role (Task 4 readable-floor verification)
   // (Item C) DRAW-COMMIT SIGNAL — a monotonic counter bumped at the top of every LIVE
   // renderScene. The chat honesty corrector waits for this to advance past the value it
@@ -5659,6 +5679,8 @@ export default function App() {
     setShapeChromeVisible:visible => { if (!visible) dispatchEditorSelection({ type:"clear-if", elementType:"shape" }); },
   };
   const [markTab, setMarkTab] = useState("primary");   // primary | secondary | overlays
+  const [addTextOpen, setAddTextOpen] = useState(false);   // (Slice 3) "+ Add text" class-picker disclosure
+  const [changeTypeOpen, setChangeTypeOpen] = useState(false);   // (Slice 3) element "change type" disclosure
 
   // Overlay assets: library + placed layers
   const [overlays, setOverlays] = useState([]);            // [{id,name,dataUrl,kind,ratio}]
@@ -6119,7 +6141,7 @@ export default function App() {
      Returns the list of change keys actually applied. */
   const {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
-    applyPatchRef, buildMaterialized, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
+    applyPatchRef, buildMaterialized, dispatchElementCommand, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
     setGenBrief, snapshotApplyableState, startNewPost,
     undoLastAiChange,
@@ -6496,6 +6518,7 @@ export default function App() {
     setDropHint,
     setLogoOverlapHint,
     setDeadRoles,
+    setContentLedger,
     devHooks: DEV_HOOKS,
   });
 
@@ -6915,7 +6938,11 @@ export default function App() {
     setTextSelected:selectionCommands.setTextSelected,
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
-    updateLayerT, updateTextLayout
+    updateLayerT, updateTextLayout,
+    // (Slice 3) added-element authoring: doc + reactive placement ledger + the typed
+    // element-command dispatcher, plus the picker/change-type disclosure state.
+    designDocument, contentLedger, dispatchElementCommand,
+    addTextOpen, setAddTextOpen, changeTypeOpen, setChangeTypeOpen,
   }} />;
 
   if(!ready) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:B.whiteSmoke,fontFamily:F.body,color:B.burnham}}>Loading...</div>;
@@ -8250,6 +8277,20 @@ function useDesignPatchPipeline(workspace) {
     captureSnapshot:snapshotApplyableState,setUndoStack:setAiUndoStack,setRedoStack,
     depth:AI_UNDO_DEPTH,debounceMs:600,
   });
+  // (Slice 3) Route a typed content/* ELEMENT command through the SAME burst-aware undo
+  // path every UI edit uses (applyPatch source:"ui"): the first edit of a burst captures
+  // ONE pre-edit snapshot; rapid follow-ups inside the 600ms window fold into it (typing a
+  // heading = one undo, not one-per-keystroke); an isolated discrete action (S/M/L, change
+  // type, priority, add, remove) is its own single undo. A command that changed nothing
+  // never notes an edit — no dead undo entry, no cleared redo branch (M2). Added-element
+  // commands have no flat patch-schema field yet (Slice 4's AI-grammar + mirror work), so
+  // they dispatch directly rather than through prepareDesignPatch — undo parity is here.
+  const dispatchElementCommand = (command) => {
+    const preEditSnapshot = manualHarmRef.current.pending ? null : snapshotApplyableState();
+    const result = dispatchDesignCommand(command) || {};
+    if ((result.changedPaths || []).length) noteManualEdit(["element-edit"], preEditSnapshot);
+    return result;
+  };
 
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
   // unification). This is a ONE-SHOT write of concrete per-element values into the
@@ -8497,7 +8538,7 @@ function useDesignPatchPipeline(workspace) {
   });
   return {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
-    applyPatchRef, buildMaterialized, genBrief, harmonizeRef, manualHarmRef,
+    applyPatchRef, buildMaterialized, dispatchElementCommand, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
     setGenBrief, snapshotApplyableState, startNewPost, executeWorkflowGroups,
     undoLastAiChange
@@ -8521,8 +8562,35 @@ function InspectorWorkspace({ workspace }) {
     setPhotoSel, setSelOverlay, setShowLibPicker, setTextSelected,
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
-    updateLayerT, updateTextLayout, videoObj
+    updateLayerT, updateTextLayout, videoObj,
+    designDocument, contentLedger, dispatchElementCommand,
+    addTextOpen, setAddTextOpen, changeTypeOpen, setChangeTypeOpen,
   } = workspace;
+  // (Slice 3) The ADDED elements (non-migrated content.elements) as an inspector-facing
+  // model: doc truth (uid/class/text/priority/size) joined to the reactive placement
+  // ledger (placed / why-not). Migrated legacy roles (sourceRole) paint via their
+  // archetype slot, never as dynamic elements — so they never appear here.
+  const addedElementModels = (designDocument.content.elements || [])
+    .filter(el => el && !el.sourceRole)
+    .map(el => {
+      const led = (contentLedger || []).find(entry => entry.uid === el.uid) || null;
+      return {
+        uid:el.uid, class:el.class, text:el.text || "", priority:el.priority,
+        sizeStep:(el.pins && el.pins.sizeStep) || (el.master && el.master.sizeStep) || "M",
+        placed: led ? led.placed : null,
+        reason: led ? led.reason : null,
+      };
+    });
+  // Add a new element of `cls` with a short brand starter, then select it so its
+  // inspector opens immediately (an honest "no room in this format" note appears there
+  // reactively if the solver could not seat it — never a silent no-op, M2).
+  const addTextElement = (cls, starter) => {
+    const result = dispatchElementCommand({ type:"content/add-element", element:{ class:cls, text:starter } });
+    const path = (result.changedPaths || []).find(p => p.startsWith("content.elements."));
+    const uid = path ? path.split(".")[2] : null;
+    if (uid) { selectElement("text", null, `el:${uid}`); setAddTextOpen(false); setChangeTypeOpen(false); }
+    return uid;
+  };
   const MoreFold = ({ id, children, label = "More options" }) => {
     const open = !!foldOpen[id];
     return (
@@ -8765,6 +8833,92 @@ function InspectorWorkspace({ workspace }) {
           </>
         )}
       </MoreFold>
+      {/* ── (Slice 3) + ADD TEXT — the five-class picker (text-elements-spec §3) ──
+          Plain labels a preschool teacher reads at a glance ("Button", not "CTA").
+          Choosing a class adds it with a short starter, then selects it so its own
+          inspector opens immediately. Elements the solver can't seat surface an honest
+          note in that inspector (never a silent no-op). */}
+      <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
+        <button type="button" onClick={()=>setAddTextOpen(open=>!open)} aria-expanded={addTextOpen}
+          style={{display:"flex",alignItems:"center",gap:8,width:"100%",minHeight:44,padding:"10px 12px",borderRadius:10,border:`1.5px dashed ${B.burnham}55`,background:addTextOpen?`${B.burnham}0c`:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:0.3,cursor:"pointer"}}>
+          <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>＋</span> Add text
+        </button>
+        {addTextOpen&&<div role="group" aria-label="Choose a text type to add" style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
+          {ELEMENT_ADD_CHOICES.map(choice=>(
+            <button key={choice.cls} type="button" onClick={()=>addTextElement(choice.cls,choice.starter)}
+              style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",minHeight:44,padding:"10px 13px",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"left"}}>
+              <span>{choice.label}</span>
+              <span aria-hidden="true" style={{fontSize:11,color:B.ash}}>＋</span>
+            </button>
+          ))}
+        </div>}
+      </div>
+    </>;
+  };
+
+  /* ── (Slice 3) ELEMENT INSPECTOR — one added content.element ────────────────────
+     A real panel for a user-added text element (docs/text-elements-spec.md §2): its
+     text (16px+ so mobile never zooms), the sanctioned S/M/L size step, its class
+     (read-only, with a governed "change type" affordance that lists ONLY canTransition
+     targets), a priority up/down, and an honest "no room in this format" note when the
+     solver could not seat it. Every mutation is a typed command → one action, one undo.
+     Remove rides the standard header remove pattern (useInspectorModel). */
+  const renderElementInspector = (uid) => {
+    const el = (designDocument.content.elements || []).find(item => item.uid === uid);
+    if (!el) return null;
+    const model = addedElementModels.find(m => m.uid === uid) || null;
+    const sizeStep = (el.pins && el.pins.sizeStep) || (el.master && el.master.sizeStep) || "M";
+    const classLabel = ELEMENT_CLASS_LABELS[el.class] || "Text";
+    const targets = (ALLOWED_CLASS_TRANSITIONS[el.class] || []).filter(t => canTransitionClass(el.class, t));
+    const unplaced = model && model.placed === false && (el.text || "").trim();
+    return <>
+      {/* Text — 16px min font keeps iOS from zooming on focus (mobile input rule). */}
+      <label style={{display:"block",fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Text</label>
+      <textarea className="wo-mfield" aria-label={`${classLabel} text`} value={el.text||""} maxLength={el.class==="cta"?30:220}
+        onChange={event=>dispatchElementCommand({ type:"content/set-element-text", uid, value:event.target.value })}
+        style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:16,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:F.body,height:el.class==="cta"?46:80,resize:"vertical"}}/>
+      {unplaced&&<div role="note" style={{margin:"9px 0 2px",padding:"9px 11px",borderRadius:9,border:`1px solid ${B.tangerine}55`,background:`${B.tangerine}10`,fontSize:11,fontFamily:F.body,color:B.burnham,lineHeight:1.5}}>
+        <strong style={{fontFamily:F.subtitle,letterSpacing:0.3}}>No room in this format.</strong> There isn't a clean spot for this {classLabel.toLowerCase()} here — try a shorter line, a smaller size, or remove another element. It's safely kept for your other formats.
+      </div>}
+
+      {/* Size — the ONLY size freedom is the sanctioned S/M/L step within the register. */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14,marginBottom:2}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Size</span>
+        <div style={{display:"flex",gap:5,flex:1}}>
+          {ELEMENT_SIZE_UI_STEPS.map(step=>{const on=sizeStep===step.id;return (
+            <button key={step.id} className="wo-ins-pill" aria-pressed={on} title={`Size ${step.label}`}
+              onClick={()=>dispatchElementCommand({ type:"content/set-element-size", uid, value:step.id })}
+              style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+          );})}
+        </div>
+      </div>
+
+      {/* Type — read-only label + governed change-type (allowed transitions only). */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Type</span>
+        <span style={{fontSize:12,fontFamily:F.subtitle,fontWeight:700,color:B.jet}}>{classLabel}</span>
+        {targets.length>0&&<button type="button" onClick={()=>setChangeTypeOpen(open=>!open)} aria-expanded={changeTypeOpen}
+          style={{marginLeft:"auto",padding:"6px 11px",borderRadius:999,border:`1px solid ${B.ash}44`,background:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.4,cursor:"pointer"}}>Change type</button>}
+      </div>
+      {changeTypeOpen&&targets.length>0&&<div role="group" aria-label="Change text type" style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
+        {targets.map(target=>(
+          <button key={target} type="button" onClick={()=>{dispatchElementCommand({ type:"content/set-element-class", uid, value:target });setChangeTypeOpen(false);}}
+            style={{padding:"7px 12px",minHeight:36,borderRadius:999,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{ELEMENT_CLASS_LABELS[target]||target}</button>
+        ))}
+      </div>}
+
+      {/* Priority — under crowding, higher priority keeps its place; lower drops first. */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Priority</span>
+        <span style={{fontSize:11,fontFamily:F.body,color:B.ash,flex:"1 1 auto"}}>Keeps its place when space is tight</span>
+        <button type="button" aria-label="Lower priority" title="Lower priority"
+          onClick={()=>dispatchElementCommand({ type:"content/set-element-priority", uid, value:Math.max(0,(el.priority||0)-10) })}
+          style={{width:36,height:36,borderRadius:8,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontSize:15,fontWeight:700,cursor:"pointer"}}>−</button>
+        <button type="button" aria-label="Raise priority" title="Raise priority"
+          onClick={()=>dispatchElementCommand({ type:"content/set-element-priority", uid, value:(el.priority||0)+10 })}
+          style={{width:36,height:36,borderRadius:8,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontSize:15,fontWeight:700,cursor:"pointer"}}>＋</button>
+      </div>
+      <div style={{fontSize:10,color:B.ash,marginTop:10,fontFamily:F.body,lineHeight:1.45}}>Drag it on the preview to place it exactly; your spot is kept per format.</div>
     </>;
   };
 
@@ -8875,6 +9029,7 @@ function InspectorWorkspace({ workspace }) {
     furnitureMetaFor,
     furnitureLabels: FURN_LABELS,
     shapeAssets: overlays,
+    contentElements: addedElementModels,
     closeInspector,
     applyPatch,
     deleteShape: deleteLayer,
@@ -8885,11 +9040,13 @@ function InspectorWorkspace({ workspace }) {
     renderLogo: renderInspectorLogo,
     renderFurniture: renderFurniturePanel,
     renderShape: renderOverlayPanel,
+    renderElement: renderElementInspector,
+    removeElement: (uid) => dispatchElementCommand({ type:"content/remove-element", uid }),
   });
 
   const renderInspectorPanel = () => <ContextualInspector info={inspectorInfo} removeAction={inspectorRemove}
     onClose={closeInspector} elements={activeElements} activeKey={activeElKey}
-    onSelect={el=>el.overlay?selectElement("overlay",el.key):selectElement(el.key)} palette={B} fonts={FU}/>;
+    onSelect={el=>el.element?(setChangeTypeOpen(false),selectElement("text",null,`el:${el.uid}`)):el.overlay?selectElement("overlay",el.key):selectElement(el.key)} palette={B} fonts={FU}/>;
   return inspectorInfo ? renderInspectorPanel() : null;
 }
 

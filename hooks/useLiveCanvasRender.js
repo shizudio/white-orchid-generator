@@ -21,6 +21,7 @@ export function useLiveCanvasRender({
   setDropHint,
   setLogoOverlapHint,
   setDeadRoles,
+  setContentLedger,
   devHooks,
 }) {
   const dropInfoRef = useRef(null);
@@ -72,7 +73,7 @@ export function useLiveCanvasRender({
 
   useEffect(() => {
     if (!fontsLoaded) return;
-    draw();
+    const result = draw();
     const nextDropHint = dropInfoRef.current
       ? dropInfoRef.current.dropped.join(", ")
       : null;
@@ -81,8 +82,16 @@ export function useLiveCanvasRender({
     setLogoOverlapHint(previous => previous === overlaps ? previous : overlaps);
     const droppedRoles = deadRolesRef.current || [];
     setDeadRoles(previous => previous.join(",") === droppedRoles.join(",") ? previous : droppedRoles);
+    // (Slice 3) Publish the added-element placement ledger as REACTIVE state so the
+    // element inspector + rail can honestly show "placed here / no room in this format"
+    // (M2 — never a silent no-op). renderResultRef alone is a ref and would leave the
+    // panel stale on the render right after an add; the setter forces the re-render.
+    if (setContentLedger) {
+      const ledger = result?.contentElements || [];
+      setContentLedger(previous => JSON.stringify(previous) === JSON.stringify(ledger) ? previous : ledger);
+    }
     if (devHooks && typeof window !== "undefined") window.__woFontMeta = fontMetaRef.current;
-  }, [deadRolesRef, devHooks, draw, fontMetaRef, fontsLoaded, setDeadRoles, setDropHint, setLogoOverlapHint]);
+  }, [deadRolesRef, devHooks, draw, fontMetaRef, fontsLoaded, setContentLedger, setDeadRoles, setDropHint, setLogoOverlapHint]);
 
   // Canvas backing dimensions change synchronously on format switch. Repaint before
   // browser paint so the previous format never flashes in the resized buffer.
