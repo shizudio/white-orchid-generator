@@ -7,6 +7,9 @@ import assert from "node:assert/strict";
 import {
   placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass,
   dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors,
+  buildContentBlockAnchors, makeHeadingClass, makeSubheadingClass, makeBodyClass,
+  makeSupportClass, resolveElementClassConfig, buildElementAnchors,
+  ELEMENT_SIZE_STEPS, elementStepPx,
 } from "../../lib/element-placement-solver.mjs";
 
 const F = { title: "TitleFace", body: "BodyFace", subtitle: "SubFace" };
@@ -151,6 +154,105 @@ test("mergeSafeMargins — tighter of editorial vs platform per side; null platf
   const ps = { left: 0.03, right: 0.09, top: 0.10, bottom: 0.02 };
   assert.deepEqual(mergeSafeMargins(sm, ps), { l: 0.05, r: 0.09, t: 0.10, b: 0.08 });
   assert.deepEqual(mergeSafeMargins(sm, null), { l: 0.05, r: 0.05, t: 0.06, b: 0.08 });
+});
+
+/* ── Slice 2b: added-element anchors + class configs ──────────────────────────── */
+
+test("buildContentBlockAnchors — exact ids + order + coordinates (column stack)", () => {
+  const cands = buildContentBlockAnchors({
+    heroBox: GEOM.heroBox, usedH: 250, gap: 40, supBelow: true, supBottom: 600,
+    safe: GEOM.safe, w: 1080, h: 1080, align: "left",
+  });
+  assert.deepEqual(cands.map(c => c.id),
+    ["below-support", "below-hero", "above-hero", "column-top", "corner-tl", "corner-bl", "corner-br"]);
+  assert.deepEqual(cands.find(c => c.id === "below-support").at(200, 60), { x: 100, y: 640 });   // supBottom+gap
+  assert.deepEqual(cands.find(c => c.id === "below-hero").at(200, 60), { x: 100, y: 490 });      // heroBox.y+usedH+gap
+  assert.deepEqual(cands.find(c => c.id === "above-hero").at(200, 60), { x: 100, y: 100 });      // heroBox.y-gap-bh
+  assert.deepEqual(cands.find(c => c.id === "column-top").at(200), { x: 100, y: 64.8 });         // ax, t*h
+  assert.deepEqual(cands.find(c => c.id === "corner-br").at(200, 60), { x: 826, y: 933.6 });
+});
+
+test("buildContentBlockAnchors — below-support absent when no caption below; centre align", () => {
+  const noSup = buildContentBlockAnchors({
+    heroBox: GEOM.heroBox, usedH: 250, gap: 40, supBelow: false, supBottom: 0,
+    safe: GEOM.safe, w: 1080, h: 1080, align: "left",
+  });
+  assert.ok(!noSup.some(c => c.id === "below-support"));
+  assert.equal(noSup.length, 6);
+  const center = buildContentBlockAnchors({
+    heroBox: GEOM.heroBox, usedH: 250, gap: 40, supBelow: false, supBottom: 0,
+    safe: GEOM.safe, w: 1080, h: 1080, align: "center",
+  });
+  assert.deepEqual(center.find(c => c.id === "below-hero").at(200, 60), { x: 400, y: 490 }); // 100+(800-200)/2
+});
+
+test("makeHeadingClass — serif hero register ladder; heavySans variant; noBand drops band", () => {
+  const serif = makeHeadingClass(80, F).escalate.rungs;
+  assert.equal(serif.length, 5);
+  assert.deepEqual(serif[0], { face: F.title, weight: 400 });
+  assert.equal(serif[4].band, true);
+  const heavy = makeHeadingClass(80, F, { register: "heavySans" }).escalate.rungs;
+  assert.deepEqual(heavy[0], { face: F.subtitle, weight: 700 });
+  assert.equal(heavy[heavy.length - 1].band, true);
+  const noBand = makeHeadingClass(80, F, { noBand: true }).escalate.rungs;
+  assert.ok(!noBand.some(r => r.band));
+  assert.equal(noBand.length, 4);
+});
+
+test("makeSupportClass — subheading/body share the F.body support register", () => {
+  const rungs = makeSupportClass(40, F).escalate.rungs;
+  assert.deepEqual(rungs[0], { face: F.body, weight: 400 });
+  assert.equal(rungs[4].band, true);
+  // subheading + body are the SAME builder, differing only by caller-supplied px.
+  assert.equal(makeSubheadingClass, makeSupportClass);
+  assert.equal(makeBodyClass, makeSupportClass);
+});
+
+test("resolveElementClassConfig — 1:1 class → ratified config binding", () => {
+  assert.deepEqual(resolveElementClassConfig("heading", { preferredPx: 80, F }).escalate.rungs[0], { face: F.title, weight: 400 });
+  assert.deepEqual(resolveElementClassConfig("subheading", { preferredPx: 40, F }).escalate.rungs[0], { face: F.body, weight: 400 });
+  assert.deepEqual(resolveElementClassConfig("body", { preferredPx: 32, F }).escalate.rungs[0], { face: F.body, weight: 400 });
+  // caption defaults to the date edge line; opts.eyebrow selects the tracked micro-label.
+  assert.deepEqual(resolveElementClassConfig("caption", { preferredPx: 28, F }).escalate.rungs[0], { face: F.title, weight: 300 });
+  assert.deepEqual(resolveElementClassConfig("caption", { preferredPx: 28, F, opts: { eyebrow: true } }).escalate.rungs[0], { face: F.subtitle, weight: 400 });
+  // cta → opaque badge: self-legible, ladder never fires.
+  assert.equal(resolveElementClassConfig("cta", { preferredPx: 30, F }).contrastFloor ?? resolveElementClassConfig("cta", { preferredPx: 30, F }).escalate.contrastFloor, 0);
+  assert.equal(resolveElementClassConfig("bogus", { preferredPx: 10, F }), null);
+});
+
+test("buildElementAnchors — class routes to its sanctioned ladder", () => {
+  const geom = { heroBox: GEOM.heroBox, usedH: 250, gap: 40, dGap: 40, ebGap: 30,
+    supBelow: true, supBox: true, supBottom: 600, safe: GEOM.safe, w: 1080, h: 1080, align: "left" };
+  assert.equal(buildElementAnchors("heading", geom)[0].id, "below-support");   // content-block ladder
+  assert.equal(buildElementAnchors("body", geom)[0].id, "below-support");
+  assert.equal(buildElementAnchors("caption", geom)[0].id, "below-hero");      // date ladder
+  assert.equal(buildElementAnchors("caption", { ...geom, eyebrow: true })[0].id, "above-hero"); // eyebrow ladder
+  assert.equal(buildElementAnchors("cta", geom)[0].id, "below-hero");          // badge on the date corners
+  assert.deepEqual(buildElementAnchors("nope", geom), []);
+});
+
+test("resolveElementClassConfig + placeTextElement — an added heading places at rung 0 on a clean field", () => {
+  const geom = { heroBox: GEOM.heroBox, usedH: 250, gap: 40, supBelow: false, supBottom: 0,
+    safe: GEOM.safe, w: 1080, h: 1080, align: "left" };
+  const cfg = resolveElementClassConfig("heading", { preferredPx: 80, F });
+  const cands = buildElementAnchors("heading", geom);
+  const sol = placeTextElement({
+    cfg, candidates: cands, hardObstacles: [], softObstacles: [],
+    safe: { x0: 0, y0: 0, x1: 1080, y1: 1080, tolX: 0, tolY: 0 }, focalBox: null,
+    measure: fixedMeasure(300, 90), surface: solidSurface, baseInk: "#000", inkPoles: ["#000", "#fff"],
+  });
+  assert.equal(sol.id, "below-hero");
+  assert.equal(sol.face, F.title);
+  assert.equal(sol.weight, 400);
+  assert.equal(sol.band, false);
+});
+
+test("ELEMENT_SIZE_STEPS / elementStepPx — S/M/L multipliers within range", () => {
+  assert.deepEqual({ ...ELEMENT_SIZE_STEPS }, { S: 0.82, M: 1, L: 1.25 });
+  assert.equal(elementStepPx(100, "S"), 82);
+  assert.equal(elementStepPx(100, "M"), 100);
+  assert.equal(elementStepPx(100, "L"), 125);
+  assert.equal(elementStepPx(100, "bogus"), 100);   // unknown step → M
 });
 
 test("dateFurnitureObstacles — projects rule/index/counterweight/badge boxes; junk-safe", () => {
