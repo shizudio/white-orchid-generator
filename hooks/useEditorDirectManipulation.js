@@ -8,9 +8,9 @@ export function useEditorDirectManipulation({
   photoTransform, photoSelected, selectedShapeId, shapeLayers, shapeAssets,
   textLayout, textRole, textSelected, roleOffsetsByDimensionRef, postType,
   deriveShapeTransform, suggestShapePlacement, resolveRoleOffsets,
-  updateRoleOffset, updateTextLayout, patchPhoto, pinPhotoTouched, applyPatch,
+  updateRoleOffset, updateTextLayout, patchPhoto, applyPatch,
   selectElement, focusTextField, setShapeChromeVisible, setInspectorElement,
-  setTextSelected, setPhotoSelected, dispatchDesignCommand, setShapeDirty,
+  setTextSelected, setPhotoSelected, setShapeDirty,
 }) {
   const effectiveShapeTransform = layer => {
     if (!layer) return null;
@@ -36,7 +36,7 @@ export function useEditorDirectManipulation({
     effectiveShapeTransform,
     getStoredRoleOffset: role => resolveRoleOffsets(dimensionId, postType, roleOffsetsByDimensionRef.current)?.[role] || null,
     updateRoleOffset, updateTextLayout, updateShapeTransform,
-    patchPhoto, pinPhotoTouched, applyPatch, selectElement, focusTextField,
+    patchPhoto, applyPatch, selectElement, focusTextField,
     setOverlayChromeVisible:setShapeChromeVisible,
     setInspectorElement, setTextSelected, setPhotoSelected,
   });
@@ -85,9 +85,12 @@ export function useEditorDirectManipulation({
   const resetLayer = uid => {
     const layer=shapeLayers.find(item=>item.uid===uid); if(!layer)return;
     const asset=shapeAssets.find(item=>item.id===layer.assetId);
-    if(dimensionId===masterDimensionId) dispatchDesignCommand({ type:"shape/update", uid, patch:{master:suggestShapePlacement(asset?.kind||"center",asset?.ratio||1,width,height)} });
-    else { const byDim={...(layer.byDim||{})}; delete byDim[dimensionId]; dispatchDesignCommand({type:"shape/update",uid,patch:{byDim}}); }
-    setShapeDirty(true);
+    applyPatch({resetOverlay:{
+      uid,
+      ...(dimensionId===masterDimensionId
+        ? {masterTransform:suggestShapePlacement(asset?.kind||"center",asset?.ratio||1,width,height)}
+        : {}),
+    }},{source:"ui"});
   };
   const deleteLayer = uid => applyPatch({ removeOverlay:uid }, { source:"ui" });
   const saveOverlays = () => setShapeDirty(false);

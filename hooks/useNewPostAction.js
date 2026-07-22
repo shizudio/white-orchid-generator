@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { newSessionId, setCurrentSessionId } from "@/lib/sessions";
+import { createNewPostHistorySnapshot } from "@/lib/design-history.mjs";
 
 /** Reset the design and conversation as one undoable new-post action. */
 export function useNewPostAction({
@@ -25,43 +26,11 @@ export function useNewPostAction({
   return useCallback(() => {
     setAiUndoStack(previous => [snapshotApplyableState(), ...previous].slice(0, undoDepth));
     setRedoStack([]);
-    restoreSnapshot({
-      postType: "photo_logo",
-      archetypeId: null,
-      dimensionId: "ig_portrait",
-      headline: "",
-      subtext: "",
-      attribution: "",
-      dateText: "",
-      bgColor: "burnham",
-      fieldColorOverride: null,
-      bgAlpha: 1,
-      textColorId: "auto",
-      selectedLogoId: "p3-ivory",
-      logoPosition: "bottom-center",
-      logoSize: "m",
-      backdropMode: "auto",
-      photoTreatment: "none",
-      photoFrame: { type: "none" },
-      microLabel: "",
-      pillText: "",
-      heroRegister: "",
-      typeLayouts: freshTypeLayouts(),
-      userLogoTouched: false,
-      logoByDim: {},
-      logoFreePos: null,
-      logoHidden: false,
-      roleOffsetsByDim: {},
-      typeLayoutsByDim: {},
-      fontSizes: freshFontSizes(),
-      overlayLayers: [],
-      furnitureOverrides: {},
-      markTab: "primary",
-      image: defaultImage,
-      imgT: { zoom: 1, cx: 0.5, cy: 0.5, rotation: 0 },
-      imgTByDim: {},
-      photoTouchedByDim: {},
-    });
+    restoreSnapshot(createNewPostHistorySnapshot({
+      typeLayouts:freshTypeLayouts(),
+      fontSizes:freshFontSizes(),
+      defaultImage,
+    }));
     setGenerationBrief(null);
     setActiveTemplateName("");
     closeInspector();

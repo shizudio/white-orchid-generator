@@ -11,6 +11,7 @@ export function useTemplateApplyGuard({
   setActiveTemplateName,
   setGalleryOpen,
   applyDesignTemplate,
+  beforeApply,
   confirmReplace = message => window.confirm(message),
 }) {
   const hasMeaningfulEdits = useMemo(() => {
@@ -24,11 +25,12 @@ export function useTemplateApplyGuard({
 
   const applyTemplateWithGuard = useCallback(template => {
     if (hasMeaningfulEdits && !confirmReplace("Replace your current design with this template?")) return false;
+    beforeApply?.(template);
     setActiveTemplateName(template?.name || "");
     setGalleryOpen(false);
     applyDesignTemplate(template);
     return true;
-  }, [hasMeaningfulEdits, confirmReplace, setActiveTemplateName, setGalleryOpen, applyDesignTemplate]);
+  }, [hasMeaningfulEdits, confirmReplace, beforeApply, setActiveTemplateName, setGalleryOpen, applyDesignTemplate]);
 
   return { hasMeaningfulEdits, applyTemplateWithGuard };
 }

@@ -4,7 +4,7 @@ import {
   isTemplateSyncEligible,
   pushTemplate,
 } from "@/lib/cloud-sync";
-import { normalizeShapeInstances } from "@/lib/design-document.mjs";
+import { planTemplateApplicationWorkflow } from "@/lib/design-composite-workflows.mjs";
 import {
   createPersistedDesignPayload,
   persistedDesignToLegacyView,
@@ -37,9 +37,7 @@ export function useTemplateManagement({
   archetypeIds,
   starterTemplates,
   buildMaterialized,
-  freshTypeLayouts,
   typeLayoutDefaults,
-  imageFromSource,
   guardRef,
   editingTemplate,
   setEditingTemplate,
@@ -134,71 +132,27 @@ export function useTemplateManagement({
       return;
     }
 
-    const storedContent = migrated.content;
-    const storedTypography = migrated.typography;
-    actions.setPostType(legacy.postType || "photo_logo");
-    actions.setArchetypeId(archetypeIds.includes(legacy.archetypeId) ? legacy.archetypeId : null);
-    actions.setArchVariant(Number.isInteger(legacy.archVariant) ? legacy.archVariant : 0);
-    actions.setDimensionId(restored.metadata.dimensionId || "ig_portrait");
-    actions.dispatchDesignCommand({ type: "document/replace", document: migrated });
-    actions.setExportFormat(restored.metadata.exportFormat || "png");
-    actions.setLogoVariantTouched(false);
-
-    const nextLayers = normalizeShapeInstances(migrated.shapes);
     const templateArchetypeId = archetypeIds.includes(legacy.archetypeId) ? legacy.archetypeId : null;
-    const alreadyMaterialized = !!storedTypography.masterLayouts?.[legacy.postType]?.roles;
-    if (templateArchetypeId && !alreadyMaterialized) {
-      const materialized = buildMaterialized(templateArchetypeId, {
+    const variant = Number.isInteger(legacy.archVariant) ? legacy.archVariant : 0;
+    const alreadyMaterialized = !!migrated.typography.masterLayouts?.[legacy.postType]?.roles;
+    const materialized = templateArchetypeId && !alreadyMaterialized
+      ? buildMaterialized(templateArchetypeId, {
         postType: legacy.postType,
-        attribution: storedContent.attribution,
-        subtext: storedContent.subtext,
-        variant: Number.isInteger(legacy.archVariant) ? legacy.archVariant : 0,
-      });
-      if (materialized) {
-        if (materialized.bg) actions.setBgColor(materialized.bg);
-        actions.setHeroRegister(materialized.register);
-        actions.setMicroLabel(materialized.microLabel);
-        actions.setPhotoTreatment(materialized.photoTreatment);
-        actions.setPhotoFrame(materialized.photoFrame);
-        const baseLayouts = Object.keys(storedTypography.masterLayouts || {}).length
-          ? storedTypography.masterLayouts
-          : freshTypeLayouts();
-        actions.setTypeLayouts({
-          ...baseLayouts,
-          [materialized.postType]: {
-            ...(baseLayouts[materialized.postType] || typeLayoutDefaults[materialized.postType] || typeLayoutDefaults.text_post),
-            ...materialized.layout,
-          },
-        });
-        actions.setTypeLayoutsByDimension({});
-        // (§2.9.2) A fresh materialization EMITS the archetype's layout shape as a
-        // genuine layer — it must land here too, or a shape archetype's template
-        // would apply shapeless (photoFrame is {type:"none"} post-unification).
-        actions.dispatchDesignCommand({
-          type: "shapes/replace",
-          shapes: [
-            ...(materialized.motifLayers || nextLayers.filter(layer => !layer.motif)),
-            ...(materialized.layoutShapeLayer ? [materialized.layoutShapeLayer] : []),
-          ],
-        });
-      } else {
-        actions.dispatchDesignCommand({ type: "shapes/replace", shapes: nextLayers });
-      }
-    } else {
-      actions.dispatchDesignCommand({ type: "shapes/replace", shapes: nextLayers });
-    }
-
-    actions.clearSelection();
-    if (migrated.media.source) {
-      imageFromSource(migrated.media.source).then(image => actions.setImageObject(image)).catch(() => {});
-      actions.setVideoObject(null);
-    } else {
-      actions.setImageObject(null);
-      actions.setVideoObject(null);
-    }
-    actions.setMarkTab((migrated.logo.assetId || "p3-ivory").startsWith("s") ? "secondary" : "primary");
-    actions.setAcknowledgements({ ...restored.acknowledgements });
-    actions.setOverlayDirty(false);
+        attribution: migrated.content.attribution,
+        subtext: migrated.content.subtext,
+        variant,
+      })
+      : null;
+    actions.executeWorkflowGroups(planTemplateApplicationWorkflow({
+      document:migrated,
+      metadata:restored.metadata,
+      acknowledgements:restored.acknowledgements,
+      archetypeId:templateArchetypeId,
+      variant,
+      materialized,
+      alreadyMaterialized,
+      typeLayoutDefault:typeLayoutDefaults[legacy.postType] || typeLayoutDefaults.text_post,
+    }));
   };
 
   const deleteDesignTemplate = id => {

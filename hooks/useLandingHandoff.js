@@ -40,8 +40,12 @@ export function useLandingHandoff({
       return undefined;
     }
     const actions = actionsRef.current;
-    if (handoff?.patch) {
-      actions.applyDesignPatch?.(handoff.patch, {
+    const designPatch = {
+      ...(handoff?.patch || {}),
+      ...(handoff?.imageUrl ? {imageSrc:handoff.imageUrl} : {}),
+    };
+    if (Object.keys(designPatch).length) {
+      actions.applyDesignPatch?.(designPatch, {
         harmonize: true,
         systemFreeVariables: true,
       });
@@ -53,23 +57,12 @@ export function useLandingHandoff({
       });
     }
 
-    let active = true;
-    if (handoff?.imageUrl) {
-      actions.setImageSource?.(handoff.imageUrl);
-      actions.loadImage?.(handoff.imageUrl)
-        .then(image => {
-          if (!active || !image) return;
-          actionsRef.current.setImageObject?.(image);
-          actionsRef.current.rearmHarmonizer?.();
-        })
-        .catch(() => {});
-    }
     actions.setChatSeed?.({
       originalMessage: handoff?.originalMessage || "",
       reply: handoff?.reply || "",
     });
     actions.setGalleryOpen?.(false);
-    return () => { active = false; };
+    return undefined;
   }, [actionsRef]);
 
   useEffect(() => {

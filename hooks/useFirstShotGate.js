@@ -21,8 +21,7 @@ export function useFirstShotGate({
   archetypeVariant,
   postType,
   copy,
-  materializeArchetype,
-  setTextColorId,
+  applyPatch,
   sessionId,
 }) {
   const scoreCandidate = (candidateArchetypeId, variant, textColor, candidateCopy) => {
@@ -87,15 +86,10 @@ export function useFirstShotGate({
     }
 
     if (best.blockers < baseline.blockers && (best.variant !== initialVariant || best.textColor)) {
-      if (best.variant !== initialVariant) {
-        materializeArchetype(archetypeId, {
-          variant: best.variant,
-          postType,
-          attribution: copy.attribution,
-          subtext: copy.subtext,
-        });
-      }
-      if (best.textColor) setTextColorId(best.textColor);
+      applyPatch({
+        ...(best.variant !== initialVariant ? {archetypeId,archVariant:best.variant} : {}),
+        ...(best.textColor ? {textColorId:best.textColor} : {}),
+      },{amendUndo:true,systemFreeVariables:true});
     }
     try {
       logFeedbackClient({

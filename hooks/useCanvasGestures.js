@@ -28,7 +28,6 @@ export function useCanvasGestures({
   updateTextLayout,
   updateShapeTransform,
   patchPhoto,
-  pinPhotoTouched,
   applyPatch,
   selectElement,
   focusTextField,
@@ -484,10 +483,6 @@ export function useCanvasGestures({
       if (Math.abs(degrees - snap) < 6) degrees = snap;
       degrees = ((degrees % 360) + 360) % 360;
       if (degrees > 180) degrees -= 360;
-      if (!drag.pinned) {
-        drag.pinned = true;
-        pinPhotoTouched(drag.base);
-      }
       patchPhoto({ rotation: Math.round(degrees * 10) / 10 });
       return;
     }
@@ -500,10 +495,6 @@ export function useCanvasGestures({
           break;
         }
       }
-      if (!drag.pinned) {
-        drag.pinned = true;
-        pinPhotoTouched(drag.base);
-      }
       patchPhoto({ zoom });
       return;
     }
@@ -514,10 +505,7 @@ export function useCanvasGestures({
       let cy = drag.cy + (event.clientY - drag.y) / displayHeight;
       if (Math.abs(cx - 0.5) < 0.02) cx = 0.5;
       if (Math.abs(cy - 0.5) < 0.02) cy = 0.5;
-      if (!drag.moved) {
-        drag.moved = true;
-        pinPhotoTouched(drag.base);
-      }
+      if (!drag.moved) drag.moved = true;
       patchPhoto({ cx, cy });
     }
   };

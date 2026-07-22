@@ -35,56 +35,11 @@ export function useDesignDocumentController({ initialImage, freshFontSizes, fres
   };
 
   const { content, palette, typography, media, logo, composition } = designDocument;
-  const setContentField = (field, value) => dispatchDesignCommand({ type:"content/set", field, value });
-  const setPaletteField = (field, value) => dispatchDesignCommand({ type:"palette/set", field, value });
-  const setTypographyField = (field, value) => dispatchDesignCommand({ type:"typography/set", field, value });
-  const setMediaField = (field, value) => dispatchDesignCommand({ type:"media/set", field, value });
-  const setLogoField = (field, value) => dispatchDesignCommand({ type:"logo/set", field, value });
-  const setCompositionField = (field, value) => dispatchDesignCommand({ type:"composition/set", field, value });
-  const commands = {
-    setHeadline:value => setContentField("headline", value),
-    setSubtext:value => setContentField("subtext", value),
-    setAttribution:value => setContentField("attribution", value),
-    setDateText:value => setContentField("dateText", value),
-    setMicroLabel:value => setContentField("microLabel", value),
-    setPillText:value => setContentField("pillText", value),
-    setBgColor:value => setPaletteField("background", value),
-    setFieldColorOverride:value => setPaletteField("field", value),
-    setBgAlpha:value => setPaletteField("backgroundOpacity", value),
-    setTextColorId:value => setPaletteField("text", value),
-    setBackdropMode:value => setPaletteField("backdrop", value),
-    setPinnedProps:pins => dispatchDesignCommand({ type:"palette/set-pins", pins }),
-    setHeroRegister:value => setTypographyField("heroRegister", value),
-    setFontSizes:value => setTypographyField("fontSizes", value),
-    setTypeLayouts:value => setTypographyField("masterLayouts", value),
-    setTypeLayoutsByDim:value => setTypographyField("formatLayouts", value),
-    setRoleOffsetsByDim:value => setTypographyField("roleOffsetsByFormat", value),
-    setImage:source => {
-      dispatchDesignCommand({ type:"media/set-source", source });
-      if (source) setMediaField("kind", "image");
-    },
-    setMediaKind:value => setMediaField("kind", value),
-    setPhotoTreatment:value => setMediaField("treatment", value),
-    setPhotoFrame:value => setMediaField("frame", value),
-    setImgTByDim:value => setMediaField("formatTransforms", value),
-    setPhotoTouchedByDim:value => setMediaField("formatPins", value),
-    setSelectedLogoId:value => setLogoField("assetId", value),
-    setLogoVariantTouched:value => setLogoField("variantPinned", value),
-    setLogoHidden:value => setLogoField("hidden", value),
-    setUserLogoTouched:value => setLogoField("placementPinned", value),
-    setLogoPosition:value => dispatchDesignCommand({ type:"logo/merge-master-placement", patch:{ position:value } }),
-    setLogoSize:value => dispatchDesignCommand({ type:"logo/merge-master-placement", patch:{ sizeId:value } }),
-    setLogoFreePos:value => dispatchDesignCommand({ type:"logo/merge-master-placement", patch:{ free:value } }),
-    setPostType:value => setCompositionField("postType", value),
-    setArchetypeId:value => setCompositionField("archetypeId", value),
-    setArchVariant:value => setCompositionField("archetypeVariant", value),
-  };
 
   return {
     designDocument,
     commandPathCollectorRef,
     dispatchDesignCommand,
-    commands,
     headline:content.headline,
     subtext:content.subtext,
     attribution:content.attribution,
