@@ -704,11 +704,28 @@ stripped from production). To re-run and compare:
 1. Build + serve the isolated test-hooks dist (keys unset, $0):
    `WO_DIST_DIR=.next-dlc-guard NEXT_PUBLIC_WO_TEST_HOOKS=1 npx next build && WO_DIST_DIR=.next-dlc-guard npx next start -p 3222`
 2. Open the app, click **Skip to the studio** so the Generator mounts.
-3. In the console: `const base = await (await fetch('/…/render-fingerprint-baseline.json')).json(); window.__woRenderFingerprint({ baseline: base })` — inspect `.pass` and `.diffs` (each diff names the offending `arch:<id>:<fmt>` / `legacy:<postType>:<fmt>` cell).
+3. In the console: `const base = await (await fetch('/…/render-fingerprint-baseline.json')).json(); await document.fonts.ready; window.__woRenderFingerprint(); const r = window.__woRenderFingerprint({ baseline: base })` — inspect `r.pass` and `r.diffs` (each diff names the offending `arch:<id>:<fmt>` / `legacy:<postType>:<fmt>` cell).
 
 The fixture photo is a **fixed solid-colour stand-in** and all copy is fixed, so the only
-variable is the renderer itself. Hashes are engine-specific (the committed baseline was
-captured on `Chrome/148`); always compare within the same harness.
+variable is the renderer itself.
+
+**Two methodology rules (hard-won during the DLC-2 guard reconciliation):**
+
+1. **Capture only after `document.fonts.ready` + one warm-up render.** The first
+   `__woRenderFingerprint()` of a session can race font loading and first-paint layout;
+   discard it and read the *second* call. Every baseline and every comparison must clear
+   fonts and warm up first, or a cell flips for reasons that have nothing to do with the code.
+2. **Baselines are engine-pinned — cross-engine comparisons are invalid.** Canvas
+   antialiasing is engine-specific, so the same geometry hashes differently across Chrome
+   builds (e.g. Chrome/148 → Chromium/149 shifts ~135 cells at the AA level with *zero*
+   geometry change). The baseline records the exact engine it was captured on (the `engine`
+   / `engineDetail` / `platform` fields); **only ever diff within that same harness.** On an
+   engine change, re-baseline **deliberately** (confirm geometry is unchanged same-engine
+   first — build the prior commit in a throwaway worktree on the *current* engine and diff
+   WIP-vs-that — then overwrite the baseline and bump the `engine` field in the same commit).
+   The committed baseline is currently pinned to **Chromium/149.0.7827.55** (Playwright-bundled,
+   the automated harness); the previous Chrome/148 baseline was retired on a deliberate,
+   geometry-verified engine bump.
 
 **The rule.** A fingerprint diff is *never* regenerated silently. A changed cell means
 either a **bug in the DLC change** (fix the code until the cell matches) or a
