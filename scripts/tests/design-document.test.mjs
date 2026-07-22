@@ -275,16 +275,46 @@ test("composition commands replace one field without disturbing provenance", () 
   const before = createDesignDocumentV1({ postType:"quote", archetypeId:"quote_margin", archVariant:2 });
   const result = applyDesignCommand(before, { type:DESIGN_COMMAND_TYPES.COMPOSITION_SET, field:"postType", value:"event" });
   assert.deepEqual(result.document.composition, {
-    postType:"event", archetypeId:"quote_margin", archetypeVariant:2,
+    postType:"event", archetypeId:"quote_margin", archetypeVariant:2, mediaHostShapeId:null,
   });
 });
 
-test("one format reset clears every local design override", () => {
-  const before=createDesignDocumentV1({typeLayoutsByDim:{story:{quote:{x:1}}},roleOffsetsByDim:{story:{quote:{hero:{dx:1}}}},imgTByDim:{story:{zoom:2}},photoTouchedByDim:{story:true},logoByDim:{story:{position:"top-left"}},overlayLayers:[{uid:"s",assetId:"shape-1",master:{x:.5},byDim:{story:{x:.2}}}]});
-  const result=applyDesignCommand(before,{type:DESIGN_COMMAND_TYPES.FORMAT_RESET_TO_MASTER,dimensionId:"story"}).document;
+test("one format reset clears every local design override and ownership marker", () => {
+  const before=createDesignDocumentV1({typeLayoutsByDim:{story:{quote:{x:1}}},roleOffsetsByDim:{story:{quote:{hero:{dx:1}}}},imgTByDim:{story:{zoom:2}},photoTouchedByDim:{story:true},logoByDim:{story:{position:"top-left"}},overlayLayers:[{uid:"s",assetId:"shape-1",master:{x:.5},byDim:{story:{x:.2}},touchedByDim:{story:true}}]});
+  const applied=applyDesignCommand(before,{type:DESIGN_COMMAND_TYPES.FORMAT_RESET_TO_MASTER,dimensionId:"story"});
+  const result=applied.document;
   assert.equal(result.typography.formatLayouts.story,undefined);
   assert.equal(result.typography.roleOffsetsByFormat.story,undefined);
   assert.equal(result.media.formatTransforms.story,undefined);
   assert.equal(result.logo.formatPlacements.story,undefined);
   assert.equal(result.shapes[0].byDim.story,undefined);
+  assert.equal(result.shapes[0].touchedByDim.story,undefined);
+  const noop=applyDesignCommand(result,{type:DESIGN_COMMAND_TYPES.FORMAT_RESET_TO_MASTER,dimensionId:"story"});
+  assert.deepEqual(noop.document,result);
+  assert.deepEqual(noop.changedPaths,[]);
+});
+
+test("equivalent semantic updates report no changed paths", () => {
+  const before=createDesignDocumentV1({
+    typeLayouts:{event:{x:0.1,y:0.2,width:0.8}},
+    typeLayoutsByDim:{story:{event:{x:0.2,y:0.3,width:0.7}}},
+    imgT:{zoom:1,cx:0.5,cy:0.5,rotation:0},
+    imgTByDim:{story:{zoom:1.2,cx:0.5,cy:0.5,rotation:0}},
+    logoPosition:"top-left",
+    overlayLayers:[{uid:"s",assetId:"shape-1",master:{x:.5,y:.5},byDim:{}}],
+    furnitureOverrides:{rule:{color:"sage"}},
+  });
+  const commands=[
+    {type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_MERGE_MASTER_LAYOUT,postType:"event",patch:{x:0.1}},
+    {type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_FORMAT_LAYOUT,dimensionId:"story",postType:"event",patch:{y:0.3}},
+    {type:DESIGN_COMMAND_TYPES.MEDIA_MERGE_MASTER_TRANSFORM,patch:{zoom:1}},
+    {type:DESIGN_COMMAND_TYPES.MEDIA_MERGE_FORMAT_TRANSFORM,dimensionId:"story",patch:{zoom:1.2}},
+    {type:DESIGN_COMMAND_TYPES.LOGO_MERGE_MASTER_PLACEMENT,patch:{position:"top-left"}},
+    {type:DESIGN_COMMAND_TYPES.SHAPE_UPDATE,uid:"s",patch:{mode:"frame"}},
+    {type:DESIGN_COMMAND_TYPES.SHAPE_UPDATE_TRANSFORM,uid:"s",isMaster:true,patch:{x:0.5}},
+    {type:DESIGN_COMMAND_TYPES.FURNITURE_UPDATE,key:"rule",patch:{color:"sage"}},
+  ];
+  for (const command of commands) {
+    assert.deepEqual(applyDesignCommand(before,command).changedPaths,[],command.type);
+  }
 });

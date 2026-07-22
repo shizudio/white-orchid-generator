@@ -87,6 +87,9 @@ test("a layout-origin frame layer survives persistence with origin/userTouched/b
   assert.equal(round.origin,"layout");
   assert.equal(round.userTouched,true);
   assert.equal(round.mode,"frame");
+  assert.equal(round.renderMode,"frame");
+  assert.equal(round.role,"image-frame");
+  assert.equal(round.structural,true);
   assert.deepEqual(round.master,layer.master);
   assert.deepEqual(round.byDim,layer.byDim);
   assert.deepEqual(round.touchedByDim,{ story:true });
