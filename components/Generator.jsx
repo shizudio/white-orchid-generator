@@ -39,6 +39,7 @@ import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs
 import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
+import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors } from "@/lib/element-placement-solver.mjs";
 import { contrastAtExtremes, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
@@ -1224,161 +1225,18 @@ function pickLogoPlacement(base,w,h,textBox,regions,focal,curBgColor,logoInkLum,
   return placeElement(base,{ w,h,textBox,regions,focal,curBgColor,frameBox,safeZone,inkLum:logoInkLum,cfg:logoElementClass() });
 }
 
-/* ── TEXT-CLASS PLACEMENT (docs/element-placement-spec.md §2; P1 slice 1b) ────────
-   The measured-text-box path of the universal solver. The caller (renderScene, at the
-   date site) hands it candidate ANCHORS in priority order + the shared hard-restraint
-   set; this walks each candidate through the ratified register-escalation ladder
-   (cfg.escalate.rungs — rung 0 is the ink-flip, then heavier sanctioned weight → the
-   most robust brand face → size up within range → band last resort) with a GUARDED
-   RE-MEASURE at every rung: a face/size change re-measures the box (text width shifts),
-   and a re-measured box that overflows its bounds or hits an obstacle is rejected. The
-   FIRST candidate that yields a legible, in-bounds, collision-free box wins — priority
-   order encodes the art-directed preference, so a clean archetype prior (candidate #1)
-   reproduces today's placement. Furniture is a SOFT obstacle (it yields to the element
-   downstream via the furniture avoid-list), so a candidate clearing the hard set but
-   sitting on furniture is used only if none clears both (two passes).
-   Returns { id, x, y, w, h, px, face, weight, ink, band } or null (an HONEST refusal —
-   the caller then leaves the role dead so the pendingOffer path fires as before). */
-function placeTextElement(ctx){
-  const { cfg, candidates, hardObstacles, softObstacles, safe, focalBox,
-          measure, surface, baseInk, inkPoles } = ctx;
-  const hit=(a,b)=>a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-  const tolX=safe.tolX||0, tolY=safe.tolY||0;
-  const inBounds=(box)=>box.x>=safe.x0-tolX && box.y>=safe.y0-tolY &&
-                        box.x+box.w<=safe.x1+tolX && box.y+box.h<=safe.y1+tolY;
-  const clears=(box,obs)=>!obs.some(o=>hit(box,o));
-  // rung 0 — ink-flip. On a photo the pole with the higher worst-cell contrast wins;
-  // on a SOLID field surface() returns null and the zone-resolved ink (baseInk) already
-  // contrasts the field, so no flip is forced (that ink stays, matching today's look).
-  const pickInk=(box)=>{
-    const s0=surface(box,baseInk);
-    if(!s0) return baseInk;
-    let best=baseInk, bestMin=s0.min;
-    for(const p of inkPoles){ if(p===baseInk) continue; const s=surface(box,p); if(s && s.min>bestMin){ bestMin=s.min; best=p; } }
-    return best;
-  };
-  const rungs=cfg.escalate.rungs;
-  const legible=(surf,rung)=>{
-    if(!surf) return true;   // solid field / no photo under the box → the light serif reads
-    // (Item D optical weight — 15a2680) a THIN register is forbidden RAW over photo
-    // texture (sqrt(maxV)>opticalMax) even at passing colour contrast; a heavy weight
-    // or a band survives the texture. Colour contrast must also clear the AA floor.
-    const opticalOK = Math.sqrt(surf.maxV||0)<=cfg.escalate.opticalMax || rung.weight>=cfg.escalate.heavyWeight || rung.band;
-    const contrastOK = surf.min>=cfg.escalate.contrastFloor || rung.band;
-    return opticalOK && contrastOK;
-  };
-  for(const requireSoft of [true,false]){
-    if(requireSoft && !(softObstacles&&softObstacles.length)) continue;   // no soft set → single pass
-    for(const cand of candidates){
-      for(let ri=0; ri<rungs.length; ri++){
-        const rung=rungs[ri];
-        const px=cfg.preferredPx*(rung.sizeMul||1);
-        const dim=measure(px,rung.face,rung.weight);
-        const at=cand.at(dim.w,dim.h);
-        const box={x:at.x,y:at.y,w:dim.w,h:dim.h};
-        if(!inBounds(box)) break;                               // position can't hold this box → next candidate
-        if(!clears(box,hardObstacles)) break;                   // hard collision → next candidate
-        if(focalBox && hit(box,focalBox)) break;                // on a face → next candidate
-        if(requireSoft && softObstacles && !clears(box,softObstacles)) break;   // save for the hard-only pass
-        const ink=pickInk(box);
-        const surf=surface(box,ink);
-        if(legible(surf,rung)) return { id:cand.id, x:box.x, y:box.y, w:box.w, h:box.h, px, face:rung.face, weight:rung.weight, ink, band:!!rung.band };
-        // illegible at this rung → escalate the register (next rung, same candidate).
-      }
-    }
-  }
-  return null;
-}
-
-// The DATE-LINE element class (docs/element-placement-spec.md §1; P1 slice 1b). The
-// secondary date is a MEASURED serif line; preferredPx is supplied per-render (it
-// tracks the hero size, the current draw's dSz). Its register escalates in the ratified
-// order — rung 0 ink-flip (pickInk), then heavier sanctioned WEIGHT → the most robust
-// brand FACE (the sans body) → SIZE up within range → BAND last resort. Faces/weights
-// reference F (brand fonts), so the class is built at call time (never at module-eval).
-// opts.noBand drops the BAND last-resort for callers that explicitly disallow it.
-// rung: on a design with an active shape (archetype mask/cutout, or a free shape intersecting
-// the zone) the band rung is disabled by default, so the ladder resolves through ink→weight→
-// face→size only. If none passes, placeTextElement returns null (an HONEST refusal → the
-// solver relocates via another candidate, or the finding surfaces as a dot) — never a band.
-function dateElementClass(preferredPx, opts){
-  const noBand = !!(opts && opts.noBand);
-  return {
-    preferredPx,
-    escalate: {
-      contrastFloor: 4.5,   // AA for a reading line (the caption's own escalate floor)
-      opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
-      heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
-      noBand,
-      rungs: [
-        { face: F.title, weight: 300 },                 // the elegant light serif (today's default)
-        { face: F.title, weight: 700 },                 // rung: heavier SANCTIONED serif weight
-        { face: F.body,  weight: 600 },                 // rung: the most robust brand FACE (sans body)
-        { face: F.body,  weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
-        { face: F.body,  weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ].filter(r => !(noBand && r.band)),
-    },
-  };
-}
-// The EYEBROW (micro-label) element class (docs/element-placement-spec.md §1; P1 slice
-// 2b-i). The eyebrow is a small tracked ALL-CAPS line; preferredPx is supplied per-render
-// and floored at the dateLabel class floor (MIN_FONT_PX.dateLabel — a caption-legible
-// caps token, never microscopic). Its register escalates in the ratified order — rung 0
-// ink-flip (pickInk), then a heavier sanctioned caps WEIGHT within the subtitle face → the
-// most robust brand FACE (the sans body, still drawn caps+tracked) → SIZE up within range
-// → BAND last resort. The caller draws the winning rung via drawMicroLabel(face,weight),
-// so the ladder and the paint never diverge. Built at call time (F references brand fonts).
-function eyebrowElementClass(preferredPx, opts){
-  const noBand = !!(opts && opts.noBand);
-  return {
-    preferredPx,
-    escalate: {
-      contrastFloor: 4.5,   // AA for a small reading label (mirrors the date's floor)
-      opticalMax: 0.14,     // sqrt(maxV) busyness ceiling for a THIN register (15a2680)
-      heavyWeight: 600,     // a sanctioned weight ≥ this survives photo texture raw
-      noBand,
-      rungs: [
-        { face: F.subtitle, weight: 400 },                 // the light tracked eyebrow (today's default register)
-        { face: F.subtitle, weight: 700 },                 // rung: heavier SANCTIONED caps weight (Syne 700)
-        { face: F.body,     weight: 600 },                 // rung: the most robust brand FACE (sans body, caps)
-        { face: F.body,     weight: 700, sizeMul: 1.15 },  // rung: robust sans, SIZE up within range
-        { face: F.body,     weight: 700, band: true },     // rung: BAND last resort (guarantees legibility)
-      ].filter(r => !(noBand && r.band)),
-    },
-  };
-}
-// The BADGE (accent pill) element class (docs/element-placement-spec.md §1; P1 slice
-// 2b-ii). Unlike the date/eyebrow, the badge is an OPAQUE filled lozenge — self-legible
-// against its own fill (the label ink is pole-flipped against the pill at draw time), so
-// NO register-escalation ladder applies: a single rung, and the caller's surface() returns
-// null so placeTextElement's legibility test passes immediately and the solver just walks
-// the candidate anchors for a clean (in-bounds, collision-free) spot. preferredPx = the
-// pill's font basis (bs); the caller's measure() returns the pill geometry from it.
-function badgeElementClass(preferredPx){
-  return {
-    preferredPx,
-    escalate: {
-      contrastFloor: 0, opticalMax: 1, heavyWeight: 0,   // opaque pill → self-legible, ladder never fires
-      rungs: [ { face: F.subtitle, weight: 600 } ],
-    },
-  };
-}
-// Light approximate boxes for an archetype's authored furniture (rule / index /
-// underline / counterweight / badge), used as the date solver's SOFT obstacle set so a
-// placed date prefers a spot clear of the tells. Furniture yields to the date downstream
-// (the date box is added to drawFurniture's avoid-list), so these need only be roughly
-// right — precision here buys visual tidiness, never a gate assertion.
-function dateFurnitureObstacles(mat,w,h){
-  const list=[]; const f=mat&&mat.furniture; if(!Array.isArray(f)) return list;
-  for(const it of f){ if(!it) continue;
-    const x=(it.x||0)*w, y=(it.y||0)*h;
-    if(it.type==="rule"||it.type==="underline"){ const ww=(it.w||0.1)*w; list.push({x, y:y-0.015*h, w:ww, h:0.03*h}); }
-    else if(it.type==="index"){ list.push({x:it.align==="right"?x-0.24*w:x, y:y-0.03*h, w:0.24*w, h:0.05*h}); }
-    else if(it.type==="counterweight"){ list.push({x:x-0.02*w, y:y-0.02*h, w:0.12*w, h:0.05*h}); }
-    else if(it.type==="badge"){ list.push({x:it.align==="right"?x-0.24*w:x, y:y-0.01*h, w:0.26*w, h:0.06*h}); }
-  }
-  return list;
-}
+// ── TEXT-ELEMENT PLACEMENT SOLVER (docs/element-placement-spec.md §2; PRD §B1) ──
+// placeTextElement, the date/eyebrow/badge element classes, the candidate ladders,
+// dateFurnitureObstacles and mergeSafeMargins now live in the pure, DOM-free module
+// lib/element-placement-solver.mjs (PRD-B1: "date and eyebrow placement can be tested
+// without DOM or Canvas painting; Canvas receives final coordinates, font choice, ink
+// and optional backing only"). The class-config wrappers below inject the live brand
+// fonts F (mutated by applyBrandFonts) at call time — byte-identical to the inline
+// version. placeElement (the logo path, above) dispatches to the imported
+// placeTextElement when cfg.escalate is present.
+const dateElementClass    = (preferredPx, opts) => makeDateClass(preferredPx, F, opts);
+const eyebrowElementClass = (preferredPx, opts) => makeEyebrowClass(preferredPx, F, opts);
+const badgeElementClass   = (preferredPx)       => makeBadgeClass(preferredPx, F);
 
 /* ── Per-zone text-COLOUR + backdrop decision (spec §2/§3/§5) ──
    Deterministic rule so the auto text colour and the auto backdrop AGREE for the
@@ -4307,20 +4165,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           if(_f&&_g&&_f.confidence>=0.35){ const fxC=_g.cx+(_f.fx-0.5)*_g.dw, fyC=_g.cy+(_f.fy-0.5)*_g.dh, _fr=0.18*Math.min(w,h); _focalBoxE={x:fxC-_fr,y:fyC-_fr,w:_fr*2,h:_fr*2}; } }catch(_){}
         }
         const _psE=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
-        const safLE=_psE?Math.max(sm.l,_psE.left):sm.l, safRE=_psE?Math.max(sm.r,_psE.right):sm.r,
-              safTE=_psE?Math.max(sm.t,_psE.top):sm.t,  safBE=_psE?Math.max(sm.b,_psE.bottom):sm.b;
-        const alignXE=(bw)=> ebAlign==="center"?heroBox.x+(heroBox.w-bw)/2 : ebAlign==="right"?heroBox.x+heroBox.w-bw : heroBox.x;
-        const candsE=[];
-        // The eyebrow's art-directed home is ABOVE the hero; then the top edge corners /
-        // centre; then below the hero / caption; then the bottom corners (a quiet footer eyebrow).
-        candsE.push({id:"above-hero", at:(bw,bh)=>({x:alignXE(bw), y:heroBox.y-ebGap-bh})});
-        candsE.push({id:"corner-tl", at:()=>({x:safLE*w, y:safTE*h})});
-        candsE.push({id:"corner-tr", at:(bw)=>({x:(1-safRE)*w-bw, y:safTE*h})});
-        candsE.push({id:"top-center", at:(bw)=>({x:(w-bw)/2, y:safTE*h})});
-        candsE.push({id:"below-hero", at:(bw)=>({x:alignXE(bw), y:heroBox.y+usedH+ebGap})});
-        if(supportText&&supBox) candsE.push({id:"below-support", at:(bw)=>({x:alignXE(bw), y:supBottomE+ebGap})});
-        candsE.push({id:"corner-bl", at:(bw,bh)=>({x:safLE*w, y:(1-safBE)*h-bh})});
-        candsE.push({id:"corner-br", at:(bw,bh)=>({x:(1-safRE)*w-bw, y:(1-safBE)*h-bh})});
+        // Safe-margin merge + eyebrow candidate ladder now come from the pure solver
+        // (lib/element-placement-solver.mjs) — same order, same math as the extracted
+        // painter (above-hero → top corners/centre → below-hero/caption → bottom corners).
+        const _smE=mergeSafeMargins(sm,_psE);
+        const safLE=_smE.l, safRE=_smE.r, safTE=_smE.t, safBE=_smE.b;
+        const candsE=buildEyebrowAnchors({ heroBox, supBox:!!(supportText&&supBox), supBottom:supBottomE, ebGap, usedH, safe:_smE, w, h, align:ebAlign });
         const _ebOff=roleOff("eyebrow");
         const solE=placeElement({align:ebAlign},{
           w,h, cfg:eyebrowElementClass(ebPref),
@@ -4477,7 +4327,6 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // relational + grid candidates through the register-escalation ladder; a clean
         // landing sets dateDrawn, a refusal leaves it null (honest dead-role → offer).
         if(!dateDrawn){
-          const alignX=(bw)=> dAlign==="center"?heroBox.x+(heroBox.w-bw)/2 : dAlign==="right"?heroBox.x+heroBox.w-bw : heroBox.x;
           const heroObsBox={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(usedH,fontMeta.headline||heroBox.h*0.4)};
           // Project the support's ACTUAL drawn bottom: it paints AFTER the date and its
           // reflow box can be shorter than the fitted (possibly multi-line) caption, so a
@@ -4504,17 +4353,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           // role landing there trips safe-area-text, so a corner date must clear it too
           // (the same zone logoCenter shifts the logo out of).
           const _ps=(typeof PLATFORM_SAFE!=="undefined")?PLATFORM_SAFE[dimId]:null;
-          const safL=_ps?Math.max(sm.l,_ps.left):sm.l, safR=_ps?Math.max(sm.r,_ps.right):sm.r,
-                safT=_ps?Math.max(sm.t,_ps.top):sm.t,  safB=_ps?Math.max(sm.b,_ps.bottom):sm.b;
-          const cands=[];
-          cands.push({id:"below-hero", at:(bw)=>({x:alignX(bw), y:heroBox.y+usedH+dGap})});
-          if(supBelow) cands.push({id:"below-support", at:(bw)=>({x:alignX(bw), y:supBottom+dGap})});
-          cands.push({id:"above-hero", at:(bw,bh)=>({x:alignX(bw), y:heroBox.y-dGap-bh})});
-          cands.push({id:"corner-bl", at:(bw,bh)=>({x:safL*w, y:(1-safB)*h-bh})});
-          cands.push({id:"corner-br", at:(bw,bh)=>({x:(1-safR)*w-bw, y:(1-safB)*h-bh})});
-          cands.push({id:"corner-tl", at:()=>({x:safL*w, y:safT*h})});
-          cands.push({id:"corner-tr", at:(bw)=>({x:(1-safR)*w-bw, y:safT*h})});
-          cands.push({id:"bottom-center", at:(bw,bh)=>({x:(w-bw)/2, y:(1-safB)*h-bh})});
+          // Safe-margin merge + date candidate ladder from the pure solver
+          // (lib/element-placement-solver.mjs) — same order, same math as the extracted
+          // painter (below-hero → below-support → above-hero → safe corners → bottom-centre).
+          const _smD=mergeSafeMargins(sm,_ps);
+          const safL=_smD.l, safR=_smD.r, safT=_smD.t, safB=_smD.b;
+          const cands=buildDateAnchors({ heroBox, usedH, dGap, supBelow, supBottom, safe:_smD, w, h, align:dAlign });
           const measure=(px,face,weight)=>{ ctx.font=`${weight} ${px}px ${face}`; return { w: ctx.measureText(dTxt).width, h: px*1.28 }; };
           const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
           const sol=placeElement({align:dAlign},{
