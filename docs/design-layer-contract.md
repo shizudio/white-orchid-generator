@@ -3,7 +3,7 @@
 Status: **RATIFIED DIRECTION; phased implementation**  
 Owner: product design + design engine  
 Ratified: 2026-07-21  
-Current implementation checkpoint: **DLC-2 / DLC-3 — constraint and structural-layout migration underway**
+Current implementation checkpoint: **DLC-5 / DLC-6 — readiness enforcement and renderer cleanup underway**
 
 This is the canonical contract for what a design layer is, which layer owns each
 responsibility, how layers negotiate space, and how violations are prevented, repaired,
@@ -428,6 +428,10 @@ The migration is a strangler, not a visual rewrite.
   enforcement/severity/remedy schema; advice ledger consumes rule IDs.
   - Started: existing local/AI findings now receive a stable contract `ruleId` plus
     policy severity, enforcement and remedy metadata during canonical normalization.
+  - Shared preflight is now executable: layout relationships produce rule-backed
+    violations, evaluated/deferred relationship lists and a clear/warning/blocked status.
+    The result travels separately on the render model/result while legacy post-render
+    checks migrate, preventing duplicate user-facing advice.
 - [ ] **DLC-3 — Structural layout:** layout capability/zone schema; structural shapes use
   explicit media host; retire newest-frame and array-order semantics.
   - Started: the Shapes inspector groups structural and decorative roles, identifies the
@@ -437,16 +441,227 @@ The migration is a strangler, not a visual rewrite.
     structural deletion surfaces its consequence before applying.
   - The newest-frame rule remains only in the one-time legacy migration adapter, where it
     preserves old saved output. Runtime rendering is order-independent.
-  - Remaining: add layout capability/zone relationships and migrate structural collision
-    handling out of renderer-local branches.
+  - Complete foundation: `lib/layout-contract.mjs` derives normalized, format-specific
+    content, media, structural and mark zones plus containment, reading-order and clearance
+    relationships. The render model exposes this immutable intent without persisting a
+    second writable geometry copy.
+  - Platform occlusion bands are now protected format-owned zones with explicit content/
+    mark avoidance relationships.
+  - Protected media subjects are now first-class media-owned zones. Actual focal geometry
+    is projected through the rendered crop; content and marks receive distinct canonical
+    collision rules, and logo remedies reuse the measured evidence.
+  - Structural shapes now declare surface boundaries. Post-render seam-straddling evidence
+    comes from the shared constraint result instead of a renderer-local counter.
+  - Measured subject and structural-boundary conflicts now produce versioned
+    `finding/apply-remedy` commands. Commands carry their rule, target, evidence and
+    execution patch; they require explicit approval and run through the existing undo
+    pipeline. They are never exposed to the silent harmonizer as automatic fixes.
+  - Non-structural shapes are now decoration zones that yield to content, marks and
+    protected subjects. Post-render validation samples the placed asset's actual alpha,
+    avoiding bounding-box false positives for hollow outlines and line art. Conflicts
+    offer explicit move, remove and direct-edit actions anchored to the exact shape.
+  - Complete: protected-subject conflicts now offer crop reframing as an explicit,
+    undoable alternative to moving content or marks. Crop commands retain the active
+    format/window evidence and never run without approval.
+  - Structural evidence assembly, focal projection and decoration relationship tests now
+    live outside the renderer. Photo-seam and decoration compose-or-avoid decisions have
+    also moved into `editorial-obstacle-solver.mjs`: the renderer supplies measured boxes
+    but no longer owns those collision rules. Headline fit, width-fill intent, orphan
+    repair and complete-or-absent shrinking now live in
+    `editorial-typography-solver.mjs`, with Canvas used only as a measurement adapter.
+    The same solver now owns headline-to-support rhythm, readable body floors, eyebrow
+    yielding and safe-bottom clamping. `editorial-layout-solver.mjs` composes these rules
+    behind one paint-ready result; `Generator.jsx` now supplies Canvas measurement
+    adapters instead of owning the legacy reflow candidate generator. Remaining: move
+    painter-specific placement branches behind the layout solver boundary.
+  - Archetype format cascading, variant selection and materialization are now pure policy
+    in `archetype-layout-policy.mjs`. The renderer consumes materialized intent and no
+    longer translates special archetype names into structural frame policy itself.
+  - Format/platform safe-margin merging, normalized role clamping and intentional photo
+    bleed now live in `format-placement-policy.mjs`. Missing-role synthesis and focal-aware
+    message-pill placement are pure layout decisions in `editorial-placement-policy.mjs`,
+    keeping those special cases out of Canvas paint code.
+  - Schedule-row parsing/rhythm is now a paint-ready placement plan, and the caption's
+    complete-or-absent decision is centralized in `editorial-support-policy.mjs`. The
+    message-pill, unified photo backdrop and final caption draw now consult the same line
+    survival contract instead of maintaining three subtly different calculations.
 - [ ] **DLC-4 — Layer contracts:** migrate content/typography, media, logo, surfaces and
   decoration to shared rules; remove duplicated local constants.
+  - Started: `lib/content-typography-contract.mjs` derives authored semantic roles,
+    requiredness, readable-size floors and editorial role gaps from the canonical design
+    document. Post-render measurements evaluate that same contract and feed one advisor
+    path for content loss, type size and spacing.
+  - Decoration paint collision geometry is now a pure alpha-aware policy module; browser
+    canvas decoding remains a thin adapter. Hollow outlines no longer collide through
+    their transparent centres.
+  - Media and brand-mark intent now share a versioned capability. It declares which
+    media windows require cover crop, the resolved logo asset/pins/placement, the 3:1
+    official-mark contrast floor and intrinsic clear space. Measured under-coverage,
+    low contrast and edge proximity feed the same advisor/readiness voice.
+  - Background and composed-surface intent now share a versioned capability. It records
+    the canonical paint stack plus requested, resolved, measured and pinned color/
+    treatment evidence. Duplicate local treatments and explicitly requested bands that
+    conflict with structural shapes use stable rules and actionable readiness findings;
+    typography remains the sole owner of contrast scoring, avoiding duplicate warnings.
+    A pinned text color is resolved before automatic surface choices and a contract
+    assertion blocks any future renderer path that silently paints a different ink.
+  - Decoration now has a separate versioned capability; structural shapes never enter
+    its budgets. It validates approved assets, per-format instance density, alpha-aware
+    painted area and explicit accent-color count. Cross-layer overlap remains solely in
+    the layout constraint engine. System-owned decoration is the first removable target;
+    owner-pinned decoration receives an edit path and is never silently deleted or
+    recolored.
 - [ ] **DLC-5 — Policy/readiness:** separate technical/accessibility/brand/channel/
   approval states; permissioned exceptions; no blocking issue with only “Keep it.”
+  - Started: `lib/readiness-policy.mjs` classifies canonical findings into technical,
+    accessibility, brand, channel and approval states. Every blocker records whether a
+    patch, typed command, policy remedy or direct-edit path actually exists, making
+    “blocker with only Keep it” a testable release failure rather than a UI accident.
+  - Acknowledgement and approval are now distinct policy states. Reviewing a blocker
+    hides repeated prompts but leaves the format blocked and explicitly labelled
+    “Approval required”; it can no longer receive a ready checkmark. Acknowledgements
+    match the exact issue/property fingerprint, so a changed problem resurfaces.
+  - AI and deterministic warnings remain visible review notes but no longer make a
+    format fail readiness. Checklist merges always recompute readiness from blocking
+    severity instead of treating any issue row as a blocker.
+  - Export now consumes this policy state as its single authorization source. The
+    current format can export when its own blocking policy clears; exporting the set
+    requires every format to clear. A blocked attempt selects the affected format for
+    repair, and an acknowledged blocker stays blocked until explicitly approved.
 - [ ] **DLC-6 — Renderer/API cleanup:** extract remaining rule and renderer branches from
   `Generator.jsx`; assistant emits semantic commands; adapters own compatibility.
+  - Started: semantic logo anchors, sizes, platform-safe placement and photographic
+    surface-contrast scoring now live in pure policy modules. `Generator.jsx` supplies
+    decoded pixels and paints the chosen result; it no longer owns those decisions.
+  - Post-render composition now runs through one pure orchestrator that evaluates every
+    layer contract and attaches normalized audit evidence. Shared photo geometry and
+    decoration alpha sampling sit behind explicit canvas adapters, so painting and
+    validation no longer maintain competing implementations.
+  - Direct assistant changes now compile into ordered `DesignDocument` commands before
+    they reach editor state. Post type is applied before layout materialization; explicit
+    content, palette, treatment and type-size overrides apply afterward. Asset lookup,
+    geometry, pinning and generation side effects remain named compatibility operations
+    until they can be represented losslessly as semantic commands.
+  - Format placement inheritance is now a pure policy: role drags inherit from master
+    until a format override exists, while logo defaults remain format-native unless the
+    active format has an explicit placement. Canvas rendering and inspector summaries
+    consume the same resolution result.
+  - Composite logo changes now compile into atomic command groups that preserve the
+    distinction between system defaults, master pins and per-format user overrides.
+    Photo frames compile to media commands, and shape clear/add workflows operate on one
+    evolving collection so a replacement cannot resurrect stale layers. Inspector
+    selection is declared as an effect of the workflow rather than embedded in policy.
+  - Organic structural seams are evaluated against decoded shape paint, not their
+    transparent bounding rectangles. Stress/calibration renders also derive contracts
+    from their temporary archetype document instead of leaking live structural state.
+    Media-source workflows now separate serialisable source commands from video/decode
+    effects, with cancellation preventing a stale decode from restoring removed media.
+  - Archetype materialization is now a pure composite workflow instead of a setter
+    cluster. It resets only system-owned palette, responsive typography, media crop,
+    motif and furniture state; user-added shapes survive, while an edited layout frame
+    acts as a pin and suppresses a competing frame from the incoming archetype.
+  - Undo/redo restores one canonical document atomically, then performs only declared
+    view/decode effects. Photo reframing likewise pins and updates its transform in one
+    workflow after the undo boundary; direct gestures can no longer leave an invisible
+    crop pin behind, and frame cover floors are stored in the document render truth.
+  - Complete-design templates now resolve to one final replacement document before
+    entering editor state. Current templates retain saved ownership pins exactly;
+    legacy templates reuse archetype materialization, so user shapes cannot be dropped
+    by a competing motif migration. Format, export, selection, decode and acknowledgement
+    changes are explicit effects rather than a second template-specific setter cascade.
+    A user-triggered template switch captures one undo snapshot after confirmation;
+    session/bootstrap restores still apply without polluting user history.
+  - Single-shape update, media-host promotion and deletion now share one ownership-aware
+    workflow; generated layout pins and per-format touched state land atomically with
+    geometry/style changes. Furniture edits validate brand tokens centrally. Text-box
+    and individual-role drags compile directly to responsive typography commands, and
+    client opacity/field-color edits now use the semantic patch compiler.
+  - Patch history now commits only after at least one validated mutation lands. Invalid,
+    rejected, or echoed no-op AI patches no longer create dead Undo entries or erase Redo.
+  - Shape and typography resets now enter through the same semantic patch boundary as
+    drag, resize and inspector edits. Reset is authoritative when a contradictory update
+    is supplied; format shape resets clear both geometry and touched ownership metadata,
+    and every successful reset participates in the normal Undo/harmonization lifecycle.
+  - Whole-format reset now uses one shared definition of an owner-authored override and
+    one atomic command across typography, media, logo and shapes. Generated responsive
+    shape geometry does not falsely advertise an override; a genuine reset clears both
+    local shape geometry and its ownership marker and a no-op reset creates no history.
+  - Composite workflow reporting now trusts reducer results instead of planner intent.
+    Equivalent typography, media, logo, shape and furniture commands return no changed
+    paths, so manual and AI summaries, Undo/Redo, and harmonization all share the same
+    semantic definition of a real mutation.
+  - Legacy and cross-device shape collections now enter through an explicit import
+    workflow: bootstrap restoration stays history-neutral, while a user-triggered draft
+    load is undoable. Development verification hooks use the same patch vocabulary.
+  - Typography reset, media-kind selection, landing image handoff, first-shot correction,
+    and automatic logo accessibility now all use semantic patches. Generated image and
+    layout state share one undo boundary; system-owned accessibility changes remain
+    unpinned, selection-preserving, and history-neutral.
+  - The document controller's flat writable setter facade has been deleted. Production,
+    import and verification callers now enter through patches/workflows; raw command
+    dispatch remains only inside the controller and the central patch executors, plus
+    pipeline-owned authorship and explicit-pin metadata commands.
+  - Command/effect execution now lives outside `Generator.jsx` behind one stable
+    orchestration hook and a pure executor. Effects still run when a document command is
+    a no-op (for example, re-decoding a restored source), stale media decodes are
+    cancelled, and synchronous or asynchronous decode failures resolve safely to an
+    empty decoded asset instead of becoming unhandled runtime errors.
+  - Transient workflow effects now have one named vocabulary and executable payload
+    schemas. Composite planners cannot invent parallel selection/decode/view mutations;
+    the executor filters malformed or unknown effects, reports them during development,
+    and continues applying valid document commands without crashing the editor.
+  - New Undo/Redo entries now store one detached canonical `DesignDocument` plus only
+    the active format and logo-tab view context. The previous duplicated flat snapshot
+    fields are no longer a competing history model; legacy flat snapshots remain a
+    read-only migration input for old sessions. The New post action now constructs a
+    canonical blank document directly instead of writing and immediately re-reading a
+    legacy flat payload.
+  - Incoming patch normalization and AI copy fitting now run in a pure preparation
+    module before command planning. Retired values are migrated without mutating the
+    caller, owner/UI copy stays verbatim, and incomplete or dangling-word trims are
+    rejected by a tested complete-or-absent rule instead of inline component branches.
+  - Compiled direct commands and composite workflow groups now share the same applied-
+    field law: planner intent is never enough; a field is reported only when the
+    canonical reducer returns a changed path. Invalid entries remain safe no-ops.
+  - UI patch interaction classification is now pure policy beside patch preparation.
+    Continuous geometry edits bypass discrete canvas animation, while the manual
+    harmonizer receives one deduplicated set of touched layer owners for its restraint.
+  - The ordered logo, shape, typography, format-reset, photo, media and furniture
+    workflow plan now lives in one pure orchestration module. `Generator.jsx` supplies
+    current render context once and executes the returned groups; it no longer owns a
+    parallel sequence of per-layer planner branches.
+  - Archetype re-materialization and format switching are now resolved as explicit,
+    tested patch transitions. Variant changes and patch-authored copy context are
+    decided outside the component before the transition is performed.
+  - Patch completion policy now derives selection cleanup, silent-harmonizer arming,
+    copy authorship and history eligibility from reducer-confirmed applied fields in one
+    pure step. The component performs those declared outcomes without re-deciding them.
+  - Command-path collection now has a guaranteed cleanup boundary. A planner, decoder,
+    or reducer exception cannot leak the failed patch's collector into later edits or
+    corrupt nested verification reporting.
+  - Archetype-to-layer materialization now lives in a pure module. Responsive structural
+    frames, motif layers, typography geometry, photo treatment and sanctioned palette
+    output are independently testable; random IDs and canvas geometry are injected.
+  - Inspector render-truth verification now lives in a dedicated hook with a testable
+    pixel-signature adapter. Deferred paint comparison, dead-control notes and feedback
+    capture no longer expand the central patch pipeline component.
+  - Undo/Redo traversal and snapshot restoration now live behind one history hook and a
+    pure stack-step planner. React state updates perform the plan; no updater contains
+    restoration side effects, and both directions use the same bounded semantics.
+  - Rapid manual edits now use a dedicated burst controller. The first validated edit
+    captures one canonical history entry, subsequent drag/typing updates merge touched
+    layer ownership, Redo clears once, and delayed harmonization receives one tick.
+  - Copy-authorship stamps and explicit palette pins now enter through named workflows.
+    `Generator.jsx` has no direct `dispatchDesignCommand` calls; every document mutation
+    reaches the reducer through the central semantic/workflow executors.
 - [ ] **DLC-7 — Release gate:** multi-format fixtures, migration round trips, cross-layer
   collision matrix, mobile/direct manipulation, resident journeys and visual diffs.
+  - Started: six-format semantic contract fixtures and pure mobile half-sheet viewport
+    tests now guard platform safe areas, content/typography, media/logo, surface and
+    decoration validation, selection visibility and undo-control placement.
+  - The executable cross-layer collision matrix now proves that each competing pair
+    resolves to exactly one canonical rule owner (format, layout, media, logo,
+    structure, or decoration), preventing duplicate or contradictory advice.
 
 ## 22. Definition of done
 
