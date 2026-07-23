@@ -41,7 +41,7 @@ import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions,
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
 import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
-import { contrastAtExtremes, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
+import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
 import { useFormatPreviewQueue } from "@/hooks/useFormatPreviewQueue";
@@ -3712,7 +3712,15 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // (no jump) even when the auto focal crop, not imgT, produced the frame.
       const _recPhotoWin=(rect,kind,sideBand,eff)=>{ if(!mediaObj) return; const rec={x:rect.x,y:rect.y,w:rect.w,h:rect.h,kind,sideBand:!!sideBand,eff:eff?{cx:eff.cx,cy:eff.cy,zoom:eff.zoom,rotation:eff.rotation||0}:null}; _photoWin=rec;renderTruth.photoBox=rec; };
       // 1. Base field or full-bleed photo (photoTreatment materialized as state).
-      if(mat.fullBleed && mediaObj){
+      // (Symptom 6 — client ruling 2026-07) When a FRAME SHAPE hosts the media, the
+      // canvas background must fall back to the single field colour, never repeat the
+      // photo. A full-bleed archetype that ALSO carries a media-hosting frame (a user
+      // added a frame shape, say) would otherwise paint the photo twice — once
+      // full-bleed and once inside the frame. The frame branches below (card / petal /
+      // shape / frame-layer jobs) own the photo in that case; the base stays a clean
+      // field. An explicitly pinned background is already honoured through fieldColor.
+      const frameHostsMedia=!!mediaObj&&(frame.type==="card"||frame.type==="petalMask"||frame.type==="shapeMask"||frameLayers.length>0);
+      if(mat.fullBleed && mediaObj && !frameHostsMedia){
         ctx.fillStyle=withAlpha(fieldColor,bgAlpha); ctx.fillRect(0,0,w,h);
         if(mat.thinBorder){
           const p=clampBox(mat.photoRegion)||{x:0.03*w,y:0.03*h,w:0.94*w,h:0.94*h};
@@ -8813,7 +8821,20 @@ function InspectorWorkspace({ workspace }) {
         {mediaObj&&` Estimated minimum contrast ${(textColorId==="auto"?textMinContrast:textContrast).toFixed(1)}:1.`}
       </div>
       <div style={{fontSize:10,color:B.burnham,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>{accessibilityNote}</div>
-      {textColorId!=="auto"&&textContrast<4.5&&<div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>Low contrast on this image. Try Auto or White Smoke.</div>}
+      {textColorId!=="auto"&&textContrast<4.5&&(()=>{
+        // (Symptom 3 — advisor honesty, law 6/M4) NEVER recommend the ink that is
+        // already active. Compute which options measurably improve contrast on THIS
+        // surface and name only those; if none reach the floor, offer band / darker
+        // area / a different photo honestly (band dropped under the §6a shape rule).
+        const remedy=contrastRemedy({
+          currentInkId:textColorId,
+          autoInkId:suggestedTextColor,
+          surfaceLuminance:textSurfaceLuminance,
+          options:TEXT_COLOR_OPTIONS.filter(o=>o.id!=="auto").map(o=>({id:o.id,label:o.label,luminance:hexLuminance(B[o.id])})),
+          bandAvailable:!hasFrameLayer,
+        });
+        return <div role="note" style={{fontSize:11,color:B.tangerine,marginTop:5,fontFamily:F.body}}>{remedy.message}</div>;
+      })()}
 
       <MoreFold id="text">
         {() => (
