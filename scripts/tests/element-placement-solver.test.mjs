@@ -263,6 +263,41 @@ test("ELEMENT_SIZE_STEPS / elementStepPx — S/M/L multipliers within range (squ
   assert.equal(elementStepPx(100, "M", "wide"), 100);   // M pinned across families
 });
 
+/* ── Font Ruling B — runtime register threading (typographyConfig) ─────────────── */
+
+test("class builders — no typographyConfig degrades to the White Orchid default (byte-identical)", () => {
+  // The default config maps 1:1 to the old hardcodes: serif→F.title, heavySans/eyebrow/
+  // badge→F.subtitle, body→F.body, and every default rung weight is already in range.
+  assert.deepEqual(makeDateClass(48, F).escalate.rungs[0], { face: F.title, weight: 300 });
+  assert.deepEqual(makeEyebrowClass(40, F).escalate.rungs[0], { face: F.subtitle, weight: 400 });
+  assert.deepEqual(makeBadgeClass(30, F).escalate.rungs[0], { face: F.subtitle, weight: 600 });
+  assert.deepEqual(makeHeadingClass(80, F).escalate.rungs[0], { face: F.title, weight: 400 });
+  assert.deepEqual(makeHeadingClass(80, F, { register: "heavySans" }).escalate.rungs[0], { face: F.subtitle, weight: 700 });
+  assert.deepEqual(makeSupportClass(40, F).escalate.rungs[0], { face: F.body, weight: 400 });
+});
+
+test("class builders — a brand typographyConfig re-points a register's FACE", () => {
+  // Re-point the serif register's role from heading→body: the date/heading first rung now
+  // paints the body face instead of F.title, proving the config threads into the render.
+  const cfg = { registers: { serif: { role: "body", weightRange: [300, 700] } } };
+  assert.equal(makeDateClass(48, F, { typographyConfig: cfg }).escalate.rungs[0].face, F.body);
+  assert.equal(makeHeadingClass(80, F, { typographyConfig: cfg }).escalate.rungs[0].face, F.body);
+  // an untouched register keeps its default face
+  assert.equal(makeEyebrowClass(40, F, { typographyConfig: cfg }).escalate.rungs[0].face, F.subtitle);
+});
+
+test("class builders — a narrowed weightRange CLAMPS the rung's escalation weight", () => {
+  // Narrow the body register to [400,500]: the support ladder's 600/700 rungs clamp to 500.
+  const cfg = { registers: { body: { role: "body", weightRange: [400, 500] } } };
+  const rungs = makeSupportClass(40, F, { typographyConfig: cfg }).escalate.rungs;
+  assert.equal(rungs[0].weight, 400);   // in range → unchanged
+  assert.equal(rungs[1].weight, 500);   // 600 clamped to hi
+  assert.equal(rungs[2].weight, 500);   // 700 clamped to hi
+  // resolveElementClassConfig threads opts (incl. typographyConfig) to the builder + cta.
+  const badge = resolveElementClassConfig("cta", { preferredPx: 30, F, opts: { typographyConfig: cfg } });
+  assert.ok(badge.escalate.rungs[0].weight >= 400);
+});
+
 test("dateFurnitureObstacles — projects rule/index/counterweight/badge boxes; junk-safe", () => {
   const mat = { furniture: [
     { type: "rule", x: 0.1, y: 0.2, w: 0.3 },
