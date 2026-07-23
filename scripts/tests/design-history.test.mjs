@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDesignDocumentV1 } from "../../lib/design-document.mjs";
-import { createDesignHistorySnapshot, createNewPostHistorySnapshot, planDesignHistoryStep } from "../../lib/design-history.mjs";
+import { createDesignHistorySnapshot, createNewPostHistorySnapshot, planDesignHistoryStep, planManualEditBurstStep } from "../../lib/design-history.mjs";
 
 test("history snapshots contain one canonical document and minimal view context", () => {
   const document=createDesignDocumentV1({
@@ -47,4 +47,52 @@ test("history traversal plans one bounded stack step",()=>{
   const step=planDesignHistoryStep({stack:["previous","older"],currentSnapshot:"current",depth:5});
   assert.deepEqual(step,{snapshotToRestore:"previous",remainingStack:["older"],oppositeEntry:"current",depth:5});
   assert.equal(planDesignHistoryStep({stack:[],currentSnapshot:"current"}),null);
+});
+
+test("burst opens a new undo entry for the first edit of a burst",()=>{
+  const plan=planManualEditBurstStep({pending:false,touchedTags:[],tags:["text"]});
+  assert.equal(plan.startNewEntry,true);
+  assert.deepEqual(plan.nextTouched,["text"]);
+});
+
+test("burst folds a continuation that shares an interaction kind (typing, dragging)",()=>{
+  // typing a heading: patch after patch tagged "text" collapses into ONE undo entry
+  const plan=planManualEditBurstStep({pending:true,touchedTags:["text"],tags:["text"]});
+  assert.equal(plan.startNewEntry,false);
+  assert.deepEqual(plan.nextTouched,["text"]);
+});
+
+test("burst splits a distinct-kind action landing inside the debounce window",()=>{
+  // BUG 1: a colour pick right after a headline edit must be its own undo step,
+  // not folded away — otherwise quick distinct edits read as "undo only works once".
+  const plan=planManualEditBurstStep({pending:true,touchedTags:["text"],tags:["colour"]});
+  assert.equal(plan.startNewEntry,true);
+  assert.deepEqual(plan.nextTouched,["colour"]);
+});
+
+test("burst treats a multi-kind edit that overlaps the open burst as a continuation",()=>{
+  const plan=planManualEditBurstStep({pending:true,touchedTags:["text"],tags:["text","photo"]});
+  assert.equal(plan.startNewEntry,false);
+  assert.deepEqual(plan.nextTouched.sort(),["photo","text"]);
+});
+
+test("burst never splits on an untagged edit",()=>{
+  const plan=planManualEditBurstStep({pending:true,touchedTags:["colour"],tags:[]});
+  assert.equal(plan.startNewEntry,false);
+  assert.deepEqual(plan.nextTouched,["colour"]);
+});
+
+test("a five distinct-action sequence yields five undo entries",()=>{
+  // Simulate the client repro: five distinct edits inside one debounce window.
+  const sequence=[["text"],["colour"],["logo"],["photo"],["overlay"]];
+  let pending=false;
+  let touched=[];
+  let entries=0;
+  for(const tags of sequence){
+    const plan=planManualEditBurstStep({pending,touchedTags:touched,tags});
+    if(plan.startNewEntry)entries++;
+    pending=true;
+    touched=plan.nextTouched;
+  }
+  assert.equal(entries,5);
 });
