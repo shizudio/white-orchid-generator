@@ -45,6 +45,30 @@ test("variant rings support positive and negative cycling", () => {
   assert.equal(resolveArchetypeVariant(ARCHETYPE, 2).shapeId, "shape-1");
 });
 
+test("a saved design referencing a RETIRED variant index degrades to the default variant, never crashes", () => {
+  // (Client ruling 2026-07-23) The 4th shape_cutout variant (the dusty-pink
+  // orchid-petal) was removed. Designs saved with archVariant:3 must still render:
+  // the ring is now length 3, so index 3 wraps modulo back to variant 0 — a fully
+  // defined variant, never `undefined`. This locks that graceful-degradation contract.
+  const THREE_VARIANT_ARCH = { ...ARCHETYPE, variants: ARCHETYPE.variants.concat(
+    { bg: "sage", ink: "burnham", shapeId: "shape-3", klass: "light" },
+    { bg: "whiteSmoke", ink: "burnham", shapeId: "shape-1", klass: "light" },
+  ) };
+  const staleIndex = 5; // one past the last valid index (0..2 after a retirement)
+  const resolved = resolveArchetypeVariant(THREE_VARIANT_ARCH, staleIndex);
+  assert.ok(resolved, "resolves to a defined variant object, not undefined");
+  assert.equal(typeof resolved.bg, "string", "field colour is present");
+  assert.equal(typeof resolved.shapeId, "string", "shape is present");
+  // Index 5 modulo 4 → variant 1; the point is it lands on a REAL variant.
+  assert.deepEqual(
+    { bg: resolved.bg, shapeId: resolved.shapeId },
+    { bg: THREE_VARIANT_ARCH.variants[staleIndex % THREE_VARIANT_ARCH.variants.length].bg,
+      shapeId: THREE_VARIANT_ARCH.variants[staleIndex % THREE_VARIANT_ARCH.variants.length].shapeId },
+  );
+  // A materialization through the retired index must not throw either.
+  assert.doesNotThrow(() => materializeArchetypeLayout(THREE_VARIANT_ARCH, "twitter", staleIndex));
+});
+
 test("shape-cutout materialization produces structural intent, not paint instructions", () => {
   const result = materializeArchetypeLayout(ARCHETYPE, "twitter", 1);
   assert.deepEqual(result.photoFrame, {

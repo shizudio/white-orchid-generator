@@ -900,11 +900,16 @@ const ARCHETYPES = [
     // fails with BOTH brand inks, so it is deliberately absent; born-clean rule).
     // Each variant pairs a field with a different brand shape so the ring rotates
     // BOTH the field and the silhouette.
+    // (Client ruling 2026-07-23) The dusty-pink orchid-petal variant was RETIRED —
+    // the client judged that flat-glyph orchid the wrong mark. A saved design that
+    // referenced its index (3) degrades gracefully: resolveArchetypeVariant wraps
+    // the stale index modulo the shorter ring back to variant 0 (never undefined).
+    // NB: the orchid-petal ASSET itself stays in the catalog — it is the Petal
+    // Window archetype's photo mask (petalMask) and a selectable brand shape.
     variants:[
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",      klass:"dark", shapeId:"shape-1"},
       {bg:"sage",      ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"shape-2"},
       {bg:"whiteSmoke",ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"shape-3"},
-      {bg:"dustyPink", ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"orchid-petal"},
     ],
     photoTreatment:"warmGrade", heroRegister:"serif", caps:false, logoUse:"mark",
     suitedPostTypes:["photo_logo","texture_text","quote"], frequencyCap:0.12,
