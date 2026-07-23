@@ -101,18 +101,36 @@ Elements inherit master→byDim like all format-aware properties. Capacity diffe
     unplaced findings, born-clean), contract **25/25** (ledger invariant checker C green;
     new rule registered), mirror **10/10** (sabotage-proven), build green.
 
-- **Font Ruling B (configurable registers)** — ruling recorded 2026-07-23. Registers are
+- **Font Ruling B (configurable registers) — FULLY LANDED 2026-07-23.** Registers are
   brand-profile data; classes carry register allowlists; per-element register choice is a
-  sanctioned-only pin. Foundation landed 2026-07-23 (the `typography_config` brand-profile
-  data model — `lib/typography-config.mjs` + `brand_kit.typography_config` column/seed + the
-  code fallback in `lib/brand-defaults.js`, all additive and NOT yet read by the renderer, so
-  the fingerprint/born-clean/arch-stress battery stays invariant — same Slice-1 additive
-  pattern). IN PROGRESS behind the foundation: threading the resolved register→family map
-  into the solver's class builders (element-placement-solver) via `applyBrandKit`; the
-  `content/set-element-register` command as the eleventh mirror surface; the element
-  inspector's sanctioned-only register switch; and the admin Typography section
-  (`app/admin/brand`). Those carry the render-identity + live-browser bar and are not yet
-  landed.
+  sanctioned-only pin. The five parts, each committed green:
+  - **Foundation** — the `typography_config` brand-profile data model (`lib/typography-config.mjs`
+    + `brand_kit.typography_config` column/seed + the `lib/brand-defaults.js` fallback), additive
+    and fingerprint-invisible (HEAD `8dfa961`).
+  - **P1 — runtime threading (`4a9b2ab`):** element-placement-solver's make*Class builders resolve
+    each escalation rung's face + sanctioned weight through the config (`registerFace` /
+    `registerWeightRange`); Generator threads the resolved config (`RESOLVED_TYPOGRAPHY`, from
+    `applyBrandKit`) into the class wrappers + the added-element painter. The White Orchid default
+    maps 1:1 to the old hardcodes → byte-identical (browser fingerprint SELF-BASELINE diff 0/144
+    against pre-change HEAD in a throwaway worktree, same Chromium).
+  - **P2 — register pin command + eleventh mirror surface (`41876de`):** `content/set-element-register`
+    (validated against `sanctionedRegistersForClass` — unsanctioned = no-op refusal), the `register`
+    field on the element model (default null), the painter honoring a sanctioned pin (heading
+    serif↔heavySans, caption date↔eyebrow), the PATCH grammar (`PATCH_OPTIONS.register` +
+    `editElements[].register`), and `mirror-check.sh` check 11 (register enum across
+    typography-config / text-elements / design-patch / assistant — sabotage-proven).
+  - **P3 — element inspector Style switch (`b7b171a`):** sanctioned-only register pills (hidden when
+    a class has one register); a pin that survives re-solve and is one undo step.
+  - **P4 — admin Typography-registers section (`1f8e776`):** per-register font-role dropdown + per-class
+    allowlist checkboxes (client min-1), PATCH through the admin-key-gated `/api/brand` route,
+    graceful when cloud absent.
+  - **P5 — live verify + this doc:** on the isolated test-hooks dist (keys unset, throwaway
+    `WO_ADMIN_KEY`), a heading register switch repaints serif (Romie) → heavySans (Syne),
+    persists through reload, and undo/clear returns to serif; the admin section renders and a
+    PATCH round-trips carrying `typography_config` (serif role remapped); a body element offers a
+    single sanctioned register (no switch). Final battery: unit 421/421, contract 25/25, mirror
+    11/11, build green, fingerprint self-baseline 0/144, arch-stress 114/114, born-clean 456/456,
+    legacy-dup 30/30.
 
 ### Outstanding checks (browser / real-key — Slice 4)
 

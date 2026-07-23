@@ -56,6 +56,18 @@ test("added content elements register stable per-uid scene identities at z-band 
   assert.equal(result.contentElements.find(e=>e.uid==="el_a").placed,true);
 });
 
+test("render result carries the painted face per content element (Font Ruling B render truth)", () => {
+  const result=createRenderResult({
+    dimensionId:"ig_square",width:1080,height:1080,
+    contentElements:[
+      { uid:"el_h", class:"heading", placed:true, box:{x:80,y:100,w:400,h:120}, face:"'Syne',sans-serif" },
+      { uid:"el_u", class:"caption", placed:false },   // unplaced → no face
+    ],
+  });
+  assert.equal(result.contentElements.find(e=>e.uid==="el_h").face,"'Syne',sans-serif");
+  assert.equal(result.contentElements.find(e=>e.uid==="el_u").face,null);
+});
+
 test("a solver-placed date is a first-class draggable text role, not the textBounds hero fallback", () => {
   // (ISSUE 2 / element-placement-spec §2) On the legacy layouts the date is now placed
   // through the solver and published in roleBounds alongside the hero. Once roleBounds is

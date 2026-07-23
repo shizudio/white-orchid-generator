@@ -6737,11 +6737,19 @@ export default function App() {
     };
     window.__woSetElementText = (uid, text) => dispatchDesignCommand({ type:"content/set-element-text", uid, value:text }).changedPaths;
     window.__woRemoveElement = (uid) => dispatchDesignCommand({ type:"content/remove-element", uid }).changedPaths;
-    window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins }));
+    // (Font Ruling B) register-pin dispatch + painted-face read, so a live check can prove the
+    // register switch actually REPAINTS (serif F.title → heavySans F.subtitle) and PERSISTS.
+    window.__woSetElementRegister = (uid, register) => dispatchDesignCommand({ type:"content/set-element-register", uid, value:register }).changedPaths;
+    // Generic design-command dispatch for live guards (test-hooks only) — e.g. set a solid
+    // field so a register switch is visible without the photo-legibility escalation firing.
+    window.__woDispatch = (command) => dispatchDesignCommand(command)?.changedPaths || [];
+    window.__woElementFaces = () => (renderResultRef.current?.contentElements || []).map(e => ({ uid:e.uid, class:e.class, placed:!!e.placed, face:e.face??null,
+      register:(_docElRef.current?.content?.elements || []).find(d => d.uid === e.uid)?.register ?? null }));
+    window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins, register:e.register??null }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
     window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
     window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
-    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
+    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
   }, [dispatchDesignCommand]);
   // Refs so the ledger console hooks (installed after runAiAudit is defined, below)
   // read the latest merged ledger + raw store each render without a TDZ on runAiAudit.
