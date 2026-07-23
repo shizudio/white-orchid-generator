@@ -403,6 +403,11 @@ function bumpStep(cur, dir) {
 const ELEMENT_CLASSES = ['heading', 'subheading', 'body', 'caption', 'cta'];
 // Plain labels a preschool teacher reads at a glance (never "CTA"/"eyebrow").
 const ELEMENT_CLASS_LABEL = { heading: 'heading', subheading: 'subheading', body: 'text', caption: 'caption', cta: 'button' };
+// (Font Ruling B) The sanctioned register vocabulary (eleventh mirrored surface). MIRRORS
+// lib/typography-config.mjs SANCTIONED_REGISTERS, lib/text-elements.mjs ELEMENT_REGISTERS and
+// lib/design-patch.js PATCH_OPTIONS.register — run mirror-check.sh after any edit. A register
+// only pins when sanctioned for the element's class (editElements[].register in the patch).
+const ELEMENT_REGISTERS = ['serif', 'heavySans', 'body', 'eyebrow', 'badge'];
 
 // PHOTO CHANGE / REPLACE (2.2) — "change the photo to X", "different picture",
 // "swap the image for Y", "the picture doesnt fit our vibe". This was the last-open

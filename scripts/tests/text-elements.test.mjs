@@ -44,11 +44,15 @@ test("normalizeTextElement fills the canonical shape and clamps an invalid class
     authorship: "owner",
     required: false,
     priority: DEFAULT_ELEMENT_PRIORITY_BY_CLASS.heading,
+    register: null,
     sourceRole: null,
     master: {},
     byDim: {},
     pins: {},
   });
+  // (Font Ruling B) a sanctioned register is preserved; junk falls back to null.
+  assert.equal(normalizeTextElement({ uid: "el_r", class: "heading", register: "heavySans" }).register, "heavySans");
+  assert.equal(normalizeTextElement({ uid: "el_r", class: "heading", register: "nope" }).register, null);
   const junkClass = normalizeTextElement({ class: "shout", text: "x" }, 3);
   assert.equal(junkClass.class, "body");
   assert.equal(junkClass.uid, "el_body_3");

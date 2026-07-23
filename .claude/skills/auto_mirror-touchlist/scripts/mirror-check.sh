@@ -29,6 +29,11 @@
 #      ELEMENT_CLASS_IDS == assistant/route.js ELEMENT_CLASSES. A class present in
 #      one surface but missing from another silently loses either AI addressability,
 #      belt routing, or apply/gene weighting.
+#  11  Register enum (Font Ruling B) 1:1 across FOUR surfaces: typography-config
+#      SANCTIONED_REGISTERS (canonical) == text-elements ELEMENT_REGISTERS == design-patch
+#      PATCH_OPTIONS.register == assistant/route ELEMENT_REGISTERS. A register present in one
+#      surface but missing from another silently loses config resolution, element-model
+#      validation, AI addressability, or belt/mirror recognition.
 # Plus a warn-level scan for inline brand hex literals outside lib/brand-defaults.js.
 #
 # Intentional exclusions live in .claude/mirror-allow.txt, one per line:
@@ -60,6 +65,7 @@ sess = read('lib/sessions.js')
 bd   = read('lib/brand-defaults.js')
 sql  = read('lib/schema.sql')
 te   = read('lib/text-elements.mjs')
+tc   = read('lib/typography-config.mjs')
 
 def block(src, pattern, name):
     m = re.search(pattern, src, re.S)
@@ -197,6 +203,29 @@ for _name, _set in CLASS_SURFACES:
     for extra in sorted(_set - _canon):
         fail(f"elementClass: '{extra}' appears in {_name} but is NOT in lib/text-elements.mjs ELEMENT_CLASSES — a phantom class. Remove it or add it to the canonical enum.")
 
+# ── Check 11: register enum 1:1 across four mirrored surfaces (Font Ruling B) ─────
+# typography-config SANCTIONED_REGISTERS is canonical; text-elements ELEMENT_REGISTERS,
+# design-patch PATCH_OPTIONS.register and assistant/route ELEMENT_REGISTERS must match it.
+# A register in one surface but not another silently loses either its config resolution,
+# element-model validation, AI addressability, or belt/mirror recognition.
+tc_body = block(tc, r'SANCTIONED_REGISTERS\s*=\s*Object\.freeze\(\[(.*?)\]\)', 'SANCTIONED_REGISTERS in lib/typography-config.mjs')
+TC_REGS = set(re.findall(r"['\"]([a-zA-Z]+)['\"]", tc_body))
+te_reg = block(te, r'ELEMENT_REGISTERS\s*=\s*Object\.freeze\(\[(.*?)\]\)', 'ELEMENT_REGISTERS in lib/text-elements.mjs')
+TE_REGS = set(re.findall(r"['\"]([a-zA-Z]+)['\"]", te_reg))
+D_REGS = patch_ids('register')
+asst_reg = block(asst, r'const ELEMENT_REGISTERS\s*=\s*\[([^\]]*)\]', 'ELEMENT_REGISTERS in assistant/route.js')
+ASST_REGS = set(re.findall(r"['\"]([a-zA-Z]+)['\"]", asst_reg))
+REG_SURFACES = [
+    ('lib/text-elements.mjs ELEMENT_REGISTERS', TE_REGS),
+    ('lib/design-patch.js PATCH_OPTIONS.register', D_REGS),
+    ('assistant/route.js ELEMENT_REGISTERS', ASST_REGS),
+]
+for _name, _set in REG_SURFACES:
+    for missing in sorted(TC_REGS - _set):
+        fail(f"register: '{missing}' is a sanctioned register but MISSING from {_name} — the eleventh mirrored surface drifted (Font Ruling B). Add it there.")
+    for extra in sorted(_set - TC_REGS):
+        fail(f"register: '{extra}' appears in {_name} but is NOT in lib/typography-config.mjs SANCTIONED_REGISTERS — a phantom register. Remove it or add it to the canonical set.")
+
 # ── Brand-fact scan (warn only): hex literals outside brand-defaults ─────────────
 for path in ['components/Generator.jsx', 'lib/design-patch.js', 'lib/audit-local.js']:
     src = read(path)
@@ -211,5 +240,5 @@ if failures:
     print("mirror-check DRIFT (blocking):")
     print("\n".join(failures))
     sys.exit(1)
-print("mirror-check OK: all 10 mirrored surfaces in sync" + (f" ({len(allow)} allowlisted)" if allow else ""))
+print("mirror-check OK: all 11 mirrored surfaces in sync" + (f" ({len(allow)} allowlisted)" if allow else ""))
 PYEOF

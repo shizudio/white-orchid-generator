@@ -95,6 +95,25 @@ test("grammar: addTextElement + editElements reach the reducer and change the do
   assert.equal(el.master.sizeStep, "L");
 });
 
+test("grammar: editElements register pin compiles + lands only when sanctioned (Font Ruling B)", () => {
+  let doc = createDesignDocumentV1();
+  const addPlan = compileDesignPatchCommands({ addTextElement: { class: "heading", text: "Hero" } });
+  for (const e of addPlan.afterMaterialization) doc = applyDesignCommand(doc, e.command).document;
+  const uid = doc.content.elements[0].uid;
+  // A sanctioned pin (heading → heavySans) compiles into set-element-register and lands.
+  const pinPlan = compileDesignPatchCommands({ editElements: [{ uid, register: "heavySans" }] });
+  assert.ok(pinPlan.afterMaterialization.some(e => e.command.type === "content/set-element-register"));
+  for (const e of pinPlan.afterMaterialization) doc = applyDesignCommand(doc, e.command).document;
+  assert.equal(doc.content.elements.find(x => x.uid === uid).register, "heavySans");
+  // An off-class register (eyebrow on a heading) still compiles a command but the reducer refuses it.
+  const badPlan = compileDesignPatchCommands({ editElements: [{ uid, register: "eyebrow" }] });
+  for (const e of badPlan.afterMaterialization) doc = applyDesignCommand(doc, e.command).document;
+  assert.equal(doc.content.elements.find(x => x.uid === uid).register, "heavySans");   // unchanged
+  // change-detection: a real register edit counts, a null register alone does not.
+  assert.equal(editElementsHasChange([{ uid: "el_heading_0", register: "serif" }]), true);
+  assert.equal(editElementsHasChange([{ uid: "el_heading_0", register: null }]), false);
+});
+
 test("grammar: change detection recognizes real adds/edits and ignores empty ones", () => {
   assert.equal(addTextElementHasChange({ class: "body", text: "hi" }), true);
   assert.equal(addTextElementHasChange({ class: null, text: null }), false);

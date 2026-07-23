@@ -9,7 +9,18 @@ import {
   registerFace,
   registerWeightRange,
   FONT_ROLE_TO_F_KEY,
+  SANCTIONED_REGISTERS,
+  isSanctionedRegister,
 } from "../../lib/typography-config.mjs";
+
+// ── MIRROR CANON: SANCTIONED_REGISTERS is the literal source for the eleventh mirrored
+// surface; it must stay 1:1 with the actual DEFAULT_TYPOGRAPHY_CONFIG.registers keys. ──
+test("SANCTIONED_REGISTERS matches DEFAULT_TYPOGRAPHY_CONFIG.registers keys (canonical parity)", () => {
+  assert.deepEqual([...SANCTIONED_REGISTERS].sort(), Object.keys(DEFAULT_TYPOGRAPHY_CONFIG.registers).sort());
+  assert.equal(isSanctionedRegister("serif"), true);
+  assert.equal(isSanctionedRegister("comic-sans"), false);
+  assert.equal(isSanctionedRegister(null), false);
+});
 
 // The White Orchid F map applyBrandKit builds (Generator: title=serif, body=Fira, subtitle=Syne).
 const F = { ...DEFAULT_FONTS };

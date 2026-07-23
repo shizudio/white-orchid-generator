@@ -40,7 +40,7 @@ import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
 import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
-import { resolveTypographyConfig } from "@/lib/typography-config.mjs";
+import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
@@ -3574,10 +3574,19 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const _elBaseM=CLASS_BASE_PX[el.class]||30*S;
         const _elFloor=CLASS_FLOOR_PX[el.class]||16;
         const px=Math.max(_elFloor, elementStepPx(_elBaseM, step, _typeFamily));
-        const cfg=resolveElementClassConfig(el.class,{ preferredPx:px, F, opts:{ noBand, typographyConfig:RESOLVED_TYPOGRAPHY } });
+        // (Font Ruling B) Honor a pinned register — only when it is sanctioned for this class
+        // under the brand config; an out-of-vocab/unsanctioned pin falls back to the class
+        // default (never a broken face). The pin selects the class-config PATH (heading serif↔
+        // heavySans, caption date↔eyebrow); the escalation ladder still applies over it.
+        const _pinReg=(el.register && sanctionedRegistersForClass(RESOLVED_TYPOGRAPHY, el.class).includes(el.register)) ? el.register : null;
+        const _elOpts={ noBand, typographyConfig:RESOLVED_TYPOGRAPHY };
+        if(el.class==="heading" && _pinReg==="heavySans") _elOpts.register="heavySans";
+        const _eyebrow=(el.class==="caption" && _pinReg==="eyebrow");
+        if(_eyebrow) _elOpts.eyebrow=true;
+        const cfg=resolveElementClassConfig(el.class,{ preferredPx:px, F, opts:_elOpts });
         if(!cfg){ out.push({uid:el.uid,class:el.class,placed:false,reason:"unknown-class"}); continue; }
         const geom={ heroBox, usedH, gap:Math.max(0.014*h,px*0.4), dGap:Math.max(0.014*h,px*0.4),
-          ebGap:Math.max(0.012*h,px*0.5), supBelow:!!supBox, supBox:!!supBox, supBottom, safe:_sm, w, h, align };
+          ebGap:Math.max(0.012*h,px*0.5), supBelow:!!supBox, supBox:!!supBox, supBottom, safe:_sm, w, h, align, eyebrow:_eyebrow };
         const cands=buildElementAnchors(el.class, geom);
         // measure adapter — CTA measures its own pill box; text classes wrap at the column width.
         const measure=isCta

@@ -377,6 +377,61 @@ test("set-element-size stamps a sanctioned S/M/L step on the element master (one
   }).changedPaths, []);
 });
 
+test("set-element-register pins a sanctioned register; unsanctioned/self are no-ops (Font Ruling B)", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_1", class:"heading", text:"Hero" },
+  }).document;
+  assert.equal(seeded.content.elements[0].register, null);   // default = class default
+
+  // heading sanctions serif|heavySans — pinning heavySans lands, one undo.
+  const pinned = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:"heavySans",
+  });
+  assert.equal(pinned.document.content.elements[0].register, "heavySans");
+  assert.deepEqual(pinned.changedPaths, ["content.elements.el_1.register"]);
+
+  // Re-pinning the same register is a no-op (M2 — no dead undo).
+  assert.deepEqual(applyDesignCommand(pinned.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:"heavySans",
+  }).changedPaths, []);
+
+  // A register NOT sanctioned for the heading class (eyebrow) is a refusal — no change.
+  assert.deepEqual(applyDesignCommand(pinned.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:"eyebrow",
+  }).changedPaths, []);
+
+  // Junk register value is refused too.
+  assert.deepEqual(applyDesignCommand(pinned.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:"comic-sans",
+  }).changedPaths, []);
+
+  // null clears the pin back to the class default.
+  const cleared = applyDesignCommand(pinned.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:null,
+  });
+  assert.equal(cleared.document.content.elements[0].register, null);
+  assert.deepEqual(cleared.changedPaths, ["content.elements.el_1.register"]);
+});
+
+test("changing an element's class drops a register no longer sanctioned for it (Font Ruling B)", () => {
+  const seeded = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ uid:"el_1", class:"caption", text:"note" },
+  }).document;
+  // caption sanctions serif|eyebrow — pin eyebrow.
+  const pinned = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_REGISTER, uid:"el_1", value:"eyebrow",
+  }).document;
+  assert.equal(pinned.content.elements[0].register, "eyebrow");
+  // caption → heading: eyebrow is not sanctioned for heading, so the pin is dropped.
+  const reclassed = applyDesignCommand(pinned, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_CLASS, uid:"el_1", value:"heading",
+  });
+  assert.equal(reclassed.document.content.elements[0].class, "heading");
+  assert.equal(reclassed.document.content.elements[0].register, null);
+});
+
 test("set-element-class rejects a non-sanctioned class and a self no-op", () => {
   const seeded = applyDesignCommand(createDesignDocumentV1(), {
     type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
