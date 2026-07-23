@@ -101,6 +101,19 @@ Elements inherit master→byDim like all format-aware properties. Capacity diffe
     unplaced findings, born-clean), contract **25/25** (ledger invariant checker C green;
     new rule registered), mirror **10/10** (sabotage-proven), build green.
 
+- **Font Ruling B (configurable registers)** — ruling recorded 2026-07-23. Registers are
+  brand-profile data; classes carry register allowlists; per-element register choice is a
+  sanctioned-only pin. Foundation landed 2026-07-23 (the `typography_config` brand-profile
+  data model — `lib/typography-config.mjs` + `brand_kit.typography_config` column/seed + the
+  code fallback in `lib/brand-defaults.js`, all additive and NOT yet read by the renderer, so
+  the fingerprint/born-clean/arch-stress battery stays invariant — same Slice-1 additive
+  pattern). IN PROGRESS behind the foundation: threading the resolved register→family map
+  into the solver's class builders (element-placement-solver) via `applyBrandKit`; the
+  `content/set-element-register` command as the eleventh mirror surface; the element
+  inspector's sanctioned-only register switch; and the admin Typography section
+  (`app/admin/brand`). Those carry the render-identity + live-browser bar and are not yet
+  landed.
+
 ### Outstanding checks (browser / real-key — Slice 4)
 
 These require the isolated test-hooks dist (`WO_DIST_DIR`, `NEXT_PUBLIC_WO_TEST_HOOKS=1`,
