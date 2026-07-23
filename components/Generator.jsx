@@ -8962,11 +8962,35 @@ function InspectorWorkspace({ workspace }) {
   // LOGO — variant grid + 9-grid placement + size chips. The primary/secondary
   // group is supplied by the caller (left column reuses the shared Brand-marks
   // tab strip; the inspector renders its own tabs above this panel).
+  // (Client ruling 2026-07-23) System-disabled logo variants. On a SOLID field (no
+  // photo — the logo sits on the field colour, so a flat contrast check is exact) a
+  // mark colour whose contrast against the field falls below the WCAG non-text floor
+  // (3:1) is disabled: illegible marks are a legitimate accessibility gate. The
+  // system's own suggested colour is NEVER disabled, which guarantees at least one
+  // selectable option (law 6 · no dead end). Photo-backed designs stay region-based
+  // (suggestion only) — no flat field gate — so a legible mark is never falsely blocked.
+  const logoDisabledInfo = (() => {
+    if (mediaObj) return null;
+    const fieldHex = B[effectiveFieldId];
+    if (!fieldHex) return null;
+    const fieldL = hexLuminance(fieldHex);
+    const poles = { green: B.burnham, ivory: B.whiteSmoke };
+    const info = {};
+    for (const [color, markHex] of Object.entries(poles)) {
+      if (color === suggestedColor) continue;               // keep the recommended mark selectable
+      if (contrastRatio(fieldL, hexLuminance(markHex)) < 3) {
+        info[color] = color === "green"
+          ? "The green mark needs more contrast against this field — try the ivory mark, or a darker field."
+          : "The ivory mark needs more contrast against this field — try the green mark, or a lighter field.";
+      }
+    }
+    return Object.keys(info).length ? info : null;
+  })();
   const renderLogoPanel = (group=markTab) => (
     <LogoInspectorPanel variants={LOGO_VARIANTS} group={group} selectedId={selectedLogoId}
       suggestedColor={suggestedColor} hasImage={!!imageObj} onSelect={id=>applyPatch({logoId:id},{source:"ui"})}
       hidden={logoHidden} onToggleHidden={()=>applyPatch({hideLogo:!logoHidden},{source:"ui"})}
-      overlap={logoOverlapHint} palette={B} fonts={F} advanced={
+      overlap={logoOverlapHint} disabledInfo={logoDisabledInfo} palette={B} fonts={F} advanced={
         <MoreFold id="logo">
           {() => (
             <>
