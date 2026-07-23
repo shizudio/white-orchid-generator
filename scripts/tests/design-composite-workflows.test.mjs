@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyDesignCommand, createDesignDocumentV1, hasUserFormatOverride } from "../../lib/design-document.mjs";
-import { planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
+import { mergeOwnerAuthoredContent, planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
 
 const applyGroups = (document, groups) => groups.reduce(
   (current, workflowGroup) => workflowGroup.commands.reduce(
@@ -412,6 +412,91 @@ test("legacy templates materialize through the canonical shape ownership law", (
   assert.equal(after.composition.archetypeId,"arch-cutout");
   assert.equal(after.composition.archetypeVariant,1);
   assert.ok(after.typography.masterLayouts.event.roles);
+});
+
+// (BUG 2) A template swap must adapt to work in progress, not discard it.
+const editedInProgressDocument = () => createDesignDocumentV1({
+  headline:"Owner headline",
+  subtext:"Owner subtext",
+  attribution:"AI attribution",
+  copyAuthors:{ headline:"owner", subtext:"owner", attribution:"ai" },
+  textColorId:"tangerine",
+  pinnedProps:{ textColorId:true },
+  selectedLogoId:"s1-green",
+  logoVariantTouched:true,
+  bgColor:"burnham",
+  elements:[
+    { uid:"el_body_owner", class:"body", text:"My added note", authorship:"owner", priority:30 },
+  ],
+});
+
+const incomingTemplateDocument = () => createDesignDocumentV1({
+  headline:"Template headline",
+  subtext:"Template subtext",
+  attribution:"Template attribution",
+  copyAuthors:{ headline:"ai", subtext:"ai", attribution:"ai" },
+  textColorId:"ivory",
+  bgColor:"sage",
+  selectedLogoId:"p3-ivory",
+  elements:[
+    { uid:"el_heading_tpl", class:"heading", text:"Template heading", authorship:"ai" },
+  ],
+});
+
+test("template merge preserves owner copy, added elements, and pins", () => {
+  const merged=mergeOwnerAuthoredContent({
+    template:incomingTemplateDocument(),
+    current:editedInProgressDocument(),
+  });
+
+  // Owner-typed copy survives; owner authorship is retained.
+  assert.equal(merged.content.headline,"Owner headline");
+  assert.equal(merged.content.subtext,"Owner subtext");
+  assert.equal(merged.content.authorship.headline,"owner");
+  // AI-authored copy is a free variable the template may replace.
+  assert.equal(merged.content.attribution,"Template attribution");
+  // Owner-added text element survives; the template's own element is also kept.
+  const uids=merged.content.elements.map(element=>element.uid);
+  assert.ok(uids.includes("el_body_owner"),"owner element survives");
+  assert.ok(uids.includes("el_heading_tpl"),"template element retained");
+  // A pinned contrast field keeps the owner's value; the pin itself survives.
+  assert.equal(merged.palette.text,"tangerine");
+  assert.equal(merged.palette.pins.textColorId,true);
+  // A pinned logo variant survives.
+  assert.equal(merged.logo.assetId,"s1-green");
+  assert.equal(merged.logo.variantPinned,true);
+  // Unpinned palette (a system proposal) comes from the template.
+  assert.equal(merged.palette.background,"sage");
+});
+
+test("template merge without a current document is a straight template load", () => {
+  const template=incomingTemplateDocument();
+  assert.deepEqual(mergeOwnerAuthoredContent({template,current:null}),template);
+});
+
+test("planTemplateApplicationWorkflow keeps owner content when a current document is supplied", () => {
+  const groups=planTemplateApplicationWorkflow({
+    document:incomingTemplateDocument(),
+    currentDocument:editedInProgressDocument(),
+    metadata:{dimensionId:"ig_square",exportFormat:"png"},
+    alreadyMaterialized:true,
+  });
+  const after=applyGroups(createDesignDocumentV1(),groups);
+
+  assert.equal(after.content.headline,"Owner headline");
+  assert.equal(after.content.attribution,"Template attribution");
+  assert.ok(after.content.elements.some(element=>element.uid==="el_body_owner"));
+  assert.equal(after.palette.text,"tangerine");
+  assert.equal(after.logo.assetId,"s1-green");
+});
+
+test("planTemplateApplicationWorkflow without a current document replaces wholesale (legacy path)", () => {
+  const template=incomingTemplateDocument();
+  const groups=planTemplateApplicationWorkflow({ document:template, alreadyMaterialized:true });
+  const after=applyGroups(editedInProgressDocument(),groups);
+
+  assert.equal(after.content.headline,"Template headline");
+  assert.equal(after.content.attribution,"Template attribution");
 });
 
 test("shape edits pin generated layout ownership and one format before updating", () => {

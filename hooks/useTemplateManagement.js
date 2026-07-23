@@ -145,6 +145,10 @@ export function useTemplateManagement({
       : null;
     actions.executeWorkflowGroups(planTemplateApplicationWorkflow({
       document:migrated,
+      // (DLC §3.4/§10, pins law 5) A template swap adapts to work in progress: the
+      // owner's typed copy, added text elements, and pins are merged onto the template
+      // rather than discarded. The template supplies every unpinned/AI-authored field.
+      currentDocument:designDocument,
       metadata:restored.metadata,
       acknowledgements:restored.acknowledgements,
       archetypeId:templateArchetypeId,
