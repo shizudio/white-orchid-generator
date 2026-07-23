@@ -201,6 +201,10 @@ const ELEMENT_ADD_CHOICES = [
   { cls:"cta",        label:"Button",     starter:"Learn more" },
 ];
 const ELEMENT_CLASS_LABELS = { heading:"Heading", subheading:"Subheading", body:"Body", caption:"Caption", cta:"Button" };
+// (Font Ruling B) Plain, jargon-free labels for the sanctioned registers shown in the
+// element inspector's Style switch (never "heavySans"/"eyebrow"). Only the registers
+// sanctioned for an element's class are offered; the control hides when there is only one.
+const ELEMENT_REGISTER_LABELS = { serif:"Serif", heavySans:"Bold sans", body:"Body", eyebrow:"Caps label", badge:"Badge" };
 // (Text Elements slice 4 — 10th mirrored surface) The closed element-class enum, as a
 // flat id list mirror-check.sh can parse. MIRRORS lib/text-elements.mjs ELEMENT_CLASSES,
 // lib/design-patch.js PATCH_OPTIONS.elementClass, and the assistant route's ELEMENT_CLASSES.
@@ -8971,6 +8975,11 @@ function InspectorWorkspace({ workspace }) {
     const classLabel = ELEMENT_CLASS_LABELS[el.class] || "Text";
     const targets = (ALLOWED_CLASS_TRANSITIONS[el.class] || []).filter(t => canTransitionClass(el.class, t));
     const unplaced = model && model.placed === false && (el.text || "").trim();
+    // (Font Ruling B) The sanctioned register switch — ONLY the registers this class may
+    // choose (per the resolved brand config). The active choice is the pin, or the class
+    // default (the first sanctioned register) when unpinned. Hidden when only one is offered.
+    const registerChoices = sanctionedRegistersForClass(RESOLVED_TYPOGRAPHY, el.class);
+    const activeRegister = el.register || registerChoices[0];
     return <>
       {/* Text — 16px min font keeps iOS from zooming on focus (mobile input rule). */}
       <label style={{display:"block",fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Text</label>
@@ -8992,6 +9001,20 @@ function InspectorWorkspace({ workspace }) {
           );})}
         </div>
       </div>
+
+      {/* Style — the sanctioned register switch (Font Ruling B). Only the registers this
+          class may choose are shown; the whole control hides when there is only one. A
+          choice is a PIN: it survives re-solve and is one undo step (dispatchElementCommand). */}
+      {registerChoices.length>1&&<div style={{display:"flex",alignItems:"center",gap:8,marginTop:14,marginBottom:2}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Style</span>
+        <div role="group" aria-label={`${classLabel} style`} style={{display:"flex",gap:5,flex:1}}>
+          {registerChoices.map(reg=>{const on=activeRegister===reg;return (
+            <button key={reg} type="button" className="wo-ins-pill" aria-pressed={on} title={ELEMENT_REGISTER_LABELS[reg]||reg}
+              onClick={()=>dispatchElementCommand({ type:"content/set-element-register", uid, value:reg })}
+              style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{ELEMENT_REGISTER_LABELS[reg]||reg}</button>
+          );})}
+        </div>
+      </div>}
 
       {/* Type — read-only label + governed change-type (allowed transitions only). */}
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
