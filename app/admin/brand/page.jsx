@@ -1,6 +1,17 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import Nav from '@/components/Nav';
+import { resolveTypographyConfig, SANCTIONED_REGISTERS } from '@/lib/typography-config.mjs';
+import { ELEMENT_CLASSES } from '@/lib/text-elements.mjs';
+
+// (Font Ruling B) The admin Typography-registers surface. Roles are the closed set the F map
+// hydrates; the dropdown shows each role with the ACTUAL font from the kit so the owner sees
+// "Heading (Romie)", not an abstract key. Registers + classes carry plain owner-facing labels.
+const REGISTER_ROLES = ['heading', 'body', 'ui'];
+const REGISTER_ROLE_LABEL = { heading: 'Heading', body: 'Body', ui: 'UI / labels' };
+const REGISTER_ROLE_KIT_KEY = { heading: 'font_heading', body: 'font_body', ui: 'font_ui' };
+const REGISTER_LABEL = { serif: 'Serif', heavySans: 'Bold sans', body: 'Body', eyebrow: 'Caps label', badge: 'Badge' };
+const ADMIN_CLASS_LABEL = { heading: 'Heading', subheading: 'Subheading', body: 'Body', caption: 'Caption', cta: 'Button' };
 
 // ── Decorative-asset classification (Declutter item 7) ───────────────────────
 // Mirrors the classifier the editor used for its (now removed) free-form
@@ -67,7 +78,9 @@ export default function BrandKitPage() {
       // { configured:false } (HTTP 200) with no colours — show a calm note, don't
       // crash on kit.colors.map.
       if (d?.configured === false || !Array.isArray(d?.colors)) { setUnconfigured(true); return; }
-      if (d.error) setError(d.error); else setKit(d);
+      // (Font Ruling B) Resolve typography_config so the registers UI always has a complete
+      // config to edit (a null/partial column degrades to the White Orchid default).
+      if (d.error) setError(d.error); else setKit({ ...d, typography_config: resolveTypographyConfig(d.typography_config) });
     }).catch(() => setUnconfigured(true));
     fetch('/api/brand-assets').then(r => r.json()).then(d => {
       setAssetsConfigured(d?.configured !== false);
@@ -108,14 +121,15 @@ export default function BrandKitPage() {
     const res = await fetch('/api/brand', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-wo-admin-key': adminKey },
-      body: JSON.stringify({ colors: kit.colors, font_heading: kit.font_heading, font_body: kit.font_body, font_ui: kit.font_ui, guardrails: kit.guardrails }),
+      body: JSON.stringify({ colors: kit.colors, font_heading: kit.font_heading, font_body: kit.font_body, font_ui: kit.font_ui, guardrails: kit.guardrails, typography_config: kit.typography_config }),
     });
     const d = await res.json().catch(() => ({}));
     setSaving(false);
     // Honest inline messages for the gate (never a dead Save button):
     if (res.status === 403) { setError(adminKey ? 'That admin key is wrong — the brand kit was not saved.' : 'An admin key is required to save. Enter it above.'); return; }
     if (res.status === 503 || d?.configured === false) { setError('Cloud storage isn’t configured on the server — the brand kit can’t be saved yet.'); return; }
-    if (d.error) setError(d.error); else { setKit(d); setSaved(true); setTimeout(() => setSaved(false), 3000); }
+    // Re-resolve the returned config so the editor state stays complete after a round-trip.
+    if (d.error) setError(d.error); else { setKit({ ...d, typography_config: resolveTypographyConfig(d.typography_config) }); setSaved(true); setTimeout(() => setSaved(false), 3000); }
   };
 
   const updateColor = (i, field, val) => {
@@ -123,6 +137,25 @@ export default function BrandKitPage() {
     colors[i] = { ...colors[i], [field]: val };
     setKit({ ...kit, colors });
   };
+
+  // (Font Ruling B) Re-point a register's font ROLE (which kit font it paints).
+  const setRegisterRole = (register, role) => {
+    const cfg = kit.typography_config;
+    const registers = { ...cfg.registers, [register]: { ...cfg.registers[register], role } };
+    setKit({ ...kit, typography_config: { ...cfg, registers } });
+  };
+  // Toggle a register in a class's allowlist. Client-side min-1: the last checked
+  // register cannot be removed (a class must always keep at least one choosable voice).
+  const toggleClassRegister = (className, register) => {
+    const cfg = kit.typography_config;
+    const current = cfg.classRegisters[className] || [];
+    const has = current.includes(register);
+    if (has && current.length <= 1) return;   // honest min-1 guard (also shown as a note)
+    const nextList = has ? current.filter(r => r !== register)
+      : SANCTIONED_REGISTERS.filter(r => current.includes(r) || r === register); // keep canonical order
+    setKit({ ...kit, typography_config: { ...cfg, classRegisters: { ...cfg.classRegisters, [className]: nextList } } });
+  };
+  const roleFontName = (role) => kit[REGISTER_ROLE_KIT_KEY[role]] || REGISTER_ROLE_LABEL[role];
 
   if (unconfigured) return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -190,6 +223,64 @@ export default function BrandKitPage() {
               </div>
             ))}
           </div>
+        </section>
+
+        <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
+
+        {/* Typographic registers (Font Ruling B) — the owner governs which brand FONT each
+            named voice paints, and which voices each text class may choose. Fonts stay flexible
+            THROUGH the register system, not around it. Graceful: resolveTypographyConfig always
+            hands a complete config, so a null/partial column edits from the White Orchid default. */}
+        <section style={{ marginBottom: 48 }}>
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Typographic registers</div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 20, maxWidth: 520 }}>
+            Each register is a named voice. Choose which brand font every voice paints, then which voices each kind of text may use. Staff pick only from what you allow here.
+          </p>
+
+          {/* Per-register font-role dropdown */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 28 }}>
+            {SANCTIONED_REGISTERS.map(register => (
+              <div key={register} style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-raised)', borderRadius: 'var(--radius-md)', padding: '10px 16px', border: '1px solid var(--line)', boxShadow: 'var(--shadow-xs)' }}>
+                <span style={{ flex: 1, fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--fg-strong)' }}>{REGISTER_LABEL[register] || register}</span>
+                <select aria-label={`${REGISTER_LABEL[register] || register} font role`} value={kit.typography_config.registers[register]?.role || 'body'} onChange={e => setRegisterRole(register, e.target.value)}
+                  style={{ padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontSize: 13, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none', minWidth: 200 }}>
+                  {REGISTER_ROLES.map(role => (
+                    <option key={role} value={role}>{REGISTER_ROLE_LABEL[role]} ({roleFontName(role)})</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          {/* Per-class register allowlist checkboxes (min 1 enforced) */}
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 9, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 10 }}>Allowed voices per text kind</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {ELEMENT_CLASSES.map(className => {
+              const allowed = kit.typography_config.classRegisters[className] || [];
+              const atMin = allowed.length <= 1;
+              return (
+                <div key={className} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: 'var(--bg-raised)', borderRadius: 'var(--radius-md)', padding: '10px 16px', border: '1px solid var(--line)' }}>
+                  <span style={{ width: 96, flexShrink: 0, fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--fg-strong)' }}>{ADMIN_CLASS_LABEL[className] || className}</span>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                    {SANCTIONED_REGISTERS.map(register => {
+                      const on = allowed.includes(register);
+                      const lockLast = on && atMin;   // can't remove the last one
+                      return (
+                        <label key={register} style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-body)', fontSize: 13, color: lockLast ? 'var(--fg-subtle)' : 'var(--fg-muted)', cursor: lockLast ? 'not-allowed' : 'pointer' }}>
+                          <input type="checkbox" checked={on} disabled={lockLast} aria-label={`${ADMIN_CLASS_LABEL[className]} may use ${REGISTER_LABEL[register] || register}`}
+                            onChange={() => toggleClassRegister(className, register)} />
+                          {REGISTER_LABEL[register] || register}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--fg-muted)', marginTop: 10, lineHeight: 1.5 }}>
+            Each kind of text must keep at least one allowed voice — the last one can’t be switched off.
+          </p>
         </section>
 
         <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
