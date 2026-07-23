@@ -81,6 +81,29 @@ alter table brand_kit add column if not exists photo_brief jsonb not null defaul
   "closing": "No text, no letters, no words, no logos, no UI, no poster, no frame, no layout, no captions, no border. A single full-frame edge-to-edge photograph.",
   "castingBrief": "Editorial photography for a calm, premium preschool / early-education brand. Warm natural light, soft focus, gentle earthy palette (deep forest green, ivory, soft mauve, muted celadon). Authentic, unposed, documentary feel; shallow depth of field; no harsh flash."
 }'::jsonb;
+-- (Font Ruling B — configurable registers, 2026-07-23) Brand-configurable typography
+-- registers: `registers` names each register's font ROLE (heading|body|ui → font_heading/
+-- font_body/font_ui) + sanctioned weight range; `classRegisters` is each element class's
+-- allowlist of choosable registers. JSONB so a brand overrides any register/allowlist
+-- independently. The default below is IDENTICAL to today's hardcoded solver registers and
+-- mirrors lib/brand-defaults.js DEFAULT_TYPOGRAPHY_CONFIG 1:1 (kept in sync by hand). A
+-- missing column/field degrades to the code fallback — never a 500, never a changed look.
+alter table brand_kit add column if not exists typography_config jsonb not null default '{
+  "registers": {
+    "serif":     {"role": "heading", "weightRange": [300, 700]},
+    "heavySans": {"role": "ui",      "weightRange": [700, 800]},
+    "body":      {"role": "body",    "weightRange": [400, 700]},
+    "eyebrow":   {"role": "ui",      "weightRange": [400, 700]},
+    "badge":     {"role": "ui",      "weightRange": [600, 600]}
+  },
+  "classRegisters": {
+    "heading":    ["serif", "heavySans"],
+    "subheading": ["body"],
+    "body":       ["body"],
+    "caption":    ["serif", "eyebrow"],
+    "cta":        ["badge"]
+  }
+}'::jsonb;
 
 -- Logo variants (admin-managed, replaces hardcoded LOGO_VARIANTS)
 create table if not exists logo_variants (
