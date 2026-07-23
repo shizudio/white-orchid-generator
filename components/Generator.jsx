@@ -40,6 +40,7 @@ import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
 import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
+import { formatFamilyOf, legacyStepMult, resolveEffectiveStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
@@ -1296,13 +1297,14 @@ function resolveZoneTextColor(srcCtx,zone,userTextColorId){
   }catch(_){return{color:ivory,forced:false};}
 }
 
-// Per-category font sizing. Each text element has a role; the user picks a size step per role.
+// Per-category font sizing. Each text element has a role; the user picks a size step per
+// role. LABELS only — the drawn multiplier lives in lib/type-scale.mjs (format-family aware).
 const FONT_SIZE_STEPS=[
-  {id:"xs",label:"XS",mult:0.7},
-  {id:"s", label:"S", mult:0.85},
-  {id:"m", label:"M", mult:1},
-  {id:"l", label:"L", mult:1.25},
-  {id:"xl",label:"XL",mult:1.55},
+  {id:"xs",label:"XS"},
+  {id:"s", label:"S"},
+  {id:"m", label:"M"},
+  {id:"l", label:"L"},
+  {id:"xl",label:"XL"},
 ];
 const FONT_ROLES=[
   {id:"heading",   label:"Heading"},
@@ -1319,7 +1321,11 @@ const TYPE_TEXT_ROLES={
   photo_logo:["highlight"],
 };
 const freshFontSizes=()=>({heading:"m",subheading:"m",content:"m",highlight:"m"});
-const fontMultOf=(fontSizes,role)=>FONT_SIZE_STEPS.find(s=>s.id===((fontSizes&&fontSizes[role])||"m"))?.mult??1;
+// (type-scale) FONT_SIZE_STEPS above owns the pill LABELS (xs…xl); the drawn MULTIPLIER
+// now comes from lib/type-scale.mjs so a step spreads by format family and adjacent steps
+// stay perceptibly distinct (client complaint: "s,m,l not making differences"). `m` is
+// pinned at 1.0 in every family, so a default design is pixel-identical (fixture invariance).
+const fontMultOf=(fontSizes,role,family="square")=>legacyStepMult((fontSizes&&fontSizes[role])||"m",family);
 
 /* ───────── TWO LOGO SYSTEM ─────────
    (Commit 2) Each variant is tagged with a `shape` class + `color` so the render can
@@ -3309,7 +3315,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // Seed the resolved zone colour with the forced frame-bg colour (texture_text /
     // photo_logo read zoneTc directly; the tc-branches use (frameBgTextColor||tc)).
     if(frameBgTextColor&&(!textColorId||textColorId==="auto"))zoneTc=frameBgTextColor;
-    const fm=role=>fontMultOf(fontSizes,role);   // per-category size multiplier
+    const _typeFamily=formatFamilyOf(dimId);     // tall|square|wide — drives the S/M/L spread
+    const fm=role=>fontMultOf(fontSizes,role,_typeFamily);   // per-category, per-family size multiplier
     // Per-format readable-font floor for a fitText call (Task 4). `start` is the
     // call's start size. The ceiling is the SQUARE-baseline design size (start with
     // the per-format fontMult AND the S canvas-scale divided out) so the floor can
@@ -3549,7 +3556,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const txt=el.text.trim();
         const isCta=el.class==="cta";
         const step=(el.pins&&el.pins.sizeStep)||(el.master&&el.master.sizeStep)||"M";
-        const px=Math.max(CLASS_FLOOR_PX[el.class]||16, elementStepPx(CLASS_BASE_PX[el.class]||30*S, step));
+        // (type-scale) the S/M/L spread varies by format family so a step reads the same
+        // on a tall portrait and a wide banner. The class floor still clamps the shrink.
+        const _elBaseM=CLASS_BASE_PX[el.class]||30*S;
+        const _elFloor=CLASS_FLOOR_PX[el.class]||16;
+        const px=Math.max(_elFloor, elementStepPx(_elBaseM, step, _typeFamily));
         const cfg=resolveElementClassConfig(el.class,{ preferredPx:px, F, opts:{ noBand } });
         if(!cfg){ out.push({uid:el.uid,class:el.class,placed:false,reason:"unknown-class"}); continue; }
         const geom={ heroBox, usedH, gap:Math.max(0.014*h,px*0.4), dGap:Math.max(0.014*h,px*0.4),
@@ -3594,7 +3605,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         endText();
         const box={x:ex,y:ey,w:sol.w,h:sol.h};
         placedBoxes.push(box);
-        out.push({uid:el.uid,class:el.class,placed:true,box,px:sol.px,face:sol.face,ink:sol.ink,band:!!sol.band});
+        // (type-scale / M2 honesty) sol.px is what actually PAINTED after the solver's own
+        // capacity fit; resolveEffectiveStep reports whether the requested S/M/L survived so
+        // the inspector pill can say "L (fits as M here)" instead of silently painting M.
+        const eff=isCta?null:resolveEffectiveStep({basePx:_elBaseM,step,family:_typeFamily,capacityPx:sol.px,floorPx:_elFloor});
+        out.push({uid:el.uid,class:el.class,placed:true,box,px:sol.px,face:sol.face,ink:sol.ink,band:!!sol.band,
+          sizeStep:step,effectiveStep:eff?eff.effectiveStep:step,sizeCapped:!!(eff&&eff.capped)});
       }
       return out;
     };

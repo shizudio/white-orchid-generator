@@ -247,12 +247,20 @@ test("resolveElementClassConfig + placeTextElement — an added heading places a
   assert.equal(sol.band, false);
 });
 
-test("ELEMENT_SIZE_STEPS / elementStepPx — S/M/L multipliers within range", () => {
-  assert.deepEqual({ ...ELEMENT_SIZE_STEPS }, { S: 0.82, M: 1, L: 1.25 });
-  assert.equal(elementStepPx(100, "S"), 82);
+test("ELEMENT_SIZE_STEPS / elementStepPx — S/M/L multipliers within range (square default)", () => {
+  // ELEMENT_SIZE_STEPS is now the square-family view from lib/type-scale.mjs; the 2-arg
+  // elementStepPx defaults to that family (backward compatible). M is pinned at 1.0.
+  assert.deepEqual({ ...ELEMENT_SIZE_STEPS }, { S: 0.8, M: 1, L: 1.28 });
+  assert.equal(elementStepPx(100, "S"), 80);
   assert.equal(elementStepPx(100, "M"), 100);
-  assert.equal(elementStepPx(100, "L"), 125);
+  assert.equal(elementStepPx(100, "L"), 128);
   assert.equal(elementStepPx(100, "bogus"), 100);   // unknown step → M
+  // Family varies the spread: tall spreads widest, wide keeps the highest S floor.
+  assert.equal(elementStepPx(100, "S", "tall"), 78);
+  assert.equal(elementStepPx(100, "L", "tall"), 134);
+  assert.equal(elementStepPx(100, "S", "wide"), 82);
+  assert.equal(elementStepPx(100, "L", "wide"), 124);
+  assert.equal(elementStepPx(100, "M", "wide"), 100);   // M pinned across families
 });
 
 test("dateFurnitureObstacles — projects rule/index/counterweight/badge boxes; junk-safe", () => {
