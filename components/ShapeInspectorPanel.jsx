@@ -63,14 +63,18 @@ function ShapeInspectorPanel({
 
   return <>
     {hasLayoutShapes&&<div ref={layoutSectionRef} style={{marginBottom:16,borderRadius:10,transition:"box-shadow 0.3s",boxShadow:layoutFlash?`0 0 0 2px ${B.burnham}`:"none"}}><div style={{fontSize:10,color:B.burnham,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Layout shape set</div>{layoutPicker}</div>}
-    <div style={{fontSize:10,color:B.burnham,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:5,paddingTop:hasLayoutShapes?12:0,borderTop:hasLayoutShapes?`1px solid ${B.ash}22`:"none"}}>Shapes on this design</div>
+    {/* (Client ruling 2026-07-23) The layout-shape-related pickers are grouped: the
+        Layout shape set (above) is followed IMMEDIATELY by + Add shape → the brand's
+        petal Shapes row + the Decoration section (addTray). The design's own shape
+        list ("Shapes on this design") and the per-shape editor come AFTER — "the rest". */}
+    <button onClick={onToggleAdd} aria-expanded={addOpen} style={{display:"inline-flex",alignItems:"center",gap:7,padding:"8px 14px",borderRadius:999,border:`1.5px solid ${B.burnham}`,background:addOpen?B.burnham:"#fff",color:addOpen?"#fff":B.burnham,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋ Add shape</button>
+    {addOpen&&<div style={{marginTop:12,marginBottom:4}}>{addTray}</div>}
+    <div style={{fontSize:10,color:B.burnham,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:5,marginTop:16,paddingTop:12,borderTop:`1px solid ${B.ash}22`}}>Shapes on this design</div>
     <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,marginBottom:10}}>Structure controls the composition. Decoration adds optional expression.</div>
     {!layers.length
-      ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No shapes yet. Add one below — then drag, rotate and resize it on the preview.</div>
+      ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No shapes yet. Add one above — then drag, rotate and resize it on the preview.</div>
       : <div style={{display:"flex",flexDirection:"column",gap:13,marginBottom:10}}>{groups.map(group=><section key={group.id} aria-label={group.label}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}><span title={group.hint} style={{fontSize:10,color:B.jet,fontFamily:F.subtitle,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase"}}>{group.label}</span><span style={{fontSize:9,color:B.ash,fontFamily:F.body,textAlign:"right"}}>{group.layers.length}</span></div><div style={{display:"flex",flexDirection:"column",gap:6}}>{group.layers.map(renderLayer)}</div></section>)}</div>}
     {selectedEditor&&<div style={{padding:"10px 11px",borderRadius:9,background:`${B.whiteSmoke}88`,border:`1px solid ${B.ash}2e`,marginBottom:10}}>{selectedEditor}</div>}
-    <button onClick={onToggleAdd} aria-expanded={addOpen} style={{display:"inline-flex",alignItems:"center",gap:7,padding:"8px 14px",borderRadius:999,border:`1.5px solid ${B.burnham}`,background:addOpen?B.burnham:"#fff",color:addOpen?"#fff":B.burnham,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋ Add shape</button>
-    {addOpen&&<div style={{marginTop:12}}>{addTray}</div>}
   </>;
 }
 
