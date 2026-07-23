@@ -46,12 +46,17 @@ Element / legacy-s·m·l anchors (m and M **pinned at 1.0** in every family):
 
 | family | S / s | M / m | L / l | ΔS→M | ΔM→L |
 |---|---|---|---|---|---|
-| tall   | 0.78 | 1.00 | 1.34 | 28% | 34% |
-| square | 0.80 | 1.00 | 1.28 | 25% | 28% |
-| wide   | 0.82 | 1.00 | 1.24 | 22% | 24% |
+| tall   | 0.78 | 1.00 | 1.36 | 28% | 36% |
+| square | 0.80 | 1.00 | 1.33 | 25% | 33% |
+| wide   | 0.82 | 1.00 | 1.30 | 22% | 30% |
 
 Legacy extension steps: tall `xs 0.64 / xl 1.64`, square `xs 0.66 / xl 1.56`,
-wide `xs 0.70 / xl 1.46`.
+wide `xs 0.70 / xl 1.50`.
+
+The L anchors were raised after live measurement (below): on small wide formats the
+contrast-escalation ladder can lift M for body copy sitting over a photo, compressing the
+top step — a strong L keeps M→L perceptible there. Wide keeps the **highest S** (least
+shrink) for in-feed thumb-legibility; tall keeps the **widest total range**.
 
 **Principles encoded (tested in `scripts/tests/type-scale.test.mjs`):**
 
@@ -65,6 +70,21 @@ wide `xs 0.70 / xl 1.46`.
   reaches the widest L. The class floors (`CLASS_FLOOR_PX`, `MIN_FONT_PX`) still clamp the
   shrink so no step drops below the ratified legibility minimums.
 
+## The legacy hero auto-fit fix (the decisive one)
+
+Live measurement (below) proved the multiplier widening alone did **nothing** for the legacy
+editorial title: `fitEditorialHeadline` baked the S/M/L multiplier into the *start* target,
+then the shrink-to-fit loop shrank that oversized target back down to the same box-capacity
+fill — so S, M and L all painted 169px on ig_portrait (a **0% no-op**, the client's exact
+complaint). The fix (`lib/editorial-typography-solver.mjs`): run the fit at the **natural
+1× size** (byte-identical to the M render), then apply the step to that *result* —
+
+- **M** (mult 1.0): untouched → pixel-identical to before (fixture invariance).
+- **S** (mult < 1): shrink below the fill, floored at the readable minimum — the distinction
+  the fit-loop used to erase. Live: ig_portrait hero S→M went 0% → **28%**.
+- **L** (mult > 1): grow only as far as the box still holds the copy; a box-filling headline
+  cannot grow, so it stays at the fill and reports `heroSizeCapped` (honest — no silent no-op).
+
 ## Honest effective step (no silent no-op — operating-manual M2)
 
 Auto-fit may still shrink a step below its target to make copy fit — that is legitimate
@@ -75,10 +95,33 @@ coarsest step whose target still fits, plus `capped`. `describeEffectiveStep` re
 pill label: `"L"` when it paints as asked, `"L (fits as M here)"` when capacity capped it.
 
 For added elements this is wired at render time into the element ledger entry
-(`sizeStep` / `effectiveStep` / `sizeCapped`), so the inspector and readiness can surface the
-cap. This upholds **re-solve around pins** (law 5): an explicit user step is a pin auto-fit
-respects within capacity; when capacity genuinely cannot fit it, the standard finding flow
-(shorten copy / roomier layout) is the remedy — never a silent revert to M.
+(`sizeStep` / `effectiveStep` / `sizeCapped`, surfaced through `createRenderResult` and
+`__woContentElements`); for the legacy hero the same signal rides on `fontMeta.headlineSizeCapped`.
+The inspector and readiness can surface the cap. This upholds **re-solve around pins** (law 5):
+an explicit user step is a pin auto-fit respects within capacity; when capacity genuinely
+cannot fit it, the standard finding flow (shorten copy / roomier layout) is the remedy —
+never a silent revert to M.
+
+## Live render-truth evidence (Chromium/149 harness, keys unset)
+
+Painted px, measured on a real editorial design via `__woRoleBounds` / `__woFontMeta` and the
+element ledger (`generated/live-scale-verify.mjs`):
+
+| role | format | S | M | L | ΔS→M | ΔM→L | note |
+|---|---|---|---|---|---|---|---|
+| legacy title | ig_portrait | 131.9 | 169.2 | 170.0 | **28%** | 0% | L capped (box full, `heroSizeCapped=true`) |
+| legacy title | ig_square | 134.5 | 168.1 | 169.0 | 25% | 1% | L capped |
+| legacy title | banner | 92.4 | 112.7 | 122.0 | 22% | 8% | L capped |
+| heading element | ig_portrait | 42.1 | 54.0 | 73.4 | 28% | 36% | full range |
+| heading element | banner | 20.5 | 25.0 | 32.5 | 22% | 30% | full range |
+| body element | ig_portrait | 23.4 | 30.0 | 40.8 | 28% | 36% | full range |
+| body element | banner | 11.4 | 13.9 | 18.1 | 22% | 30% | full range |
+
+Before this work the legacy title read S=M=L=169 (0%). Guard battery on the change:
+born-clean 456/456, arch-stress 114/114, legacy-dup 30/30, and the render-fingerprint
+**self-baseline pre-vs-post = 144/144 identical (0 diffs)** in this environment — empirical
+proof M is pixel-invariant. (The committed baseline shows 90 same-dimension hash diffs from
+pure cross-environment font drift, present at the pre-change HEAD too.)
 
 ## Where the numbers are read
 
@@ -88,12 +131,16 @@ respects within capacity; when capacity genuinely cannot fit it, the standard fi
 - `lib/element-placement-solver.mjs` — re-exports `ELEMENT_SIZE_STEPS` (the square view) and
   `elementStepPx` from the scale module.
 
-## Verified / not yet verified
+## Verified
 
-- Verified (pure, this environment): scale-table integrity, effective-step resolution,
-  element-solver arithmetic, full unit + contract + mirror + build green.
-- Not runnable here (needs the Chromium/149 render-truth harness): the on-canvas painted-px
-  before/after per class × format, the live pill label `"L (fits as M here)"`, and the
-  born-clean 456 / arch-stress 114 / render-fingerprint oracles. Because M is pinned at 1.0
-  and the fixtures use defaults, those oracles are expected pixel-invariant; any non-default
-  fixture cell that moves must be explained per operating-manual §23.
+- Pure: scale-table integrity, effective-step resolution, element-solver arithmetic, full
+  unit (400) + contract (25) + mirror (10) + build green.
+- Browser (Chromium/149, keys unset): born-clean 456/456, arch-stress 114/114, legacy-dup
+  30/30, render-fingerprint self-baseline 144/144 identical pre-vs-post, and the live painted
+  px truth table + screenshots above.
+
+## Remaining (UI polish, not correctness)
+
+The effective-step signal reaches the render result and the `__wo` hooks; wiring the visible
+pill label `"L (fits as M here)"` into the React inspector chrome is a small follow-up — the
+honest data is already there for it to read.

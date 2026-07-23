@@ -4290,6 +4290,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         });
         endText();
         fontMeta.headline=hr.size;
+        // (type-scale / M2) surface the hero's requested-vs-effective size step so the UI can
+        // be honest when auto-fit capped it (e.g. a box-filling headline at L paints as M).
+        fontMeta.headlineNatural=reflow.heroNaturalPx;
+        fontMeta.headlineSizeCapped=!!reflow.heroSizeCapped;
         if(hr.truncated){
           _midCut++;
           if(!dropped.includes("Headline")) dropped.push("Headline");
@@ -6709,7 +6713,7 @@ export default function App() {
     window.__woRemoveElement = (uid) => dispatchDesignCommand({ type:"content/remove-element", uid }).changedPaths;
     window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
-    window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds }));
+    window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
     window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
     return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
   }, [dispatchDesignCommand]);
