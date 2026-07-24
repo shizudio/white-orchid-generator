@@ -326,7 +326,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, liked, onMoreLikeThis }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, noteRef, liked, onMoreLikeThis }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
   // paint; reshuffled to a fresh mix after mount (see effect below).
@@ -1090,6 +1090,20 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
     if (sendRef) sendRef.current = (text, meta) => send(text, meta);
     return () => { if (sendRef) sendRef.current = null; };
   }, [sendRef, send]);
+
+  // (Package 1) DETERMINISTIC SYSTEM NOTE — push a system-authored assistant line into the
+  // thread WITHOUT a model call (the shape-add auto-switch narration). One voice: the note
+  // shares the assistant thread. Called from a single patch-pipeline event (never during
+  // render), so every distinct action narrates once; only an empty string is dropped.
+  useEffect(() => {
+    if (!noteRef) return;
+    noteRef.current = (text) => {
+      const line = String(text || '').trim();
+      if (!line) return;
+      setMessages(prev => [...prev, { role: 'assistant', content: line }]);
+    };
+    return () => { if (noteRef) noteRef.current = null; };
+  }, [noteRef]);
 
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }

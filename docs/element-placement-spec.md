@@ -93,6 +93,37 @@ owner pin survives re-solve (law 5). The offset is `{0,0}` until the user drags,
 renders are pixel-identical (render fingerprint self-baseline unchanged, legacy cells
 0/144 diff). Pure invariant covered in `scripts/tests/render-result.test.mjs`.
 
+## 7b · Shape-add defaults the base to a pure photo background (RATIFIED 2026-07-23)
+
+Client ruling: *"when i am playing with other shape appearances, i want to default format
+to always be pure photo background, the editorial style is not good."* Adding a shape
+(fill / decorative / frame — any add via the tray or the AI) to a design on an
+EDITORIAL/SPLIT layout auto-switches the base to a full-bleed photo layout as **ONE honest
+undoable step**, narrated in the chat voice (*"Switched to full photo so your shape has
+room."*).
+
+- **Set that switches** — the editorial/split family: a non-fullBleed archetype whose photo
+  is BOUNDED (a photo column, w<1 or h<1) or that floats a photo card — `editorial_split`,
+  `portrait_credential`, `floated_card` (derived from geometry in `isEditorialSplitArchetype`,
+  so a new panel/split archetype is covered automatically). Full-bleed
+  (`documentary`/`full_bleed_duotone`/`message_pill`), photo-led-through-a-mask
+  (`petal_window`/`shape_cutout`), and text-only fields never switch.
+- **Target** — picked the copy-aware way the band-removal belt picks its band-free target
+  (`pickFullBleedTargetForShapeAdd`): a caption keeps it legible on `message_pill`'s
+  born-clean contrast pill; a headline-only design goes to `documentary`'s edge-to-edge
+  warm photo + whisper. Copy is preserved by materializeArchetype; born-clean re-solves
+  contrast over the photo.
+- **PINS LAW (M3 / law 5)** — the switch is a SYSTEM free-variable move: it NEVER overrides
+  a layout the user DELIBERATELY chose (an explicit UI layout pick, or switching back to
+  editorial after an auto-switch). A pinned layout is OFFERED the switch in the chat voice
+  instead of overridden. A fresh generation (systemFreeVariables) clears the pin. The
+  auto-switch itself neither pins nor clears (`layoutUserPinnedRef`).
+- **Frame composition** — a frame-shape add composes: the new full-bleed archetype hosts
+  the photo per the media-host rule AND the base switches, in the same one-step patch.
+- Wired in `applyDesignPatch` (interaction-time only; the fingerprint fixtures add no
+  shapes, so default renders are pixel-identical). Live-verified both viewports across the
+  editorial/full-bleed/photo-led/text-only set + the pinned-offer case.
+
 ## 8 · Build phases (estimate: the largest single build since the archetype system)
 
 - **P1 — the solver core**: extract the logo's candidate/filter/score loop into a shared `placeElement()`; date + eyebrow + badge adopt it (the three "Not shown" offenders). Archetype priors read from existing `elements{}`.

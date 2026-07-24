@@ -1099,6 +1099,29 @@ const ARCHETYPES = [
 ];
 const ARCHETYPES_BY_ID=Object.fromEntries(ARCHETYPES.map(a=>[a.id,a]));
 const ARCHETYPE_IDS=ARCHETYPES.map(a=>a.id);
+// (Package 1 — client ruling 2026-07-23, docs/element-placement-spec.md §7b) The
+// EDITORIAL/SPLIT family: a solid panel/field paired with a BOUNDED photo column or a
+// floated photo card (editorial_split, portrait_credential, floated_card). Derived
+// honestly from the archetype geometry — a non-fullBleed archetype whose photo is bounded
+// (w<1 or h<1) or that floats a card — rather than a hand-list, so a new panel/split
+// archetype is covered automatically. Full-bleed and photo-led-through-a-mask layouts
+// (documentary/full_bleed_duotone/message_pill/petal_window/shape_cutout) and the
+// text-only fields are NOT in the set — they never auto-switch on a shape add.
+function isEditorialSplitArchetype(arch){
+  if(!arch || arch.fullBleed) return false;
+  const el=arch.elements||{};
+  const p=el.photo;
+  const boundedPhoto = p && (Number(p.w)<1 || Number(p.h)<1);
+  return !!(boundedPhoto || el.card);
+}
+// (Package 1) The full-bleed target a shape-add switches TO — picked the copy-aware way
+// the band-removal belt picks its band-free target (lib/assistant-intents.js): a design
+// carrying a caption keeps it legible on message_pill's born-clean contrast pill; a
+// headline-only design goes to documentary's edge-to-edge warm photo + whisper line. Both
+// are ratified fullBleed "pure photo background" archetypes and born-clean by construction.
+function pickFullBleedTargetForShapeAdd({ hasSecondaryCopy }){
+  return hasSecondaryCopy ? 'message_pill' : 'documentary';
+}
 // Resolve an archetype's per-dimension element boxes: start from square-authored
 // elements, deep-merge the perDim override for this format class. Returns a fresh
 // elements object (never mutates the source). formatClass maps DIMENSIONS→keys.
@@ -6264,6 +6287,16 @@ export default function App() {
      same setters a human click would use — so ownership flags (userLogoTouched,
      logoByDim) end up exactly as if the user had made the change by hand.
      Returns the list of change keys actually applied. */
+  // (Package 1) Deterministic assistant-note channel — a system-authored line pushed into
+  // the chat thread WITHOUT a model call (the shape-add auto-switch narration). Wired to
+  // ArtDirectorChat.noteRef and consumed by the patch pipeline's narration below.
+  const chatNoteRef = useRef(null);
+  // (Package 1 — pins law / M3) TRUE once the user has DELIBERATELY chosen this design's
+  // layout (an explicit archetype pick via UI, or switching back to editorial after an
+  // auto-switch — anything that is not the system's own auto-switch and not a
+  // systemFreeVariables generation). While set, a shape add OFFERS the pure-photo switch
+  // instead of overriding the chosen layout. Session-scoped ref (no re-render needed).
+  const layoutUserPinnedRef = useRef(false);
   const {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
     applyPatchRef, buildMaterialized, dispatchElementCommand, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
@@ -6271,6 +6304,7 @@ export default function App() {
     setGenBrief, snapshotApplyableState, startNewPost,
     undoLastAiChange,
   } = useDesignPatchPipeline({
+    chatNoteRef, layoutUserPinnedRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
     bgAlpha, bgColor, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
@@ -7113,7 +7147,7 @@ export default function App() {
     H, W, acknowledgePopoverIssue, acks, adjustedPopover, advisorDot,
     advisorDots, aiUndoStack, applyGeneratedImage, applyPatch, attribution,
     auditOpen, auditRun, canPan, canvasRef, canvasShellRef, chatDesignState,
-    chatSeed, chatSendRef, closeAdvisorPopover, closeInspector, currentLiked,
+    chatSeed, chatSendRef, chatNoteRef, closeAdvisorPopover, closeInspector, currentLiked,
     dateText, deriveSessionTitle, dim, dimHasOverride, dimensionId,
     dismissProposalLater, downloadAll, dragLift, dragRef, editingTemplate,
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
@@ -7664,7 +7698,7 @@ function EditorShell({ workspace }) {
     H, W, acknowledgePopoverIssue, acks, adjustedPopover, advisorDot,
     advisorDots, aiUndoStack, applyGeneratedImage, applyPatch, attribution,
     auditOpen, auditRun, canPan, canvasRef, canvasShellRef, chatDesignState,
-    chatSeed, chatSendRef, closeAdvisorPopover, closeInspector, currentLiked,
+    chatSeed, chatSendRef, chatNoteRef, closeAdvisorPopover, closeInspector, currentLiked,
     dateText, deriveSessionTitle, dim, dimHasOverride, dimensionId,
     dismissProposalLater, downloadAll, dragLift, dragRef, editingTemplate,
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
@@ -7822,6 +7856,7 @@ function EditorShell({ workspace }) {
         <aside className="wo-chat-col">
           <ArtDirectorChat
             sendRef={chatSendRef}
+            noteRef={chatNoteRef}
             designState={chatDesignState}
             onApplyPatch={(patch) => applyPatch(patch, { harmonize: true })}
             onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
@@ -8346,6 +8381,7 @@ function EditorShell({ workspace }) {
 
 function useDesignPatchPipeline(workspace) {
   const {
+    chatNoteRef, layoutUserPinnedRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
     bgAlpha, bgColor, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
@@ -8492,6 +8528,25 @@ function useDesignPatchPipeline(workspace) {
       getCopyBudgets:computeCopyBudgets,
       fitCopy:fitCopyClient,
     });
+      // (Package 1 — client ruling 2026-07-23) SHAPE-ADD DEFAULTS TO A PURE PHOTO BASE.
+      // Adding any shape (fill/decorative/frame; tray or AI) to an editorial/split design
+      // reads poorly, so the base auto-switches to a full-bleed photo layout in the SAME
+      // patch — ONE undoable step (the snapshot below brackets the whole patch). This is a
+      // SYSTEM free-variable move: it NEVER overrides a layout the user deliberately chose
+      // (M3 / law 5) — a pinned layout is OFFERED the switch in the chat voice instead. A
+      // frame add composes (the full-bleed archetype hosts the photo per the media-host
+      // rule, added AFTER materialization below); copy is preserved by materializeArchetype;
+      // born-clean re-solves contrast over the photo (documentary whisper / message_pill).
+      let autoSwitchedTo = null, pendingShapeSwitchOffer = null;
+      if (patch.addOverlay && typeof patch.archetypeId !== "string"
+          && isEditorialSplitArchetype(archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null)) {
+        const hasSecondaryCopy = !!(String(subtext||"").trim() || String(attribution||"").trim());
+        const target = pickFullBleedTargetForShapeAdd({ hasSecondaryCopy });
+        if (target && target !== archetypeId) {
+          if (layoutUserPinnedRef.current) pendingShapeSwitchOffer = target;
+          else { patch = { ...patch, archetypeId: target }; autoSwitchedTo = target; }
+        }
+      }
       const applied = [];
       const semanticPatchPlan = compileDesignPatchCommands(patch);
       const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
@@ -8522,6 +8577,16 @@ function useDesignPatchPipeline(workspace) {
     if (transitions.archetype) {
       materializeArchetype(transitions.archetype.id,transitions.archetype.context||{});
       applied.push("archetypeId");
+      // (Package 1 — pins law) An EXPLICIT UI layout pick (the "Try another layout" chip,
+      // the inspector, or switching back to editorial after an auto-switch) pins the
+      // layout, so subsequent shape adds OFFER the pure-photo switch instead of overriding
+      // it. A systemFreeVariables archetype change is a FRESH generation — the system's own
+      // free choice — so it CLEARS the pin (a new design starts unpinned). The shape-add
+      // auto-switch itself (autoSwitchedTo) neither pins nor clears.
+      if (transitions.archetype.id !== "none" && !autoSwitchedTo) {
+        if (opts.systemFreeVariables) layoutUserPinnedRef.current = false;
+        else if (opts.uiSource) layoutUserPinnedRef.current = true;
+      }
     }
     if (transitions.dimensionId) { setDimensionId(transitions.dimensionId); applied.push("dimensionId"); }
     // Materialized visuals (Commit 1). A direct tweak to the photo tone or frame on an
@@ -8561,6 +8626,15 @@ function useDesignPatchPipeline(workspace) {
     if (completion.clearPhotoSelection) setPhotoSel(false);
     if (completion.harmonizer) harmonizeRef.current=completion.harmonizer;
     if (completion.authorship) executeWorkflowGroups(planCopyAuthorshipWorkflow(completion.authorship));
+
+    // (Package 1) Narrate the shape-add outcome in the chat voice (deterministic note, no
+    // model call — renderTruth-backed: archetypeId really changed, so this is honest).
+    // Auto-switch → confirm; pinned layout → OFFER (never a silent override, M3).
+    if (autoSwitchedTo && applied.includes("archetypeId")) {
+      chatNoteRef.current?.("Switched to full photo so your shape has room. Tap Undo to keep the split layout.");
+    } else if (pendingShapeSwitchOffer) {
+      chatNoteRef.current?.("Shapes usually sit best on a full-photo layout — just ask for a full-photo layout if you'd like me to switch.");
+    }
 
       applied.changedPaths = [...new Set(commandPaths)];
       if (pendingUndoSnapshot && completion.commitHistory) {
