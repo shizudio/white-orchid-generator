@@ -53,7 +53,10 @@ separate packages (P1 has zero user-visible change; P2 introduces login).
    motif sets resolve through brand_overlays slots, not literal `shape-1`. Touches the
    full mirror set (Generator.jsx archetype specs, design-patch enums + LLM schema +
    field guide, moodboard gene maps, schema seeds) — one atomic package, gated by
-   mirror-check AND the pixel-identity proof (White Orchid unchanged, screenshot diff).
+   mirror-check (`.claude/skills/auto_mirror-touchlist/scripts/mirror-check.sh`) AND
+   the pixel-identity proof (the render-fingerprint harness: 144 cells byte-identical,
+   zero bumps). Implementation PRD: `docs/role-vocabulary-prd.md` (owns the mapping
+   table, mechanism decisions, phase plan R1–R7, release gates).
    Stored designs (sessions/templates/drafts state JSONB) keep working via a
    legacy-name alias map — never a bulk rewrite of user data.
 3. **Fonts are uploadable per brand** (P3 builds the path; the P4 wizard surfaces it).
