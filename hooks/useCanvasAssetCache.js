@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
+// (client ruling 2026-07-23) "orchid-petal" was retired from the catalog; the
+// petalMask / petal_window mask is now the sanctioned "shape-1" silhouette, so
+// the retired asset is no longer preloaded here.
 const ARCHETYPE_ASSET_IDS = Object.freeze([
-  "orchid-petal",
   "shape-1",
   "shape-2",
   "shape-3",

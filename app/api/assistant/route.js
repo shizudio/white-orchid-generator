@@ -1155,7 +1155,7 @@ LAYOUT INTENT MAPPINGS (learned from real client sessions — follow these EXACT
 - "move the logo to the centre / middle" → logoPosition "center" (the true middle of the canvas), NOT "bottom-center". Only say "bottom" when the user says bottom.
 - The logo CAN always be placed at any 9-grid position on ANY layout via logoPosition — never claim a layout can't hold the logo, and never offer a layout switch for a logo move.
 - "remove the logo" / "take the logo off" / "hide the logo" / "no logo" → hideLogo true. "add the logo back" / "put the logo back" / "bring back the logo" / "show the logo again" → hideLogo false. This is always supported on any design; never claim you can't remove or restore the logo.
-- "change the shape" / "a different petal" / "swap this shape" (a petal/shape overlay is already placed — see designState.overlays): set removeOverlays true AND addOverlay with a DIFFERENT petal asset than the one placed (orchid-petal, shape-1, shape-2, shape-3), keeping the same mode. This IS supported — never claim you can't swap a shape.
+- "change the shape" / "a different petal" / "swap this shape" (a petal/shape overlay is already placed — see designState.overlays): set removeOverlays true AND addOverlay with a DIFFERENT shape asset than the one placed (shape-1, shape-2, shape-3), keeping the same mode. This IS supported — never claim you can't swap a shape.
 - CONSISTENCY RULE: if you set ANY patch field, your reply must describe that change. NEVER say "I can't do that" while also emitting a patch — if something truly isn't possible, leave every patch field null and say so.
 
 SIMPLE EDITS — ALWAYS RESOLVE TO A REAL PATCH (never a "that changed nothing" reply). The user is a fluent PROMPTER, not a designer; these everyday asks must Just Work. Follow these few-shots EXACTLY:
@@ -1772,7 +1772,7 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // next variant in the ring (or the model's own different pick). The model
     // claimed "I can't do that yet" while emitting an overlay patch — this belt
     // guarantees the swap lands regardless.
-    const SHAPE_RING = ['orchid-petal', 'shape-1', 'shape-2', 'shape-3'];
+    const SHAPE_RING = ['shape-1', 'shape-2', 'shape-3']; // orchid-petal retired 2026-07-23 (off-brand)
     const SHAPE_SWAP_INTENT = /\b(chang\w*|swap\w*|switch\w*|different|another|next|new)\b[^.!?]{0,24}\b(shape|petal|orchid)\b|\b(shape|petal)\b[^.!?]{0,16}\b(chang\w*|swap\w*|switch\w*)\b/i;
     if (SHAPE_SWAP_INTENT.test(lastUserText) && Array.isArray(designState.overlays)) {
       const cur = designState.overlays.find(o => SHAPE_RING.includes(o.assetId));

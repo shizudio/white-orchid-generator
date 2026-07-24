@@ -18,7 +18,7 @@
 --      hardcoded values — lib/brand-defaults.js is the code-side fallback).
 --   • logo_variants: new columns slug, shape, wide, brand_id (+ unique slug
 --     index) and the 14 White Orchid rows seeded (item c).
---   • brand_overlays: NEW table + the 10 built-in petal/shape/accessory rows
+--   • brand_overlays: NEW table + the 9 built-in petal/shape/accessory rows
 --     seeded (item d).
 --
 -- CONTRACT: every seeded value equals today's constant and every storage_path is
@@ -180,13 +180,16 @@ create table if not exists brand_overlays (
 );
 create unique index if not exists brand_overlays_slug_idx on brand_overlays (brand_id, slug);
 
--- Seed the White Orchid's 10 built-in overlays (identical to the DEFAULT_OVERLAYS
+-- Seed the White Orchid's 9 built-in overlays (identical to the DEFAULT_OVERLAYS
 -- fallback in lib/brand-defaults.js). storage_path is the SAME public asset path
 -- the app serves today, so seeding this table changes nothing until a brand's
 -- admin re-points a row. on conflict keyed by (brand_id, slug) so it is safe to
 -- run more than once.
 insert into brand_overlays (slug, name, storage_path, kind, category, ratio_num, ratio_den, sort_order, brand_id) values
-  ('orchid-petal', 'Orchid',       '/assets/shapes/orchid-petal.svg',        'center',    'overlays',    1,   1,   0, '00000000-0000-0000-0000-000000000001'),
+  -- The orchid-petal row was RETIRED 2026-07-23 (off-brand — client ruling). It was
+  -- removed from DEFAULT_OVERLAY_ASSETS + this seed together (mirror-check 9 stays
+  -- 1:1). A live cloud row must be deleted by the owner (see the ship note); the
+  -- tray guard (RETIRED_OVERLAY_ASSETS) suppresses it regardless of source.
   ('shape-1',      'Shape 1',      '/assets/shapes/shape-1.svg',             'center',    'overlays',    169, 207, 1, '00000000-0000-0000-0000-000000000001'),
   ('shape-2',      'Shape 2',      '/assets/shapes/shape-2.svg',             'center',    'overlays',    217, 196, 2, '00000000-0000-0000-0000-000000000001'),
   ('shape-3',      'Shape 3',      '/assets/shapes/shape-3.svg',             'center',    'overlays',    173, 207, 3, '00000000-0000-0000-0000-000000000001'),

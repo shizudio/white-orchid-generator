@@ -24,7 +24,7 @@ import { planDesignPatchCompositeWorkflows, resolveDesignPatchTransitions } from
 import { hasUserFormatOverride } from "@/lib/design-document.mjs";
 import { runLocalAudit as computeLocalAudit, partitionIssues, extractAuditFindings, PLATFORM_SAFE } from "@/lib/audit-local";
 import { newTurnId, getCurrentSessionId, localGetSession, logFeedback as logFeedbackClient, looksLikeGuardSession } from "@/lib/sessions";
-import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT } from "@/lib/brand-defaults";
+import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT } from "@/lib/brand-defaults";
 import { editorSelectionReducer, selectionInspectorKey, selectionSceneId } from "@/lib/editor-selection.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
 import {
@@ -921,8 +921,10 @@ const ARCHETYPES = [
     // the client judged that flat-glyph orchid the wrong mark. A saved design that
     // referenced its index (3) degrades gracefully: resolveArchetypeVariant wraps
     // the stale index modulo the shorter ring back to variant 0 (never undefined).
-    // NB: the orchid-petal ASSET itself stays in the catalog — it is the Petal
-    // Window archetype's photo mask (petalMask) and a selectable brand shape.
+    // FULL PURGE (same ruling, later): the orchid-petal ASSET itself is now retired
+    // from the catalog entirely (RETIRED_OVERLAY_ASSETS). The Petal Window mask and
+    // every placed instance were re-pointed/migrated to the sanctioned "shape-1"
+    // silhouette; the real brand LOGO orchid is a different asset and is untouched.
     variants:[
       {bg:"burnham",   ink:"whiteSmoke",accentUse:"celadon",      klass:"dark", shapeId:"shape-1"},
       {bg:"sage",      ink:"burnham",   accentUse:"softTangerine",klass:"light",shapeId:"shape-2"},
@@ -2099,7 +2101,9 @@ function convertLegacyLayoutShape(document, { archetypeId = null, variant = 0, p
   const frame = document?.media?.frame;
   if (!frame || (frame.type !== "shapeMask" && frame.type !== "petalMask")) return document;
   if ((document.shapes || []).some(s => s && s.origin === "layout")) return migrateLegacyLayoutShape(document, null);
-  const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : "orchid-petal";
+  // (client ruling 2026-07-23) A legacy petalMask converts to the sanctioned
+  // silhouette (shape-1), never the retired off-brand orchid-petal.
+  const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : RETIRED_OVERLAY_REPLACEMENT;
   const ar = (DEFAULT_OVERLAYS.find(a => a.id === assetId)?.ratio) || 1;
   const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
   const byDim = {}; let masterT = null;
@@ -3051,7 +3055,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // are absent from that cell (the former 112/114 arch-stress false positive).
       let overrideShapeLayer=null;
       if(_isOverrideRender&&(mat?.photoFrame?.type==="shapeMask"||mat?.photoFrame?.type==="petalMask")){
-        const assetId=mat.photoFrame.type==="shapeMask"?(mat.photoFrame.shapeId||"shape-1"):"orchid-petal";
+        const assetId=mat.photoFrame.type==="shapeMask"?(mat.photoFrame.shapeId||"shape-1"):RETIRED_OVERLAY_REPLACEMENT;
         const image=archAssetImgs.current[assetId];
         const ratio=(image?.width&&image?.height)?image.width/image.height:1;
         const bounds=fittedFrameBounds(mat.photoFrame.box,w,h,sm,ratio);
@@ -3835,7 +3839,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const jobs=[];
         if(frame.type==="petalMask"||frame.type==="shapeMask"){
           const m0=clampBox(frame.box);
-          const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):"orchid-petal"];
+          const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):RETIRED_OVERLAY_REPLACEMENT];
           const m = (m0&&shapeImg) ? (()=>{
             const ar=(shapeImg.width&&shapeImg.height)?shapeImg.width/shapeImg.height:1;
             let mw=m0.w, mh=mw/ar;
@@ -8728,8 +8732,11 @@ function InspectorWorkspace({ workspace }) {
         </button>
       );
     };
-    const petals = overlays.filter(o => o.builtin && o.category === "overlays");
-    const decorations = overlays.filter(o => !(o.builtin && o.category === "overlays"));
+    // (client ruling 2026-07-23) Suppress retired off-brand art REGARDLESS of source
+    // — a stale cloud brand_overlays row must not resurrect the Orchid tile.
+    const trayOverlays = overlays.filter(o => !RETIRED_OVERLAY_ASSETS.includes(o.id));
+    const petals = trayOverlays.filter(o => o.builtin && o.category === "overlays");
+    const decorations = trayOverlays.filter(o => !(o.builtin && o.category === "overlays"));
     return (
       <>
         <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"2px 0 6px"}}>Shapes</div>
@@ -9429,7 +9436,7 @@ function TemplateCard({template,onClick}){
       <img src={s.imageSrc} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} /></div>;
   }else if(arch==="petal_window"){
     inner=<>
-      <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:"url(/assets/shapes/orchid-petal.svg)",maskImage:"url(/assets/shapes/orchid-petal.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
+      <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:"url(/assets/shapes/shape-1.svg)",maskImage:"url(/assets/shapes/shape-1.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
       <div style={{position:"absolute",left:"8%",top:"30%",width:"48%"}}>
         <div style={{fontFamily:serif,fontSize:18,fontWeight:600,color:ink,lineHeight:1.02}}>{headline}</div>
         {s.subtext&&<div style={{fontFamily:FU.body,fontSize:8,color:`${ink}bb`,marginTop:6}}>{sm(s.subtext)}</div>}

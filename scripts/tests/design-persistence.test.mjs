@@ -136,3 +136,47 @@ test("card frames and frameless documents are not layout shapes — untouched", 
   const none=legacyDoc({type:"none"});
   assert.equal(migrateLegacyLayoutShape(none,CONVERTED),none);
 });
+
+// ── (client ruling 2026-07-23) off-brand orchid-petal retirement adapter ─────
+import { retireOffBrandShapes } from "../../lib/design-persistence.mjs";
+import { DEFAULT_OVERLAY_ASSETS, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT } from "../../lib/brand-defaults.js";
+
+test("the retired orchid-petal asset is gone from the paintable catalog", () => {
+  assert.ok(RETIRED_OVERLAY_ASSETS.includes("orchid-petal"));
+  assert.equal(DEFAULT_OVERLAY_ASSETS.some(a=>a.id==="orchid-petal"),false);
+  assert.ok(DEFAULT_OVERLAY_ASSETS.some(a=>a.id===RETIRED_OVERLAY_REPLACEMENT),"the replacement silhouette is a live catalog asset");
+});
+
+test("a placed orchid-petal shape migrates to the replacement silhouette, transform+mode+origin preserved", () => {
+  const placed={uid:"ol_1",assetId:"orchid-petal",mode:"frame",origin:"layout",
+    master:{x:0.62,y:0.44,scale:0.41,rotation:15,opacity:1},byDim:{story:{x:0.6,y:0.3,scale:0.38,rotation:0,opacity:1}}};
+  const out=retireOffBrandShapes({shapes:[placed]});
+  assert.equal(out.shapes[0].assetId,RETIRED_OVERLAY_REPLACEMENT);
+  assert.equal(out.shapes[0].mode,"frame");
+  assert.equal(out.shapes[0].origin,"layout");
+  assert.deepEqual(out.shapes[0].master,placed.master);
+  assert.deepEqual(out.shapes[0].byDim,placed.byDim);
+});
+
+test("retirement is idempotent — a document with no retired asset returns the SAME reference", () => {
+  const clean={shapes:[{uid:"ol_2",assetId:"shape-2",mode:"overlay"}]};
+  assert.equal(retireOffBrandShapes(clean),clean);
+  const empty={};
+  assert.equal(retireOffBrandShapes(empty),empty); // no shapes → passthrough (no throw)
+  const once=retireOffBrandShapes({shapes:[{uid:"ol_3",assetId:"orchid-petal",mode:"frame"}]});
+  assert.equal(retireOffBrandShapes(once),once); // second pass is a no-op
+});
+
+test("a fabricated legacy doc with a placed orchid round-trips stable through the persistence reader", () => {
+  const legacy={headline:"Legacy orchid",overlayLayers:[{uid:"ol_rt",assetId:"orchid-petal",mode:"frame",origin:"layout",master:{x:0.5,y:0.5,scale:0.4,rotation:0,opacity:1},byDim:{}}]};
+  const payload=createPersistedDesignPayload(legacy,{dimensionId:"ig_square"});
+  const restored=readPersistedDesignPayload(payload);
+  const shape=restored.document.shapes.find(s=>s.uid==="ol_rt");
+  assert.ok(shape,"the placed layer survives the read");
+  assert.equal(shape.assetId,RETIRED_OVERLAY_REPLACEMENT,"orchid-petal → replacement on load");
+  assert.equal(restored.document.shapes.some(s=>s.assetId==="orchid-petal"),false);
+  // round-trip: re-persist the migrated doc and read again — still clean, stable
+  const twice=readPersistedDesignPayload(createPersistedDesignPayload(restored.document));
+  assert.equal(twice.document.shapes.find(s=>s.uid==="ol_rt").assetId,RETIRED_OVERLAY_REPLACEMENT);
+  assert.equal(twice.document.shapes.some(s=>s.assetId==="orchid-petal"),false);
+});
