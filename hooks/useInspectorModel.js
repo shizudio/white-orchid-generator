@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { textRoleLabel as textRoleName } from "@/lib/text-role-labels.mjs";
 
 // (docs/text-elements-spec.md §3; Slice 3) The five brand-governed classes carry
@@ -46,6 +46,20 @@ export function useInspectorModel({
   // one vocabulary, no "CAPTION chip over a differently-labelled Caption field".
   const textInspectorTitle = textRoleName(postType, textRole);
 
+  // (Panel hierarchy redesign 2026-07-24) Per-pill delete affordance. An element is
+  // pill-DELETABLE only where removal is a real, sanctioned delete (a shape, an added
+  // text element, a drawn furniture detail, or a placed photo). Background is NEVER
+  // deletable; Caption/Text CLEARS (not delete) → no ×; the Logo hides via its own
+  // control (no model-level delete) → no ×. Kept a pure predicate so activeElements
+  // stays a stable memo; the matching delete action lives in removeElementByKey below.
+  const isDeletableKey = useCallback((key) =>
+    (key === "photo" && hasMedia) ||
+    String(key || "").startsWith("el:") ||
+    String(key || "").startsWith("furn_") ||
+    (key === "shape" && !!selectedShapeId) ||
+    (!!key && !["bg", "logo", "text", "photo", "shape"].includes(key)),
+  [hasMedia, selectedShapeId]);
+
   const activeElements = useMemo(() => [
     { key: "bg", label: "Background", icon: "◐" },
     // (B2 · never a dead end) The photo chip is ALWAYS present. With media it opens the
@@ -73,9 +87,10 @@ export function useInspectorModel({
       key: `el:${el.uid}`, label: ELEMENT_CLASS_LABELS[el.class] || "Text", icon: el.placed === false ? "∅" : "T",
       element: true, uid: el.uid, elementClass: el.class, unplaced: el.placed === false,
     })),
-  ], [
+  ].map(el => ({ ...el, deletable: isDeletableKey(el.key) })), [
     hasMedia, hasVideo, postHasCopy, textRoleLabel, hasRenderedLogo, archetypeId,
     shapeLayers.length, renderResultRef, furnitureMetaFor, furnitureLabels, contentElements,
+    isDeletableKey,
   ]);
 
   const activeElementKey = selectedShapeId ? "shape"
@@ -112,25 +127,40 @@ export function useInspectorModel({
     }
   }
 
-  let removeAction = null;
-  if (inspectorElement === "text") {
-    removeAction = { label: "Clear text", act: () => applyPatch({ headline: "", subtext: "", attribution: "", dateText: "", microLabel: "", pillText: "" }, { source: "ui" }) };
-  } else if (inspectorElement === "photo" && hasMedia) {
-    // Only offer removal when a photo/video actually exists — in the no-media "Add
-    // photo" state there is nothing to remove (a dead button would violate law 2).
-    removeAction = { label: hasVideo ? "Remove video" : "Remove photo", act: () => { applyPatch({ removeImage: true }, { source: "ui" }); closeInspector(); } };
-  } else if (String(inspectorElement || "").startsWith("el:")) {
-    // (Slice 3) Remove the added element through the typed remove command (one undo);
-    // closing the inspector afterwards keeps the standard element-removal pattern.
-    const uid = elementUidOf(inspectorElement);
-    removeAction = { label: "Remove", act: () => { if (removeElement) removeElement(uid); closeInspector(); } };
-  } else if (String(inspectorElement || "").startsWith("furn_")) {
-    removeAction = { label: "Delete", act: () => { applyPatch({ furnitureUpdate: { key: inspectorElement, hidden: true } }, { source: "ui" }); closeInspector(); } };
-  } else if (inspectorElement === "shape" && selectedShapeId) {
-    removeAction = { label: "Delete shape", act: () => deleteShape(selectedShapeId) };
-  } else if (inspectorElement && !["bg", "logo", "text", "photo", "shape"].includes(inspectorElement)) {
-    removeAction = { label: "Delete", act: () => deleteShape(inspectorElement) };
-  }
+  // ONE removal contract, keyed by element. `kind:"clear"` is a field-clear (Text/
+  // Caption) — surfaced as a quiet secondary action, NEVER a delete ×. `kind:"delete"`
+  // is a real removal — the pill × affordance and the accessible fallback both drive it.
+  const removalFor = (key) => {
+    if (key === "text") {
+      return { label: "Clear text", kind: "clear", act: () => applyPatch({ headline: "", subtext: "", attribution: "", dateText: "", microLabel: "", pillText: "" }, { source: "ui" }) };
+    }
+    if (key === "photo" && hasMedia) {
+      // Only offer removal when a photo/video actually exists — in the no-media "Add
+      // photo" state there is nothing to remove (a dead button would violate law 2).
+      return { label: hasVideo ? "Remove video" : "Remove photo", kind: "delete", act: () => { applyPatch({ removeImage: true }, { source: "ui" }); closeInspector(); } };
+    }
+    if (String(key || "").startsWith("el:")) {
+      // (Slice 3) Remove the added element through the typed remove command (one undo);
+      // closing the inspector afterwards keeps the standard element-removal pattern.
+      const uid = elementUidOf(key);
+      return { label: "Delete", kind: "delete", act: () => { if (removeElement) removeElement(uid); closeInspector(); } };
+    }
+    if (String(key || "").startsWith("furn_")) {
+      return { label: "Delete", kind: "delete", act: () => { applyPatch({ furnitureUpdate: { key, hidden: true } }, { source: "ui" }); closeInspector(); } };
+    }
+    if (key === "shape" && selectedShapeId) {
+      return { label: "Delete shape", kind: "delete", act: () => deleteShape(selectedShapeId) };
+    }
+    if (key && !["bg", "logo", "text", "photo", "shape"].includes(key)) {
+      return { label: "Delete", kind: "delete", act: () => deleteShape(key) };
+    }
+    return null;
+  };
 
-  return { activeElements, activeElementKey, inspectorInfo, removeAction };
+  const removeAction = removalFor(inspectorElement);
+  // Per-pill delete entry point (drives the pill × on any deletable pill, desktop or
+  // mobile). No-ops on a non-delete (clear) or non-deletable key by construction.
+  const removeElementByKey = (key) => { const r = removalFor(key); if (r && r.kind === "delete") r.act(); };
+
+  return { activeElements, activeElementKey, inspectorInfo, removeAction, removeElementByKey };
 }

@@ -10,11 +10,12 @@ import { memo, useRef, useState } from "react";
 // is display:none on desktop, where the inspector stays the in-flow column.
 const DETENT_DRAG_PX = 40;
 
-function ContextualInspector({ info, removeAction, onClose, elements=[], activeKey, onSelect, palette, fonts }) {
+function ContextualInspector({ info, removeAction, onClose, onDeleteElement, elements=[], activeKey, onSelect, palette, fonts }) {
   const [tall, setTall] = useState(false);
   const handleDrag = useRef(null);
   if (!info) return null;
   const B=palette,FU=fonts;
+  const activeIsDeletable = elements.some(el => el.key===activeKey && el.deletable);
   const onHandleDown = e => {
     handleDrag.current = { y: e.clientY, dy: 0 };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
@@ -37,18 +38,30 @@ function ContextualInspector({ info, removeAction, onClose, elements=[], activeK
       onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); setTall(prev=>!prev); } if(e.key==="Escape") onClose(); }}>
       <span className="wo-sheet-handle-bar" aria-hidden="true" />
     </div>
-    <div className="wo-inspector-head" style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto"}}>
-      <span style={{fontSize:11,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.6,textTransform:"uppercase",color:B.burnham,flex:"0 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{info.title}</span>
-      {removeAction && <button type="button" onClick={removeAction.act} style={{marginLeft:"auto",flex:"0 0 auto",border:"none",background:"transparent",color:B.tangerine,fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:0.4,cursor:"pointer",padding:"6px 8px"}}>{removeAction.label}</button>}
-      <button type="button" aria-label="Close inspector" className="wo-ins-close" onClick={onClose} style={{marginLeft:removeAction?0:"auto",flex:"0 0 auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}18`,color:B.jet,fontSize:15,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
+    {/* (Panel hierarchy redesign 2026-07-24, client-approved) New order:
+        slim top bar (close only) → element pills (nav, with per-pill delete ×) →
+        selection name (title) → features. The old title+Delete header row is gone;
+        deletes live on the pills, clears live as a quiet secondary by the title. */}
+    <div className="wo-inspector-head" style={{display:"flex",alignItems:"center",padding:"8px 12px",borderBottom:`1px solid ${B.ash}18`,background:"#fff",flex:"0 0 auto"}}>
+      <button type="button" aria-label="Close inspector" className="wo-ins-close" onClick={onClose} style={{marginLeft:"auto",flex:"0 0 auto",width:30,height:30,borderRadius:8,border:"none",background:`${B.ash}18`,color:B.jet,fontSize:15,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
     </div>
-    {elements.length >= 2 && <div role="toolbar" aria-label="Elements" style={{display:"flex",flexWrap:"wrap",gap:6,padding:"10px 14px",borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto"}}>
+    {elements.length >= 2 && <div role="toolbar" aria-label="Elements" style={{display:"flex",flexWrap:"wrap",gap:8,padding:"10px 14px 12px",borderBottom:`1px solid ${B.ash}22`,background:"#fff",flex:"0 0 auto"}}>
       {elements.map(el => {
         const on=activeKey===el.key;
-        return <button key={el.key} type="button" className="wo-ins-pill" aria-pressed={on} title={`Edit ${el.label}`} onClick={()=>onSelect(el)} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 11px",minHeight:30,borderRadius:999,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?B.burnham:"transparent",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:500,letterSpacing:0.4,cursor:"pointer"}}><span aria-hidden="true" style={{fontSize:11,lineHeight:1}}>{el.icon}</span>{el.label}</button>;
+        return <span key={el.key} className={`wo-ins-pill-wrap${on?" is-active":""}`} style={{position:"relative",display:"inline-flex"}}>
+          <button type="button" className="wo-ins-pill" aria-pressed={on} title={`Edit ${el.label}`} onClick={()=>onSelect(el)} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"5px 11px",minHeight:30,borderRadius:999,border:`1px solid ${on?B.burnham:B.ash+"33"}`,background:on?B.burnham:"transparent",color:on?"#fff":B.jet,fontFamily:FU.subtitle,fontSize:10,fontWeight:500,letterSpacing:0.4,cursor:"pointer"}}><span aria-hidden="true" style={{fontSize:11,lineHeight:1}}>{el.icon}</span>{el.label}</button>
+          {el.deletable && onDeleteElement && <button type="button" className="wo-ins-pill-x" aria-label={`Delete ${el.label}`} title={`Delete ${el.label} — undoable (⌘Z)`} onClick={e=>{e.stopPropagation();onDeleteElement(el.key);}}>
+            <span className="wo-ins-pill-x-dot" aria-hidden="true">×</span>
+          </button>}
+        </span>;
       })}
     </div>}
-    <div className="wo-inspector-body" style={{padding:"14px 15px 18px",overflowY:"auto",flex:"1 1 auto",background:"#fff"}}>{info.body}</div>
+    <div className="wo-inspector-title" style={{display:"flex",alignItems:"baseline",gap:10,padding:"12px 15px 2px",background:"#fff",flex:"0 0 auto"}}>
+      <span style={{fontSize:13,fontFamily:FU.title,fontWeight:600,color:B.burnham,flex:"0 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{info.title}</span>
+      {removeAction && removeAction.kind==="clear" && <button type="button" onClick={removeAction.act} style={{marginLeft:"auto",flex:"0 0 auto",border:"none",background:"transparent",color:B.ash,fontFamily:FU.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.4,cursor:"pointer",padding:"2px 2px"}}>{removeAction.label}</button>}
+    </div>
+    {activeIsDeletable && <div style={{padding:"2px 15px 0",background:"#fff",flex:"0 0 auto"}}><span style={{fontSize:10,color:B.ash,fontFamily:FU.body,lineHeight:1.4}}>Deleting is undoable — ⌘Z brings it back.</span></div>}
+    <div className="wo-inspector-body" style={{padding:"12px 15px 18px",overflowY:"auto",flex:"1 1 auto",background:"#fff"}}>{info.body}</div>
   </div>;
 }
 

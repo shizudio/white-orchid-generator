@@ -1858,6 +1858,42 @@ canvas[role="application"]:focus-visible {
   overflow: hidden;
 }
 
+/* ── Element-pill delete affordance (panel hierarchy redesign 2026-07-24) ──
+   A deletable pill carries a small × at its top-right corner. Desktop: it fades
+   in when the pill is hovered or the × is keyboard-focused. Mobile (half-sheet,
+   no hover): it appears ONLY on the currently ACTIVE pill (select first, then
+   delete). The × is a 44px hit target that overflows the pill; when hidden it is
+   pointer-events:none so it never steals the pill's own hover/tap. Keyboard focus
+   ALWAYS reveals it (AT reachability) regardless of viewport. */
+.wo-ins-pill-x {
+  position: absolute;
+  top: -9px; right: -9px;
+  width: 44px; height: 44px;      /* hit target (overflows the pill by design) */
+  display: grid; place-items: center;
+  border: none; background: transparent; padding: 0; margin: 0;
+  cursor: pointer;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.14s ease;
+  z-index: 3;
+}
+.wo-ins-pill-x-dot {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--tw-tangerine, #F6644E); color: #fff;
+  font-size: 13px; line-height: 1; display: grid; place-items: center;
+  box-shadow: 0 1px 4px rgba(37, 78, 72, 0.32);
+}
+/* Keyboard focus reveals the × in both viewports (accessible delete path). */
+.wo-ins-pill-x:focus-visible { opacity: 1; pointer-events: auto; }
+.wo-ins-pill-x:focus-visible .wo-ins-pill-x-dot { outline: 2px solid var(--tw-burnham, #254E48); outline-offset: 2px; }
+/* Desktop (has hover, wider than the half-sheet breakpoint): hover reveals. */
+@media (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .wo-ins-pill-wrap:hover > .wo-ins-pill-x { opacity: 1; pointer-events: auto; }
+}
+/* Mobile half-sheet: only the active pill exposes its × (select, then delete). */
+@media (max-width: 760px) {
+  .wo-ins-pill-wrap.is-active > .wo-ins-pill-x { opacity: 1; pointer-events: auto; }
+}
+
 /* Desktop dock (D1 item 1): an IN-FLOW flex column — a third workspace column
    the canvas makes room for, NEVER a sheet floating over the artwork. It shares
    the chat column's sticky, own-scroll behaviour so the preview panel (flex 1)

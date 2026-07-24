@@ -9177,6 +9177,7 @@ function InspectorWorkspace({ workspace }) {
     activeElementKey: activeElKey,
     inspectorInfo,
     removeAction: inspectorRemove,
+    removeElementByKey: inspectorRemoveByKey,
   } = useInspectorModel({
     inspectorElement: inspectorEl,
     selectedShapeId: selOverlay,
@@ -9208,7 +9209,7 @@ function InspectorWorkspace({ workspace }) {
   });
 
   const renderInspectorPanel = () => <ContextualInspector info={inspectorInfo} removeAction={inspectorRemove}
-    onClose={closeInspector} elements={activeElements} activeKey={activeElKey}
+    onClose={closeInspector} elements={activeElements} activeKey={activeElKey} onDeleteElement={inspectorRemoveByKey}
     onSelect={el=>el.element?(setChangeTypeOpen(false),selectElement("text",null,`el:${el.uid}`)):el.overlay?selectElement("overlay",el.key):selectElement(el.key)} palette={B} fonts={FU}/>;
   return inspectorInfo ? renderInspectorPanel() : null;
 }
