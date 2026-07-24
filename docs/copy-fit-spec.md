@@ -17,6 +17,10 @@
 
 **Tier 3 — the owner's copy gets a guaranteed remedy.** When HER copy overflows (never silently altered): the finding appears with (a) **"Tighten it for me" — a contract, not a hope**: computed budget → rewrite to that number → apply → verify against render truth → if still overflowing, deterministic sentence-boundary trim that always fits. The button can never no-op (M2). (b) **"Edit it myself"** deep-link showing the live budget ("fits about N characters here"). (c) **"Leave it off"** (the honest loss-class ack). There is NO format-switch action.
 
+## Brand-name copy exclusion (client ruling 2026-07-23)
+
+The system never AUTHORS the brand's own name as on-canvas text content (attribution, support, or any role/element) — "the logo should already inform that." Applies to every generation surface (landing plan, belts, missing-role synthesis, defaults). The name is read from the brand profile (zero-brand-facts: the rule is generic, the name is data). Owner-typed brand-name copy is untouched (pins law), and the social-media caption writer may still use the name (off-canvas copy).
+
 ## Authorship tracking
 Fitting rules key off WHO wrote the field: AI-authored copy fields are marked at application time (the landing/caption/belt patches), and their persisted values may be repaired before acceptance. Any manual edit transfers authorship to the owner permanently. Authorship metadata may guide future rewrites, but it must never make identical stored strings render differently.
 
