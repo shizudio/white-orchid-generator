@@ -8873,6 +8873,18 @@ function InspectorWorkspace({ workspace }) {
           </div>
         );
       })()}
+      {/* (Type-scale honesty) The hero's requested size can be capped by auto-fit in a
+          tight format. Render truth (fontMeta.headlineSizeCapped) surfaces it honestly so
+          the pressed S/M/L pill isn't a size the copy never actually paints at. */}
+      {(()=>{
+        const primaryRole = ["texture_text","photo_logo"].includes(postType) ? "highlight" : "heading";
+        const cur = fontSizes[primaryRole] || "m";
+        const simple = cur==="xs"||cur==="s" ? "s" : cur==="xl"||cur==="l" ? "l" : "m";
+        if(simple==="s" || !renderResultRef.current?.textMetrics?.headlineSizeCapped) return null;
+        return <div role="note" style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"6px 0 0"}}>
+          <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{simple.toUpperCase()}</strong> paints smaller here to fit the layout.
+        </div>;
+      })()}
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
       <div style={{display:"flex",gap:9,flexWrap:"wrap",alignItems:"center"}}>
         {TEXT_COLOR_OPTIONS.map(option=>{const on=textColorId===option.id,color=option.id==="auto"?B[suggestedTextColor]:B[option.id];return <button key={option.id} aria-pressed={on} onClick={()=>applyPatch({textColorId:option.id},{source:"ui"})} title={option.label}
@@ -9017,6 +9029,16 @@ function InspectorWorkspace({ workspace }) {
           );})}
         </div>
       </div>
+      {/* (Type-scale honesty, closing the deferral) When auto-fit capped the requested
+          step in THIS format, say so from render truth (effectiveStep/sizeCapped) — the
+          selected pill's honest state, never a silently-shrunk L pretending to be L. */}
+      {(()=>{
+        const rt=liveSceneElements.find(s=>s.uid===uid);
+        if(!rt||!rt.sizeCapped||!rt.effectiveStep||rt.effectiveStep===rt.sizeStep) return null;
+        return <div role="note" style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"6px 0 0"}}>
+          <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{rt.sizeStep}</strong> fits as <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{rt.effectiveStep}</strong> in this format.
+        </div>;
+      })()}
 
       {/* Style — the sanctioned register switch (Font Ruling B). Only the registers this
           class may choose are shown; the whole control hides when there is only one. A
