@@ -70,6 +70,29 @@ Client reaffirmed 2026-07-23: the band remains a per-format free variable (band 
 | Class size floors | per element class from MIN_FONT_PX table | The shrink limit |
 | Snap grid | the anchor set | What manual dragging snaps to |
 
+## 7a · Legacy caption drag — the whole-class registration fix (2026-07-24)
+
+Client: *"i have instances where i cannot move the caption."* ROOT CAUSE: the stacked
+**legacy** postType painters (photo_logo / texture_text caption, quote credit, event
+details, text_post subtext — rendered when `mat.editorial` is false, i.e. archetypeId
+null / an old session) **draw** the caption but never published its box to
+`renderTruth.roleBounds`. Absent from `sceneElements`, the pointer hit-test
+(`resolveScenePointerTarget → hitTestScene`) found nothing at the caption's pixels and
+fell through to photo/background — the caption was **visible but un-draggable**, breaking
+the DLC invariant that *every text role is draggable wherever it is painted, with pins*.
+(The editorial single-path already registers `support` whenever it is painted; only the
+legacy fallback paths were affected.)
+
+FIX (Generator.jsx, legacy render section): each painted legacy caption now (a) honours a
+stored roleFree `support` offset via the SAME `roleOff("support")` the editorial path
+uses, and (b) publishes its drawn box as the `support` role in `renderTruth.roleBounds`
+(re-adding `hero`/`date` so the textBounds→hero fallback is not orphaned). Because text
+roles carry equal z, `hitTestScene`'s smaller-area-first tie-break resolves a pointer
+inside the caption to `support`, not the whole-block `hero`. One drag = one undo; a frozen
+owner pin survives re-solve (law 5). The offset is `{0,0}` until the user drags, so default
+renders are pixel-identical (render fingerprint self-baseline unchanged, legacy cells
+0/144 diff). Pure invariant covered in `scripts/tests/render-result.test.mjs`.
+
 ## 8 · Build phases (estimate: the largest single build since the archetype system)
 
 - **P1 — the solver core**: extract the logo's candidate/filter/score loop into a shared `placeElement()`; date + eyebrow + badge adopt it (the three "Not shown" offenders). Archetype priors read from existing `elements{}`.

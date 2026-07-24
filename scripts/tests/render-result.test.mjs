@@ -85,6 +85,27 @@ test("a solver-placed date is a first-class draggable text role, not the textBou
   assert.equal(hitTestScene(result.sceneElements,900,1205,{types:["text"]}).role,"date");
 });
 
+test("a legacy caption (support) registers as a draggable role that wins the hit-test over the whole-block hero", () => {
+  // (Package 2 — legacy caption drag) The stacked legacy painters draw the caption INSIDE
+  // the textBounds block, so the legacy `hero` box is the whole block and the `support`
+  // sub-box overlaps it. Publishing support alongside hero must (a) NOT trigger the
+  // textBounds→hero fallback (roleBounds is now non-empty) yet still keep hero selectable,
+  // and (b) resolve a pointer inside the caption to `support` — hitTestScene's z-desc then
+  // smaller-area-first tie-break picks the smaller support box over the whole-block hero.
+  const result=createRenderResult({
+    dimensionId:"ig_portrait",width:1080,height:1350,
+    textBounds:{x:108,y:220,w:864,h:360},
+    roleBounds:{ hero:{x:108,y:220,w:864,h:360}, support:{x:108,y:504,w:864,h:40} },
+    logoBox:{x:60,y:1180,w:120,h:120},
+  });
+  const textRoles=result.sceneElements.filter(item=>item.type==="text").map(item=>item.role).sort();
+  assert.deepEqual(textRoles,["hero","support"]);
+  // A pointer inside the caption sub-box resolves to support (smaller area wins the overlap).
+  assert.equal(hitTestScene(result.sceneElements,540,524,{types:["text"]}).role,"support");
+  // A pointer in the hero-only region (above the caption) resolves to hero.
+  assert.equal(hitTestScene(result.sceneElements,540,300,{types:["text"]}).role,"hero");
+});
+
 test("shape bounds use the same width-relative transform as canvas painting", () => {
   assert.deepEqual(shapeBounds({x:0.5,y:0.25,scale:0.2},2,1000,500),{x:400,y:75,w:200,h:100});
 });

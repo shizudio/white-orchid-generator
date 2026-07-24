@@ -5291,6 +5291,20 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       return finishRender(); // single-path editorial render complete.
     }
 
+    // ── (Package 2 — legacy caption drag, docs/element-placement-spec.md §Legacy caption
+    // drag) ROOT CAUSE: the stacked legacy painters below draw a caption (photo_logo /
+    // texture_text caption, quote credit, event details, text_post subtext) but NEVER
+    // published its box to renderTruth.roleBounds. Absent from sceneElements, the pointer
+    // hit-test fell through to photo/background — the caption was VISIBLE but un-draggable,
+    // violating the DLC (text roles are draggable with pins). Fix, for the whole class:
+    // capture the painted caption box + honour a stored roleFree "support" offset so the
+    // SAME drag the editorial path uses (roleOff("support") → updateRoleOffset) works here.
+    // The offset is {0,0} until the user drags, so DEFAULT renders are pixel-identical
+    // (fingerprint holds); the box is metadata (no pixels). One drag = one undo; a frozen
+    // owner pin survives a re-solve (law 5).
+    const _legacyCapOff=roleOff("support");
+    let _legacyCapBox=null;
+
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
       if(headline){
@@ -5317,7 +5331,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // Text sits on the photo only when NOT side-by-side (else it's on the solid panel).
         if(mediaObj&&!photoBox){resolveZoneTc(tbox);drawBackdrop(tbox);}
         beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
-        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;const _capY=by+used+capGap;used+=capGap+drawTextLines(ctx,capFit.lines,bx+_legacyCapOff.dx,_capY+_legacyCapOff.dy,bw,capFit.lineHeight,align);if(live)_legacyCapBox={x:bx+_legacyCapOff.dx,y:_capY+_legacyCapOff.dy-capFit.size,w:bw,h:capFit.lines.length*capFit.lineHeight};}
         setTextBounds(used);endText();
         putLogo({x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3});
       }else{putLogo();renderTruth.textBounds=null;}
@@ -5330,7 +5344,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         beginText();const q=stripHeroMarkers(headline)||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=stripHeroMarkers(attribution||subtext);
         ctx.fillStyle=frameBgTextColor||zoneTc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
         ctx.font=`italic 500 ${quoteFit.size}px ${F.quote}`;let used=drawTextLines(ctx,quoteFit.lines,bx,by,bw,quoteFit.lineHeight,align);
-        if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;used+=gap+drawTextLines(ctx,cf.lines,bx,by+used+gap,bw,cf.lineHeight,align);ctx.letterSpacing="0px";}
+        if(credit){const gap=Math.max(38*S,quoteFit.size*0.55),cf=fitText(ctx,credit.toUpperCase(),s=>`600 ${s}px ${F.subtitle}`,32*S*scale*fm("content"),bw,Math.max(58*S,maxTextH-used-gap),1.2,mf("body",32*S*scale*fm("content"),28*S));ctx.font=`600 ${cf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;const _cy=by+used+gap;used+=gap+drawTextLines(ctx,cf.lines,bx+_legacyCapOff.dx,_cy+_legacyCapOff.dy,bw,cf.lineHeight,align);ctx.letterSpacing="0px";if(live)_legacyCapBox={x:bx+_legacyCapOff.dx,y:_cy+_legacyCapOff.dy-cf.size,w:bw,h:cf.lines.length*cf.lineHeight};}
         endText();return used;
       };
       // (WP-U green-filter fix) band sized to the DRAWN copy: measure with an
@@ -5378,7 +5392,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           const sf=fitText(ctx,stripHeroMarkers(subtext),s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,detailFloor);fontMeta.subtext=sf.size;
           // (Crops ext) complete-or-absent: render every line or drop the field.
           if(sf.lines.length>Math.max(1,maxDetail)){dropped.push("Details");}
-          else{ctx.font=`400 ${sf.size}px ${F.body}`;used+=gap+drawTextLines(ctx,sf.lines,bx,by+used+gap,bw,sf.lineHeight,align);}
+          else{ctx.font=`400 ${sf.size}px ${F.body}`;const _cy=by+used+gap;used+=gap+drawTextLines(ctx,sf.lines,bx+_legacyCapOff.dx,_cy+_legacyCapOff.dy,bw,sf.lineHeight,align);if(live)_legacyCapBox={x:bx+_legacyCapOff.dx,y:_cy+_legacyCapOff.dy-sf.size,w:bw,h:sf.lines.length*sf.lineHeight};}
         }
       }
       endText();return used;
@@ -5411,7 +5425,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         if(room<subFloor*1.3){dropped.push("Subtext");}
         else{const af=fitText(ctx,stripHeroMarkers(attribution),s=>`400 ${s}px ${F.body}`,38*S*scale*fm("content"),bw,room,1.38,subFloor);
           if(af.lines.length>2){dropped.push("Subtext");}
-          else{ctx.font=`400 ${af.size}px ${F.body}`;used+=gap+drawTextLines(ctx,af.lines,bx,by+used+gap,bw,af.lineHeight,align);}}
+          else{ctx.font=`400 ${af.size}px ${F.body}`;const _cy=by+used+gap;used+=gap+drawTextLines(ctx,af.lines,bx+_legacyCapOff.dx,_cy+_legacyCapOff.dy,bw,af.lineHeight,align);if(live)_legacyCapBox={x:bx+_legacyCapOff.dx,y:_cy+_legacyCapOff.dy-af.size,w:bw,h:af.lines.length*af.lineHeight};}}
       }
       endText();return used;
       };
@@ -5445,7 +5459,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const tbox={x:bx,y:by-hf.size,w:bw,h:preUsed+capGap+capH+hf.size*0.3};
         if(mediaObj){resolveZoneTc(tbox);drawBackdrop(tbox);}
         beginText();ctx.fillStyle=zoneTc;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${2*S}px`;let used=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";
-        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;used+=capGap+drawTextLines(ctx,capFit.lines,bx,by+used+capGap,bw,capFit.lineHeight,align);}
+        if(capFit){ctx.font=`400 ${capFit.size}px ${F.body}`;const _capY=by+used+capGap;used+=capGap+drawTextLines(ctx,capFit.lines,bx+_legacyCapOff.dx,_capY+_legacyCapOff.dy,bw,capFit.lineHeight,align);if(live)_legacyCapBox={x:bx+_legacyCapOff.dx,y:_capY+_legacyCapOff.dy-capFit.size,w:bw,h:capFit.lines.length*capFit.lineHeight};}
         setTextBounds(used);endText();
         putLogo(tbox);
       }else{setTextBounds(h*0.12);putLogo();}
@@ -5533,6 +5547,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // non-empty, so the hero box must be carried explicitly. The date is now a
       // first-class draggable role on the legacy layouts.
       if(legacyDateDrawn) renderTruth.roleBounds={...(tb?{hero:tb}:{}), date:legacyDateDrawn};
+    }
+
+    // (Package 2 — legacy caption drag) Publish the painted caption box as the `support`
+    // role so it becomes a scene element (draggable via the shared roleFree path). hero
+    // (textBounds) + any solver date MUST be re-added: render-result only derives the
+    // hero-from-textBounds fallback while roleBounds is EMPTY, so a bare support entry
+    // would otherwise orphan the hero hit-target (and any date). The support box is
+    // registered AFTER hero so hitTestScene's smaller-area-first tie-break resolves a
+    // pointer inside the caption to `support`, not the whole-block hero.
+    if(_legacyCapBox){
+      const _htb=renderTruth.textBounds;
+      renderTruth.roleBounds={
+        ...(_htb?{hero:_htb}:{}),
+        ...(legacyDateDrawn?{date:legacyDateDrawn}:{}),
+        support:_legacyCapBox,
+      };
     }
 
     // ── (LEGACY DEAD-ROLE HONESTY) ──────────────────────────────────────────
