@@ -10,6 +10,7 @@ import FurnitureInspectorPanel from "./FurnitureInspectorPanel";
 import BackgroundInspectorPanel from "./BackgroundInspectorPanel";
 import MediaInspectorPanel from "./MediaInspectorPanel";
 import ContentFieldsPanel from "./ContentFieldsPanel";
+import { textRoleLabel } from "@/lib/text-role-labels.mjs";
 import LogoInspectorPanel from "./LogoInspectorPanel";
 import ShapeInspectorPanel from "./ShapeInspectorPanel";
 import OverlayInspectorPanel from "./OverlayInspectorPanel";
@@ -7851,7 +7852,7 @@ function EditorShell({ workspace }) {
                 text={textSelected && !selOverlay
                   ? (selectedRenderedElement?.type==="text"?selectedRenderedElement.bounds:null)
                   : null}
-                textLabel={textRole==="support"?"CAPTION":textRole==="date"?"DATE":textRole==="eyebrow"?"LABEL":textRole==="pill"?"BUTTON":textRole==="hero"?"TITLE":"TEXT"}
+                textLabel={textRoleLabel(postType,textRole).toUpperCase()}
               />
               {/* ── (Hearts — ratified) The like heart moved OFF the artwork into the
                     below-canvas control strip (see .generator-canvas-controls) so it

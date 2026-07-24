@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { textRoleLabel as textRoleName } from "@/lib/text-role-labels.mjs";
 
 // (docs/text-elements-spec.md §3; Slice 3) The five brand-governed classes carry
 // PLAIN labels a preschool teacher reads at a glance — "Button", never "CTA".
@@ -40,11 +41,10 @@ export function useInspectorModel({
     : postType === "event" ? "Event text"
       : postType === "texture_text" ? "Overlay text"
         : postType === "photo_logo" ? "Caption" : "Text";
-  const textInspectorTitle = textRole === "date" ? "Date"
-    : textRole === "eyebrow" ? "Little label"
-      : textRole === "pill" ? "Button"
-        : textRole === "support" ? "Text"
-          : textRole === "hero" ? (postType === "quote" ? "Quote" : "Title") : "Text";
+  // (Role-vocabulary unification) The inspector header names the SELECTED role
+  // with the same client-facing word the on-canvas chip and the copy field use —
+  // one vocabulary, no "CAPTION chip over a differently-labelled Caption field".
+  const textInspectorTitle = textRoleName(postType, textRole);
 
   const activeElements = useMemo(() => [
     { key: "bg", label: "Background", icon: "◐" },
