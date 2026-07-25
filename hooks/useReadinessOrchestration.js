@@ -98,6 +98,24 @@ export function useReadinessOrchestration({
     });
   }, [designFingerprint, setReadyCheck]);
 
+  // (Item 3 — the readiness ledger must track content edits) refreshReadyCheck otherwise
+  // runs only on export-panel open / blocked-export click / applyReadyFix, so the format
+  // strip's "N blocked" count (Generator.jsx) and createExportAuthorization read a STALE
+  // six-format ledger after a content edit — a format the edit just broke (or fixed) is not
+  // reflected until the export panel is opened. Recompute the sweep DEBOUNCED on
+  // designFingerprint change (~2s after the last edit) so the strip and the export gate both
+  // track edits. The sweep is entirely offscreen (auditAllFormats builds its own canvases),
+  // reuses the same machinery export-open already uses, and writes only React state — it
+  // never touches the live canvas and never writes to cloud (harness-safe by construction).
+  const refreshReadyCheckRef = useRef(refreshReadyCheck);
+  refreshReadyCheckRef.current = refreshReadyCheck;
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try { refreshReadyCheckRef.current(); } catch { /* the sweep is advisory; never block edits */ }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [designFingerprint]);
+
   return {
     runLocalAudit,
     auditAllFormats,
