@@ -180,3 +180,31 @@ test("a fabricated legacy doc with a placed orchid round-trips stable through th
   assert.equal(twice.document.shapes.find(s=>s.uid==="ol_rt").assetId,RETIRED_OVERLAY_REPLACEMENT);
   assert.equal(twice.document.shapes.some(s=>s.assetId==="orchid-petal"),false);
 });
+
+import { collapseRedundantLayoutShapes } from "../../lib/design-persistence.mjs";
+
+// (Item 5 — the broken petal template) A stored template that carried a SECOND layout-origin
+// silhouette (a fill/overlay tinted a field colour) painted it as a translucent salmon blob
+// over the framed photo. The collapse adapter keeps the single canonical silhouette.
+test("a redundant layout-origin fill silhouette is collapsed to the media-host frame (no salmon blob)", () => {
+  const legacy={headline:"Feeling secure",imageSrc:"data:x",
+    overlayLayers:[
+      {uid:"ol_layout_frame",assetId:"shape-1",mode:"frame",origin:"layout",master:{x:0.5,y:0.4,scale:0.6}},
+      {uid:"ol_layout_fill",assetId:"shape-1",mode:"fill",origin:"layout",userTouched:true,master:{x:0.5,y:0.5,scale:0.7,colorId:"tangerine"}},
+    ]};
+  const restored=readPersistedDesignPayload(createPersistedDesignPayload(legacy));
+  const layout=restored.document.shapes.filter(s=>s.origin==="layout");
+  assert.equal(layout.length,1,"only the single canonical silhouette survives");
+  assert.equal(layout[0].uid,"ol_layout_frame","the photo-hosting frame is kept, the fill blob dropped");
+  assert.equal(restored.document.composition.mediaHostShapeId,"ol_layout_frame");
+});
+
+test("collapse keeps a lone silhouette and is idempotent (clean designs untouched, same reference)", () => {
+  const one={shapes:[{uid:"ol_layout_x",assetId:"shape-1",mode:"frame",origin:"layout",master:{x:0.5,y:0.5,scale:0.6}}]};
+  assert.equal(collapseRedundantLayoutShapes(one),one,"a single layout shape returns the same reference");
+  const none={shapes:[{uid:"u1",assetId:"shape-2",mode:"overlay"}]};
+  assert.equal(collapseRedundantLayoutShapes(none),none);
+  const collapsed=collapseRedundantLayoutShapes({composition:{mediaHostShapeId:"a"},shapes:[
+    {uid:"a",origin:"layout",mode:"frame"},{uid:"b",origin:"layout",mode:"fill"}]});
+  assert.equal(collapseRedundantLayoutShapes(collapsed),collapsed,"a second pass is a no-op");
+});

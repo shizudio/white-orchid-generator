@@ -477,6 +477,19 @@ test("template merge without a current document is a straight template load", ()
   assert.deepEqual(mergeCurrentContent({template,current:null}),template);
 });
 
+test("a re-skin re-runs the contrast ladder: unpinned text/backdrop reset to auto, pins stay (Item 5)", () => {
+  // A template with a fixed cream ink over a cream field would render cream-on-cream ghost
+  // text if carried verbatim; the re-skin resets the unpinned colour so contrast re-solves.
+  const template=createDesignDocumentV1({headline:"Template",textColorId:"whiteSmoke",bgColor:"whiteSmoke",backdropMode:"scrim"});
+  const resolved=mergeCurrentContent({template,current:createDesignDocumentV1({headline:"Owner",copyAuthors:{headline:"owner"}})});
+  assert.equal(resolved.palette.text,"auto","unpinned text re-solves against the re-skinned design");
+  assert.equal(resolved.palette.backdrop,"auto","unpinned backdrop re-solves too");
+  assert.equal(resolved.palette.background,"whiteSmoke","the template's field proposal is unchanged");
+  // An owner PIN keeps the explicit colour (law 5).
+  const pinned=mergeCurrentContent({template,current:createDesignDocumentV1({textColorId:"tangerine",pinnedProps:{textColorId:true}})});
+  assert.equal(pinned.palette.text,"tangerine","an owner-pinned ink survives the re-skin");
+});
+
 test("planTemplateApplicationWorkflow carries ALL current content when a current document is supplied", () => {
   const groups=planTemplateApplicationWorkflow({
     document:incomingTemplateDocument(),
