@@ -8480,6 +8480,28 @@ function useDesignPatchPipeline(workspace) {
     return result;
   };
 
+  // (Global hierarchical size — client ruling 2026-07-23) The document-level S/M/L and
+  // the legacy per-role pins ride the typed-command → one-undo path: N commands under a
+  // SINGLE manual-edit snapshot so one control move is one undo step (law 6 / ruling).
+  const dispatchSizeCommands = (commands) => {
+    const preEditSnapshot = manualHarmRef.current.pending ? null : snapshotApplyableState();
+    let changed = false;
+    for (const command of commands) {
+      if ((((dispatchDesignCommand(command) || {}).changedPaths) || []).length) changed = true;
+    }
+    if (changed) noteManualEdit(["typography-size"], preEditSnapshot);
+    return changed;
+  };
+  // The global control — scales ALL text hierarchically (unpinned roles/elements follow it).
+  const setGlobalSize = (step) => dispatchSizeCommands([{ type:"typography/set-global-size-step", value:step }]);
+  // A legacy per-role grid choice PINS that role so it holds its size against the global
+  // step (law 5); one undo covers the size + the pin. Clearing rejoins the global step.
+  const pinLegacyFontSize = (role, id) => dispatchSizeCommands([
+    { type:"typography/merge-font-sizes", patch:{ [role]:id } },
+    { type:"typography/set-font-size-pin", role, pinned:true },
+  ]);
+  const clearLegacyFontSizePin = (role) => dispatchSizeCommands([{ type:"typography/set-font-size-pin", role, pinned:false }]);
+
   // MATERIALIZE an archetype into first-class design state (Commit 1 — full
   // unification). This is a ONE-SHOT write of concrete per-element values into the
   // SAME state every manual tool edits: hero/support/label geometry into
@@ -8964,6 +8986,7 @@ function InspectorWorkspace({ workspace }) {
   // rendered in two places at once (left column + inspector) — duplicate ids
   // would break focusPrimaryText and accessibility.
   const renderTextPanel = (idPrefix="wo-text-primary") => {
+    const fontSizePins=designDocument.typography.fontSizePins||{};
     const furniture=archetypeId?(ARCHETYPES_BY_ID[archetypeId]?.furniture||[]):[];
     const archIdx=furniture.find(item=>item?.type==="index");
     const badge=furniture.find(item=>item?.type==="badge");
@@ -8978,40 +9001,38 @@ function InspectorWorkspace({ workspace }) {
         deadRoles={deadRoles.map(role=>deadLabels[role]||role)} switchLayoutId={archetypeId!==target?target:null}
         onField={(field,value)=>applyPatch({[field]:value},{source:"ui"})} onSwitchLayout={id=>applyPatch({archetypeId:id},{source:"ui"})}
         palette={B} fonts={F}/>
-      {/* ── (THEME 1) CURATED PRIMARY: size (S/M/L) + text colour ───────────────
-          Two brand-safe choices in the default eyeline. Size drives the primary
-          text role only (heading, or highlight for overlay/caption post types)
-          with the three middle steps — the full XS-XL per-category grid, the
-          scale/width/leading sliders, alignment, the 9-grid, the backdrop modes
-          and the editorial auto-fit reset all fold under "More options". */}
+      {/* ── (GLOBAL HIERARCHICAL SIZE — client ruling 2026-07-23) The primary eyeline
+          "Size" control is now the DOCUMENT-LEVEL S/M/L: it scales EVERY text element at
+          once, by information hierarchy (title moves most, the rest restrained; S
+          compresses the small roles hardest). Any single element can be pinned in its own
+          panel to hold its size — the global control never moves a pinned element (law 5).
+          The full XS-XL per-category grid (now per-role pins), sliders, 9-grid, backdrop
+          and auto-fit reset all fold under "More options". */}
       {(()=>{
-        const primaryRole = ["texture_text","photo_logo"].includes(postType) ? "highlight" : "heading";
-        const cur = fontSizes[primaryRole] || "m";
-        // Map anything outside S/M/L (an XS/XL set in the fold) onto the nearest
-        // simple step so the primary control reflects it honestly.
-        const simple = cur==="xs"||cur==="s" ? "s" : cur==="xl"||cur==="l" ? "l" : "m";
+        const gStep = designDocument.typography.globalSizeStep || "M";
         return (
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-            <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Size</span>
-            <div style={{display:"flex",gap:5,flex:1}}>
-              {[{id:"s",label:"S"},{id:"m",label:"M"},{id:"l",label:"L"}].map(step=>{const on=simple===step.id;return (
-                <button key={step.id} className="wo-ins-pill" onClick={()=>setFontSize(primaryRole,step.id)} aria-pressed={on} title={`Text ${step.label}`}
-                  style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
-              );})}
+          <div style={{marginBottom:2}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Text size (all)</span>
+              <div role="group" aria-label="Text size for all elements" style={{display:"flex",gap:5,flex:1}}>
+                {[{id:"S",label:"S"},{id:"M",label:"M"},{id:"L",label:"L"}].map(step=>{const on=gStep===step.id;return (
+                  <button key={step.id} className="wo-ins-pill" onClick={()=>setGlobalSize(step.id)} aria-pressed={on} title={`All text ${step.label}`}
+                    style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
+                );})}
+              </div>
             </div>
+            <div style={{fontSize:10,color:B.ash,marginTop:5,fontFamily:F.body,lineHeight:1.45}}>Scales every text element by hierarchy — the title leads. Pin any one element in its own panel to hold its size.</div>
           </div>
         );
       })()}
-      {/* (Type-scale honesty) The hero's requested size can be capped by auto-fit in a
-          tight format. Render truth (fontMeta.headlineSizeCapped) surfaces it honestly so
-          the pressed S/M/L pill isn't a size the copy never actually paints at. */}
+      {/* (Type-scale honesty) At a louder global step (M/L) the hero can still be capped by
+          auto-fit in a tight format. Render truth (fontMeta.headlineSizeCapped) surfaces it
+          honestly so the pressed step isn't a size the copy never actually paints at. */}
       {(()=>{
-        const primaryRole = ["texture_text","photo_logo"].includes(postType) ? "highlight" : "heading";
-        const cur = fontSizes[primaryRole] || "m";
-        const simple = cur==="xs"||cur==="s" ? "s" : cur==="xl"||cur==="l" ? "l" : "m";
-        if(simple==="s" || !renderResultRef.current?.textMetrics?.headlineSizeCapped) return null;
+        const gStep = designDocument.typography.globalSizeStep || "M";
+        if(gStep==="S" || !renderResultRef.current?.textMetrics?.headlineSizeCapped) return null;
         return <div role="note" style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"6px 0 0"}}>
-          <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{simple.toUpperCase()}</strong> paints smaller here to fit the layout.
+          <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{gStep}</strong> paints the title smaller here to fit the layout.
         </div>;
       })()}
       <EditorSubhead label="Text colour" summary={textColorId==="auto"?`Auto · ${TEXT_COLOR_OPTIONS.find(o=>o.id===suggestedTextColor)?.label||"Accessible"}`:TEXT_COLOR_OPTIONS.find(o=>o.id===textColorId)?.label} />
@@ -9051,19 +9072,25 @@ function InspectorWorkspace({ workspace }) {
               <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.5}}>Copy stays inside an 8% safe margin and scales down only when needed. Select and drag the text directly on the preview.</div>
             </div>
 
-            {/* Font size per text category (full XS-XL granularity) */}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-              <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Font size by category</span>
-              <button onClick={()=>applyPatch({fontSizes:freshFontSizes()},{source:"ui"})} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset</button>
+            {/* Font size per text category — each choice PINS that role (it then holds its
+                size against the "Text size (all)" control, law 5). "Auto" per row clears the
+                pin so the role rejoins the global step; Reset clears every pin + step. */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
+              <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Pin a category size</span>
+              <button onClick={()=>dispatchSizeCommands([{type:"typography/merge-font-sizes",patch:freshFontSizes()},...FONT_ROLES.map(r=>({type:"typography/set-font-size-pin",role:r.id,pinned:false}))])} style={{fontSize:10,color:B.tangerine,background:"none",border:"none",cursor:"pointer",fontFamily:F.body}}>Reset all</button>
             </div>
+            <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,marginBottom:8}}>Unpinned categories follow “Text size (all)”. Pinning one holds its size.</div>
             {(TYPE_TEXT_ROLES[postType]||[]).map(role=>{
               const meta=FONT_ROLES.find(r=>r.id===role);
+              const pinned=!!(fontSizePins&&fontSizePins[role]);
               return (
                 <div key={role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
                   <span style={{flex:"0 0 76px",fontSize:11,fontFamily:F.subtitle,fontWeight:600,color:B.jet}}>{meta?.label}</span>
                   <div style={{display:"flex",gap:4,flex:1}}>
-                    {FONT_SIZE_STEPS.map(step=>{const on=(fontSizes[role]||"m")===step.id;return (
-                      <button key={step.id} onClick={()=>setFontSize(role,step.id)} aria-pressed={on} title={`${meta?.label} ${step.label}`}
+                    <button onClick={()=>clearLegacyFontSizePin(role)} aria-pressed={!pinned} title={`${meta?.label} follows Text size (all)`}
+                      style={{flex:"0 0 auto",padding:"6px 8px",borderRadius:6,border:`1.5px solid ${!pinned?B.burnham:B.ash+"44"}`,background:!pinned?B.burnham:"#fff",color:!pinned?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>Auto</button>
+                    {FONT_SIZE_STEPS.map(step=>{const on=pinned&&(fontSizes[role]||"m")===step.id;return (
+                      <button key={step.id} onClick={()=>pinLegacyFontSize(role,step.id)} aria-pressed={on} title={`Pin ${meta?.label} ${step.label}`}
                         style={{flex:1,padding:"6px 0",borderRadius:6,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:10,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
                     );})}
                   </div>
@@ -9128,7 +9155,10 @@ function InspectorWorkspace({ workspace }) {
     const el = (designDocument.content.elements || []).find(item => item.uid === uid);
     if (!el) return null;
     const model = addedElementModels.find(m => m.uid === uid) || null;
-    const sizeStep = (el.pins && el.pins.sizeStep) || (el.master && el.master.sizeStep) || "M";
+    // (Global hierarchical size) The Size control is this element's PIN. A pin (el.pins.sizeStep)
+    // holds the element's size against the document "Text size (all)" step (law 5); when unpinned
+    // the element FOLLOWS that global step. "Auto" clears the pin so it rejoins the global step.
+    const sizePin = (el.pins && el.pins.sizeStep) || null;
     const classLabel = ELEMENT_CLASS_LABELS[el.class] || "Text";
     const targets = (ALLOWED_CLASS_TRANSITIONS[el.class] || []).filter(t => canTransitionClass(el.class, t));
     const unplaced = model && model.placed === false && (el.text || "").trim();
@@ -9147,17 +9177,21 @@ function InspectorWorkspace({ workspace }) {
         <strong style={{fontFamily:F.subtitle,letterSpacing:0.3}}>No room in this format.</strong> There isn't a clean spot for this {classLabel.toLowerCase()} here — try a shorter line, a smaller size, or remove another element. It's safely kept for your other formats.
       </div>}
 
-      {/* Size — the ONLY size freedom is the sanctioned S/M/L step within the register. */}
+      {/* Size — pin this element to a sanctioned S/M/L, or "Auto" to follow the global step. */}
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14,marginBottom:2}}>
         <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Size</span>
-        <div style={{display:"flex",gap:5,flex:1}}>
-          {ELEMENT_SIZE_UI_STEPS.map(step=>{const on=sizeStep===step.id;return (
-            <button key={step.id} className="wo-ins-pill" aria-pressed={on} title={`Size ${step.label}`}
-              onClick={()=>dispatchElementCommand({ type:"content/set-element-size", uid, value:step.id })}
+        <div role="group" aria-label={`${classLabel} size`} style={{display:"flex",gap:5,flex:1}}>
+          <button className="wo-ins-pill" aria-pressed={!sizePin} title="Follow Text size (all)"
+            onClick={()=>dispatchElementCommand({ type:"content/pin-element-size", uid, value:null })}
+            style={{flex:"0 0 auto",padding:"8px 10px",borderRadius:7,border:`1.5px solid ${!sizePin?B.burnham:B.ash+"44"}`,background:!sizePin?B.burnham:"#fff",color:!sizePin?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>Auto</button>
+          {ELEMENT_SIZE_UI_STEPS.map(step=>{const on=sizePin===step.id;return (
+            <button key={step.id} className="wo-ins-pill" aria-pressed={on} title={`Pin size ${step.label}`}
+              onClick={()=>dispatchElementCommand({ type:"content/pin-element-size", uid, value:step.id })}
               style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{step.label}</button>
           );})}
         </div>
       </div>
+      {!sizePin&&<div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"5px 0 0"}}>Following “Text size (all)”. Tap a size to pin it.</div>}
       {/* (Type-scale honesty, closing the deferral) When auto-fit capped the requested
           step in THIS format, say so from render truth (effectiveStep/sizeCapped) — the
           selected pill's honest state, never a silently-shrunk L pretending to be L. */}
