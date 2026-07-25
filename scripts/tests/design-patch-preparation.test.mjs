@@ -58,6 +58,44 @@ test("fragment and dangling-word trims retain authored copy", () => {
   assert.equal(prepared.subtext,"A week of creativity and play");
 });
 
+test("brand-name copy exclusion: the system never authors the brand's own name on canvas", () => {
+  const options={
+    getCopyBudgets:()=>({attribution:64,headline:48}),
+    fitCopy:value=>value,
+    brandName:"The White Orchid",
+  };
+  // System-authored attribution that is merely the brand name is dropped at the boundary
+  // (enters complete-or-absent) — exact and trivial case/whitespace variants.
+  assert.equal("attribution" in prepareDesignPatch({attribution:"The White Orchid"},options),false);
+  assert.equal("attribution" in prepareDesignPatch({attribution:"  the white orchid "},options),false);
+  assert.equal("headline" in prepareDesignPatch({headline:"THE WHITE ORCHID"},options),false);
+  // Real generated copy is untouched.
+  assert.equal(prepareDesignPatch({headline:"A morning of music and movement"},options).headline,
+    "A morning of music and movement");
+  // A generated added element whose text is the brand name is dropped too.
+  assert.equal("addTextElement" in prepareDesignPatch({addTextElement:{class:"heading",text:"The White Orchid"}},options),false);
+  assert.deepEqual(prepareDesignPatch({addTextElement:{class:"heading",text:"Open house Friday"}},options).addTextElement,
+    {class:"heading",text:"Open house Friday"});
+});
+
+test("brand-name exclusion never touches owner-typed copy or the off-canvas caption path", () => {
+  const options={
+    getCopyBudgets:()=>({attribution:64}),
+    fitCopy:value=>value,
+    brandName:"The White Orchid",
+  };
+  // Owner-TYPED brand-name copy passes verbatim (authorship check).
+  assert.equal(prepareDesignPatch({attribution:"The White Orchid"},{...options,copyAuthors:{attribution:"owner"}}).attribution,
+    "The White Orchid");
+  // A direct UI edit (uiSource) returns early — brand name is the owner's to type.
+  assert.equal(prepareDesignPatch({attribution:"The White Orchid"},{...options,uiSource:true}).attribution,
+    "The White Orchid");
+  // The off-canvas caption writer never passes brandName through this boundary, so with
+  // no brandName the field is untouched (the caption writer is exempt by construction).
+  assert.equal(prepareDesignPatch({attribution:"The White Orchid"},{getCopyBudgets:()=>({attribution:64}),fitCopy:v=>v}).attribution,
+    "The White Orchid");
+});
+
 test("the copy authorship vocabulary remains explicit and stable", () => {
   assert.deepEqual(COPY_AUTHOR_FIELDS,["headline","subtext","attribution","dateText","microLabel","pillText"]);
 });

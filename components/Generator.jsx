@@ -24,7 +24,7 @@ import { planDesignPatchCompositeWorkflows, resolveDesignPatchTransitions } from
 import { hasUserFormatOverride } from "@/lib/design-document.mjs";
 import { runLocalAudit as computeLocalAudit, partitionIssues, extractAuditFindings, PLATFORM_SAFE } from "@/lib/audit-local";
 import { newTurnId, getCurrentSessionId, localGetSession, logFeedback as logFeedbackClient, looksLikeGuardSession } from "@/lib/sessions";
-import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT } from "@/lib/brand-defaults";
+import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_BRAND_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT } from "@/lib/brand-defaults";
 import { editorSelectionReducer, selectionInspectorKey, selectionSceneId } from "@/lib/editor-selection.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
 import {
@@ -8527,6 +8527,10 @@ function useDesignPatchPipeline(workspace) {
       postTypes:PATCH_OPTIONS.postType,
       getCopyBudgets:computeCopyBudgets,
       fitCopy:fitCopyClient,
+      // (Item 4 — brand-name copy exclusion) The resolved brand name (DB profile, else
+      // the brand-defaults identity) so the boundary can drop system-authored copy that
+      // is merely the brand's own name — the logo already informs it.
+      brandName:brandKit?.name || DEFAULT_BRAND_NAME,
     });
       // (Package 1 — client ruling 2026-07-23) SHAPE-ADD DEFAULTS TO A PURE PHOTO BASE.
       // Adding any shape (fill/decorative/frame; tray or AI) to an editorial/split design
