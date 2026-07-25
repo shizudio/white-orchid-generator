@@ -6306,7 +6306,7 @@ export default function App() {
   } = useDesignPatchPipeline({
     chatNoteRef, layoutUserPinnedRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
-    bgAlpha, bgColor, canvasRef, canvasShellRef, closeInspector,
+    bgAlpha, bgColor, brandKitFromContext, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
     designDocument, dimensionId, dispatchDesignCommand, dispatchEditorSelection,
     dragRef, fieldColorOverride, fontSizes, furnitureOverrides, headline,
@@ -8383,7 +8383,7 @@ function useDesignPatchPipeline(workspace) {
   const {
     chatNoteRef, layoutUserPinnedRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
-    bgAlpha, bgColor, canvasRef, canvasShellRef, closeInspector,
+    bgAlpha, bgColor, brandKitFromContext, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
     designDocument, dimensionId, dispatchDesignCommand, dispatchEditorSelection,
     dragRef, fieldColorOverride, fontSizes, furnitureOverrides, headline,
@@ -8529,8 +8529,11 @@ function useDesignPatchPipeline(workspace) {
       fitCopy:fitCopyClient,
       // (Item 4 — brand-name copy exclusion) The resolved brand name (DB profile, else
       // the brand-defaults identity) so the boundary can drop system-authored copy that
-      // is merely the brand's own name — the logo already informs it.
-      brandName:brandKit?.name || DEFAULT_BRAND_NAME,
+      // is merely the brand's own name — the logo already informs it. Sourced from the
+      // context kit (threaded via workspace): the hydrated `brandKit` const lives in the
+      // component scope AFTER this hook's call site, so it isn't in scope here — and
+      // useBrandCatalogHydration returns brandKitFromContext verbatim, so .name is identical.
+      brandName:brandKitFromContext?.name || DEFAULT_BRAND_NAME,
     });
       // (Package 1 — client ruling 2026-07-23) SHAPE-ADD DEFAULTS TO A PURE PHOTO BASE.
       // Adding any shape (fill/decorative/frame; tray or AI) to an editorial/split design
