@@ -132,6 +132,19 @@ Elements inherit master→byDim like all format-aware properties. Capacity diffe
     11/11, build green, fingerprint self-baseline 0/144, arch-stress 114/114, born-clean 456/456,
     legacy-dup 30/30.
 
+- **Global hierarchical size (client ruling 2026-07-23) — LANDED.** One document-level
+  `typography.globalSizeStep` (S/M/L, default M) scales ALL text hierarchically; a per-element
+  size choice is now a PIN (`element.pins.sizeStep`) that ignores the global step (law 5), with
+  the generated base on `master.sizeStep` following it. The element inspector Size gains an
+  **Auto** (follow-global) pill next to S/M/L; the Text-panel top control is the global "Text
+  size (all)". Legacy roles pin via `typography.fontSizePins`. New commands (one undo each):
+  `typography/set-global-size-step`, `content/pin-element-size`, `typography/set-font-size-pin`.
+  The per-role step-response weights + the full model live in **docs/type-scale.md** (owner).
+  Fixture-invariant at global M (generation defaults unchanged → no baseline bump). Gates: unit
+  448/448, contract 25/25, mirror 11/11 (not added to the AI grammar), build green; live
+  painted-px truth table + pin-precedence in docs/type-scale.md. NOTE: globalSizeStep is
+  additive on `content.elements` — element migration / round-trip stays invisible.
+
 ### Outstanding checks (browser / real-key — Slice 4)
 
 These require the isolated test-hooks dist (`WO_DIST_DIR`, `NEXT_PUBLIC_WO_TEST_HOOKS=1`,

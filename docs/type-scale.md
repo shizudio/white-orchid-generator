@@ -144,3 +144,87 @@ pure cross-environment font drift, present at the pre-change HEAD too.)
 The effective-step signal reaches the render result and the `__wo` hooks; wiring the visible
 pill label `"L (fits as M here)"` into the React inspector chrome is a small follow-up — the
 honest data is already there for it to read.
+
+## The GLOBAL HIERARCHICAL SIZE system (client ruling 2026-07-23) — LANDED
+
+**Also owner of:** `typography.globalSizeStep` and the per-role step-response weights.
+
+Verbatim intent: *"the change in size should change the size for all the text elements used;
+if the L size is deemed too noisy, then prioritize changing title size … keep the rest in
+smaller size based on information hierarchy; but when user clicks on each text element, they
+should be able to change the size individually."*
+
+### The model
+
+One document-level control — `typography.globalSizeStep` (`S | M | L`, default **M**) — scales
+**every** text element at once, but by information hierarchy, not uniformly. It composes on top
+of the existing per-role/per-element S/M/L base as a second multiplier, `globalStepMult(role,
+step, family)` (lib/type-scale.mjs):
+
+- `globalStepMult(role, "M", *) === 1.0` for every role → **global M is pixel-identical to
+  before** (fixture invariance; generation defaults were NOT changed, so born-clean / arch-stress
+  / fingerprint fixtures — all authored at default M — stay invariant with no baseline bump).
+- `"L" → 1 + grow(role)·(L_anchor−1)`; `"S" → 1 − shrink(role)·(1−S_anchor)`.
+
+### The step-response weights (`GLOBAL_STEP_RESPONSE`)
+
+`grow` = fraction of the family's full L travel a role takes at global L; `shrink` = fraction of
+the S travel it gives up at global S. The two are **inverse** (the ruling's "compresses
+inversely"): the title takes the whole L step but barely shrinks; the small roles grow little
+but compress hardest. So the signed response delta obeys **title ≥ subheading ≥ body at every
+step** — hierarchy contrast widens both louder and quieter.
+
+| role (tier) | grow (at L) | shrink (at S) |
+|---|---|---|
+| heading / highlight (title) | 1.00 | 0.30 |
+| subheading / content (support) | 0.60 | 0.60 |
+| body / caption / cta / eyebrow (small) | 0.30 | 1.00 |
+
+Tested in `type-scale.test.mjs`: weights in (0,1]; M exactly 1.0 in every family; monotonic per
+role (S<1<L); hierarchy (signed delta title ≥ subheading ≥ body) at S, M and L in all families;
+title moves strictly more than body at both extremes.
+
+### Pins (re-solve-around-pins, law 5)
+
+A per-element / per-role size choice is a **PIN** that ignores the global step. Elements pin on
+`element.pins.sizeStep` (the generated base stays on `master.sizeStep` and follows the global
+step); legacy roles pin via `typography.fontSizePins[role]`. Commands (one undo each):
+`typography/set-global-size-step`, `content/pin-element-size` (null clears → rejoin global),
+`typography/set-font-size-pin`. The element inspector Size control offers **Auto** (follow) +
+S/M/L (pin); the Text-panel top control is relabelled **"Text size (all)"**. Honest capping
+composes: a global-L role that the box can't grow still reports the existing "fits as M" label.
+
+### Live render-truth evidence (Chromium, keys unset, `next dev`)
+
+Painted px for added elements via `__woContentElements`, driving `typography/set-global-size-step`:
+
+| tier | format | S | M | L | Δ M→L | Δ M→S |
+|---|---|---|---|---|---|---|
+| heading (title) | ig_portrait | 50.4 | 54.0 | 73.4 | **+36%** | **−6.6%** |
+| subheading | ig_portrait | 33.0 | 38.0 | 46.2 | +21.6% | −13.2% |
+| body | ig_portrait | 23.4 | 30.0 | 33.2 | +10.8% | −22% |
+| caption | ig_portrait | 20.3 | 26.0 | 28.8 | +10.8% | −22% |
+| heading (title) | banner | 23.7 | 25.0 | 32.5 | +30% | −5.4% |
+| body | banner | 11.4 | 13.9 | 15.1 | +9% | −18% |
+
+Every value equals `base × globalStepMult` to the decimal; M matches the pre-change baseline
+(heading 54.0 / body 30.0 — invariance confirmed empirically). **Pin:** a body element pinned to
+L held 40.8px when the global step flipped M→S (unchanged), while the unpinned caption shrank
+26→20.3; clearing the pin returned the body to 23.4 (rejoined the global step). Both viewports:
+fresh-generation ready-check clean (5/6 formats 0 issues, `story` a copy-specific pre-existing
+note), canvas dims track the active format (no stale draw), 0 console errors. Gates: unit 448/448,
+contract 25/25, mirror 11/11 (globalSizeStep is NOT in the AI patch grammar — no new surface),
+next build green.
+
+### Deferred (documented)
+
+- **Part 1 "M-with-headroom generation"** (make generation *target* M so L is always reachable,
+  changing templates that currently author `heading:"l"`) is a REAL generation-default design
+  change that shifts the born-clean/fingerprint fixtures and needs the §23 baseline bump +
+  screenshots. It is intentionally NOT done here: the current build keeps generation defaults
+  and stays fully invariant. The global control already gives the user M-with-L-headroom on
+  demand; making it the *generated* default is the follow-up.
+- The full resident-tester born-clean 456 / arch-stress 114 / fingerprint self-baseline battery
+  was not re-run (heavy). Default-M invariance is proven mathematically (`globalStepMult` returns
+  literal `1.0` at M) and empirically (M painted-px identical to baseline), so those oracles are
+  unaffected by construction.
