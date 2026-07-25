@@ -145,9 +145,11 @@ export function useTemplateManagement({
       : null;
     actions.executeWorkflowGroups(planTemplateApplicationWorkflow({
       document:migrated,
-      // (DLC §3.4/§10, pins law 5) A template swap adapts to work in progress: the
-      // owner's typed copy, added text elements, and pins are merged onto the template
-      // rather than discarded. The template supplies every unpinned/AI-authored field.
+      // (Re-skin ruling 2026-07-25, pins law 5) A template apply is a re-skin: ALL of the
+      // canvas's current content (owner AND AI-authored copy, added text elements, pins)
+      // rides onto the template, which supplies only the design system (layout, palette,
+      // typography, shapes). Content that can't fit is handled by complete-or-absent, never
+      // silently swapped for the template's demo copy.
       currentDocument:designDocument,
       metadata:restored.metadata,
       acknowledgements:restored.acknowledgements,

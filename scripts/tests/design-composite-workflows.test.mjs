@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyDesignCommand, createDesignDocumentV1, hasUserFormatOverride } from "../../lib/design-document.mjs";
-import { mergeOwnerAuthoredContent, planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
+import { mergeCurrentContent, planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
 
 const applyGroups = (document, groups) => groups.reduce(
   (current, workflowGroup) => workflowGroup.commands.reduce(
@@ -443,38 +443,41 @@ const incomingTemplateDocument = () => createDesignDocumentV1({
   ],
 });
 
-test("template merge preserves owner copy, added elements, and pins", () => {
-  const merged=mergeOwnerAuthoredContent({
+test("template apply is a re-skin: ALL current content carries over, only the design changes", () => {
+  const merged=mergeCurrentContent({
     template:incomingTemplateDocument(),
     current:editedInProgressDocument(),
   });
 
-  // Owner-typed copy survives; owner authorship is retained.
+  // Owner-typed copy survives with its authorship.
   assert.equal(merged.content.headline,"Owner headline");
   assert.equal(merged.content.subtext,"Owner subtext");
   assert.equal(merged.content.authorship.headline,"owner");
-  // AI-authored copy is a free variable the template may replace.
-  assert.equal(merged.content.attribution,"Template attribution");
-  // Owner-added text element survives; the template's own element is also kept.
+  // (Item 6 — ruling upgrade) AI-authored copy now ALSO survives; the template's demo
+  // copy never replaces the canvas's content.
+  assert.equal(merged.content.attribution,"AI attribution");
+  assert.equal(merged.content.authorship.attribution,"ai");
+  // The owner's added element survives; the template's DEMO element is dropped (content,
+  // not design — the template contributes zero copy).
   const uids=merged.content.elements.map(element=>element.uid);
   assert.ok(uids.includes("el_body_owner"),"owner element survives");
-  assert.ok(uids.includes("el_heading_tpl"),"template element retained");
-  // A pinned contrast field keeps the owner's value; the pin itself survives.
+  assert.ok(!uids.includes("el_heading_tpl"),"template demo element is not injected");
+  // Design comes from the template: a pinned contrast field keeps the owner's value, the
+  // unpinned palette proposal comes from the template.
   assert.equal(merged.palette.text,"tangerine");
   assert.equal(merged.palette.pins.textColorId,true);
-  // A pinned logo variant survives.
+  assert.equal(merged.palette.background,"sage");
+  // A pinned logo variant survives (law 5).
   assert.equal(merged.logo.assetId,"s1-green");
   assert.equal(merged.logo.variantPinned,true);
-  // Unpinned palette (a system proposal) comes from the template.
-  assert.equal(merged.palette.background,"sage");
 });
 
 test("template merge without a current document is a straight template load", () => {
   const template=incomingTemplateDocument();
-  assert.deepEqual(mergeOwnerAuthoredContent({template,current:null}),template);
+  assert.deepEqual(mergeCurrentContent({template,current:null}),template);
 });
 
-test("planTemplateApplicationWorkflow keeps owner content when a current document is supplied", () => {
+test("planTemplateApplicationWorkflow carries ALL current content when a current document is supplied", () => {
   const groups=planTemplateApplicationWorkflow({
     document:incomingTemplateDocument(),
     currentDocument:editedInProgressDocument(),
@@ -484,7 +487,8 @@ test("planTemplateApplicationWorkflow keeps owner content when a current documen
   const after=applyGroups(createDesignDocumentV1(),groups);
 
   assert.equal(after.content.headline,"Owner headline");
-  assert.equal(after.content.attribution,"Template attribution");
+  // (Item 6) AI-authored copy survives the re-skin too.
+  assert.equal(after.content.attribution,"AI attribution");
   assert.ok(after.content.elements.some(element=>element.uid==="el_body_owner"));
   assert.equal(after.palette.text,"tangerine");
   assert.equal(after.logo.assetId,"s1-green");

@@ -314,6 +314,15 @@ have all been re-saved post-migration.
   inside Shapes; the inspector list remains the fallback for occluded instances.
 - **One Templates gallery.** Built-in, personal and team templates use the same card
   grid and interactions. Source is a small metadata label, not a separate section.
+- **A template apply is a RE-SKIN (ruling upgraded 2026-07-25, supersedes `384b9bf`).**
+  `384b9bf` preserved only OWNER-authored copy across a template swap and let the template
+  replace AI-authored copy — the client still saw content switch. Upgraded ruling: ALL of
+  the canvas's current content carries over (owner AND AI-authored headline, subtext,
+  attribution, date, added elements); the template supplies ONLY the design system (layout,
+  palette proposals, typography treatments, shapes/decor). It contributes zero copy. Content
+  that can't fit the new layout goes through complete-or-absent + readiness, never silently
+  swapped for the template's demo copy. Implemented in `mergeCurrentContent`
+  (`lib/design-composite-workflows.mjs`, renamed from `mergeOwnerAuthoredContent`).
 - **Role-specific text selection.** The canvas selection frame names and outlines the
   actual selected role (title, caption, date, label or button). Keyboard movement and
   direct manipulation target that same role.
