@@ -50,6 +50,19 @@ export function useLiveCanvasRender({
       : null;
     fontMetaRef.current = result.textMetrics;
     logoOverlapRef.current = !!result.auditSignal?.logo?.overlapsText;
+    // (Item 2 — the "Not shown in this layout" banner must track ASYNC repaints) An async
+    // decoded-asset repaint runs through drawRef.current() (this same draw), updating
+    // deadRolesRef but never the post-draw effect below — so setDeadRoles lagged a React
+    // commit behind and the banner "resurrected" a role a later commit had already cleared.
+    // Publish the drop set here too, diff-guarded (join guard, so an unchanged set never
+    // re-renders — drags stay cheap). GATED ON fontsLoaded: a pre-settle first paint can
+    // transiently drop a role it will place once fonts/assets land, so the banner must
+    // never claim a first-paint drop that a settled render disproves — the settled repaint
+    // (fonts ready) publishes the truth.
+    if (fontsLoaded) {
+      const droppedRoles = result.droppedRoles || [];
+      setDeadRoles(previous => previous.join(",") === droppedRoles.join(",") ? previous : droppedRoles);
+    }
     return result;
   }, [
     auditRef,
@@ -58,12 +71,14 @@ export function useLiveCanvasRender({
     dimensionId,
     drawSequenceRef,
     fontMetaRef,
+    fontsLoaded,
     height,
     logoBoxRef,
     photoWindowRef,
     renderResultRef,
     renderScene,
     roleBoundsRef,
+    setDeadRoles,
     textBoundsRef,
     width,
   ]);
@@ -80,8 +95,8 @@ export function useLiveCanvasRender({
     setDropHint(previous => previous === nextDropHint ? previous : nextDropHint);
     const overlaps = logoOverlapRef.current;
     setLogoOverlapHint(previous => previous === overlaps ? previous : overlaps);
-    const droppedRoles = deadRolesRef.current || [];
-    setDeadRoles(previous => previous.join(",") === droppedRoles.join(",") ? previous : droppedRoles);
+    // deadRoles is published inside draw() (above) — diff-guarded and gated on fontsLoaded —
+    // so async decoded-asset repaints keep the banner in sync, not just this effect's draw.
     // (Slice 3) Publish the added-element placement ledger as REACTIVE state so the
     // element inspector + rail can honestly show "placed here / no room in this format"
     // (M2 — never a silent no-op). renderResultRef alone is a ref and would leave the
