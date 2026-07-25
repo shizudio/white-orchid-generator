@@ -719,6 +719,30 @@ test("role placement freezes its solver base, preserves it, and clears explicitl
   }),[]);
 });
 
+test("an additive roleOffset delta (remedy move-clear) sums onto the stored offset and keeps the pin", () => {
+  const seeded=applyGroups(createDesignDocumentV1(),planTypographyPlacementWorkflow({
+    patch:{roleOffset:{role:"eyebrow",dx:0.15,dy:0.2,bx:0.3,by:0.4}},
+    dimensionId:"story",masterDimensionId:"ig_portrait",postType:"event",
+  }));
+  const addGroups=planTypographyPlacementWorkflow({
+    patch:{roleOffset:{role:"eyebrow",dx:-0.05,dy:0.03,add:true}},
+    dimensionId:"story",masterDimensionId:"ig_portrait",postType:"event",
+    roleOffsetsByFormat:seeded.typography.roleOffsetsByFormat,
+  });
+  const added=applyGroups(seeded,addGroups);
+  const off=added.typography.roleOffsetsByFormat.story.event.eyebrow;
+  assert.ok(Math.abs(off.dx-0.1)<1e-9&&Math.abs(off.dy-0.23)<1e-9,"delta sums onto stored dx/dy");
+  assert.equal(off.bx,0.3,"frozen pin bx preserved");
+  assert.equal(off.by,0.4,"frozen pin by preserved");
+
+  // With no stored offset the additive delta is applied verbatim (treated as 0 base).
+  const fresh=applyGroups(createDesignDocumentV1(),planTypographyPlacementWorkflow({
+    patch:{roleOffset:{role:"support",dx:0.07,dy:-0.02,add:true}},
+    dimensionId:"story",masterDimensionId:"ig_portrait",postType:"event",
+  }));
+  assert.deepEqual(fresh.typography.roleOffsetsByFormat.story.event.support,{dx:0.07,dy:-0.02});
+});
+
 test("history commits only for a real top-level patch mutation", () => {
   assert.equal(shouldCommitPatchHistory({appliedFields:["headline"]}),true);
   assert.equal(shouldCommitPatchHistory({appliedFields:[]}),false);

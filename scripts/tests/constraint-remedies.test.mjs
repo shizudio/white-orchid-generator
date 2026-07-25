@@ -33,6 +33,49 @@ test("content subject collisions move the text box to the nearest legal negative
   assert.ok(Number.isFinite(commands[0].patch.textLayout.y));
 });
 
+test("support collisions move the SUPPORT role by its own additive roleOffset, not the hero anchor", () => {
+  const commands=createConstraintRemedyCommands({
+    id:"constraint:support-subject",ruleId:"media.protected-subject",
+    zoneIds:["content:support","protected:media-subject"],
+    geometry:{from:{x:0.3,y:0.55,w:0.35,h:0.15},to:{x:0.25,y:0.4,w:0.45,h:0.45}},
+  },{dimensionId:"ig_square"});
+  assert.equal(commands[0].remedyId,"move-element");
+  assert.equal(commands[0].label,"Move text clear");
+  assert.equal(commands[0].target.role,"support");
+  assert.equal(commands[0].patch.textLayout,undefined,"support must not move the hero textLayout anchor");
+  assert.equal(commands[0].patch.roleOffset.role,"support");
+  assert.equal(commands[0].patch.roleOffset.add,true);
+  assert.ok(Number.isFinite(commands[0].patch.roleOffset.dx));
+  assert.ok(Number.isFinite(commands[0].patch.roleOffset.dy));
+});
+
+test("microLabel collisions target the EYEBROW render role (zone-name is not the offset key)", () => {
+  const commands=createConstraintRemedyCommands({
+    id:"constraint:eyebrow-seam",ruleId:"structural.no-seam-straddle",
+    zoneIds:["content:microLabel","structural:frame-a"],
+    geometry:{from:{x:0.62,y:0.2,w:0.22,h:0.08},to:{x:0.15,y:0.15,w:0.6,h:0.6}},
+  },{dimensionId:"ig_portrait"});
+  assert.equal(commands.length,1);
+  assert.equal(commands[0].patch.roleOffset.role,"eyebrow","microLabel zone maps to the eyebrow offset key");
+  assert.equal(commands[0].target.role,"eyebrow");
+  assert.equal(commands[0].patch.roleOffset.add,true);
+  assert.equal(commands[0].patch.textLayout,undefined);
+});
+
+test("a pinned target role gets the explicit override label but still applies one additive offset", () => {
+  const violation={
+    id:"constraint:eyebrow-seam",ruleId:"structural.no-seam-straddle",
+    zoneIds:["content:microLabel","structural:frame-a"],
+    geometry:{from:{x:0.62,y:0.2,w:0.22,h:0.08},to:{x:0.15,y:0.15,w:0.6,h:0.6}},
+  };
+  const unpinned=createConstraintRemedyCommands(violation,{dimensionId:"ig_portrait"});
+  assert.equal(unpinned[0].label,"Move text clear");
+  const pinned=createConstraintRemedyCommands(violation,{dimensionId:"ig_portrait",pinnedRoles:["eyebrow"]});
+  assert.equal(pinned[0].label,"Move it anyway (replaces your placement)");
+  assert.equal(pinned[0].patch.roleOffset.role,"eyebrow");
+  assert.equal(pinned[0].patch.roleOffset.add,true);
+});
+
 test("subject collisions offer crop reframing as an explicit alternative", () => {
   const violation={
     id:"constraint:hero-subject",ruleId:"media.protected-subject",
