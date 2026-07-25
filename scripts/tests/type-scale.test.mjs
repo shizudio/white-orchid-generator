@@ -12,6 +12,11 @@ import {
   describeEffectiveStep,
   STEP_MIN_DELTA,
   LADDER_MIN_DELTA,
+  GLOBAL_SIZE_STEPS,
+  GLOBAL_STEP_RESPONSE,
+  globalStepResponseFor,
+  globalStepMult,
+  normalizeGlobalSizeStep,
 } from "../../lib/type-scale.mjs";
 
 const LEGACY_LADDER = ["xs", "s", "m", "l", "xl"];
@@ -135,4 +140,91 @@ test("resolveEffectiveStep — floor lifts the painted px and flags atFloor", ()
 test("describeEffectiveStep — plain label when not capped, null-safe", () => {
   assert.equal(describeEffectiveStep(resolveEffectiveStep({ basePx: 100, step: "M" })), "M");
   assert.equal(describeEffectiveStep(null), "M");
+});
+
+/* ── GLOBAL HIERARCHICAL SIZE (client ruling 2026-07-23) ──────────────────── */
+
+// The prominence chain the ruling names, most → least prominent.
+const PROMINENCE = ["heading", "subheading", "content", "body", "caption", "eyebrow"];
+
+test("global step — every response weight is a valid fraction in [0,1], grow & shrink", () => {
+  for (const [role, w] of Object.entries(GLOBAL_STEP_RESPONSE)) {
+    assert.ok(w.grow > 0 && w.grow <= 1, `${role} grow in (0,1]`);
+    assert.ok(w.shrink > 0 && w.shrink <= 1, `${role} shrink in (0,1]`);
+  }
+  // Unknown role falls back to the smallest tier (never out-grows the title).
+  const def = globalStepResponseFor("no-such-role");
+  assert.ok(def.grow <= GLOBAL_STEP_RESPONSE.heading.grow, "unknown grows no more than title");
+  assert.ok(def.shrink >= GLOBAL_STEP_RESPONSE.heading.shrink, "unknown shrinks at least as hard as title");
+});
+
+test("global step — the ruling's headline numbers: title full, support ~60%, small ~30% at L", () => {
+  assert.equal(GLOBAL_STEP_RESPONSE.heading.grow, 1.0, "title takes the full L step");
+  assert.equal(GLOBAL_STEP_RESPONSE.subheading.grow, 0.6, "subheading ~60%");
+  assert.equal(GLOBAL_STEP_RESPONSE.content.grow, 0.6, "support ~60%");
+  assert.equal(GLOBAL_STEP_RESPONSE.body.grow, 0.3, "body ~30%");
+  assert.equal(GLOBAL_STEP_RESPONSE.caption.grow, 0.3, "caption ~30%");
+  // "S compresses inversely" — the small roles compress hardest, the title least.
+  assert.ok(GLOBAL_STEP_RESPONSE.body.shrink > GLOBAL_STEP_RESPONSE.subheading.shrink, "body shrinks harder than subheading");
+  assert.ok(GLOBAL_STEP_RESPONSE.subheading.shrink > GLOBAL_STEP_RESPONSE.heading.shrink, "subheading shrinks harder than title");
+});
+
+test("global step — M is exactly 1.0 for every role in every family (fixture invariance)", () => {
+  for (const family of FORMAT_FAMILIES) {
+    for (const role of Object.keys(GLOBAL_STEP_RESPONSE)) {
+      assert.equal(globalStepMult(role, "M", family), 1.0, `${family}/${role} at M`);
+    }
+  }
+  // Unknown/missing step also resolves to the invariant 1.0.
+  assert.equal(globalStepMult("heading", undefined, "tall"), 1.0);
+  assert.equal(globalStepMult("heading", "bogus", "wide"), 1.0);
+});
+
+test("global step — monotonic per role: S < M(1.0) < L in every family", () => {
+  for (const family of FORMAT_FAMILIES) {
+    for (const role of Object.keys(GLOBAL_STEP_RESPONSE)) {
+      const s = globalStepMult(role, "S", family);
+      const l = globalStepMult(role, "L", family);
+      assert.ok(s < 1.0, `${family}/${role} S(${s.toFixed(3)}) < 1`);
+      assert.ok(l > 1.0, `${family}/${role} L(${l.toFixed(3)}) > 1`);
+    }
+  }
+});
+
+test("global step — hierarchy preserved: signed delta title ≥ subheading ≥ body at every step", () => {
+  for (const family of FORMAT_FAMILIES) {
+    for (const step of GLOBAL_SIZE_STEPS) {
+      const deltas = PROMINENCE.map(role => globalStepMult(role, step, family) - 1);
+      for (let i = 1; i < deltas.length; i += 1) {
+        assert.ok(
+          deltas[i - 1] >= deltas[i] - 1e-9,
+          `${family}/${step}: ${PROMINENCE[i - 1]} delta ${deltas[i - 1].toFixed(4)} ≥ ${PROMINENCE[i]} delta ${deltas[i].toFixed(4)}`,
+        );
+      }
+      // At M every delta is exactly zero (equality holds, so the chain is flat).
+      if (step === "M") deltas.forEach((d, i) => assert.equal(d, 0, `${family} M ${PROMINENCE[i]} delta 0`));
+    }
+  }
+});
+
+test("global step — the title actually moves more than body at the extremes (not a flat scale)", () => {
+  for (const family of FORMAT_FAMILIES) {
+    const titleL = globalStepMult("heading", "L", family) - 1;
+    const bodyL = globalStepMult("body", "L", family) - 1;
+    assert.ok(titleL > bodyL, `${family} L: title grows more than body`);
+    // At S the title gives up the LEAST (its size stays closest to M).
+    const titleS = globalStepMult("heading", "S", family);
+    const bodyS = globalStepMult("body", "S", family);
+    assert.ok(titleS > bodyS, `${family} S: title stays larger than body`);
+  }
+});
+
+test("normalizeGlobalSizeStep — only S/M/L survive; everything else is the default M", () => {
+  assert.equal(normalizeGlobalSizeStep("S"), "S");
+  assert.equal(normalizeGlobalSizeStep("M"), "M");
+  assert.equal(normalizeGlobalSizeStep("L"), "L");
+  assert.equal(normalizeGlobalSizeStep("l"), "M"); // lowercase is not a valid step id
+  assert.equal(normalizeGlobalSizeStep(null), "M");
+  assert.equal(normalizeGlobalSizeStep(undefined), "M");
+  assert.equal(normalizeGlobalSizeStep("XL"), "M");
 });

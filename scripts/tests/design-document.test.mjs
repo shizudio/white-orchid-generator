@@ -115,6 +115,45 @@ test("migrates legacy typography and per-format role offsets", () => {
   assert.equal(doc.typography.roleOffsetsByFormat.story.quote.support.dx, 0.1);
 });
 
+test("globalSizeStep defaults to M and validates as S/M/L (global hierarchical size)", () => {
+  const fresh = createDesignDocumentV1();
+  assert.equal(fresh.typography.globalSizeStep, "M", "default is M (pixel-invariant)");
+  assert.equal(validateDesignDocument(fresh).valid, true);
+  // Unknown stored values normalise to M rather than corrupting the document.
+  const migrated = migrateDesignDocument({ typography:{ globalSizeStep:"XL" } });
+  assert.equal(migrated.typography.globalSizeStep, "M");
+  // A hand-corrupted document is rejected by the validator.
+  const bad = { ...fresh, typography:{ ...fresh.typography, globalSizeStep:"XL" } };
+  assert.equal(validateDesignDocument(bad).valid, false);
+});
+
+test("set-global-size-step changes one path, no-ops on same value, one undo (M2)", () => {
+  const before = createDesignDocumentV1();
+  const toL = applyDesignCommand(before, { type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_GLOBAL_SIZE_STEP, value:"L" });
+  assert.equal(toL.document.typography.globalSizeStep, "L");
+  assert.deepEqual(toL.changedPaths, ["typography.globalSizeStep"], "exactly one changed path = one undo");
+  // Same value is a no-op — no dead undo entry.
+  const again = applyDesignCommand(toL.document, { type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_GLOBAL_SIZE_STEP, value:"L" });
+  assert.deepEqual(again.changedPaths, [], "same value = no changed path");
+  assert.equal(again.document.typography.globalSizeStep, "L");
+  // A bogus value normalises to M (never throws, never a silent wrong step).
+  const toBogus = applyDesignCommand(toL.document, { type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_GLOBAL_SIZE_STEP, value:"HUGE" });
+  assert.equal(toBogus.document.typography.globalSizeStep, "M");
+  assert.deepEqual(toBogus.changedPaths, ["typography.globalSizeStep"]);
+});
+
+test("globalSizeStep survives the legacy persistence round-trip (nested + flat)", () => {
+  const doc = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_GLOBAL_SIZE_STEP, value:"S",
+  }).document;
+  const persisted = designDocumentToLegacyFields(doc);
+  assert.equal(persisted.typography.globalSizeStep, "S", "nested survives");
+  assert.equal(persisted.globalSizeStep, "S", "flat compat field survives");
+  assert.equal(migrateDesignDocument(persisted).typography.globalSizeStep, "S", "restores from persistence");
+  // A flat-only legacy blob (no nested typography) still restores the step.
+  assert.equal(migrateDesignDocument({ globalSizeStep:"L" }).typography.globalSizeStep, "L");
+});
+
 test("role-offset commands preserve a frozen solver base and can unpin", () => {
   const before = createDesignDocumentV1();
   const placed = applyDesignCommand(before, {
