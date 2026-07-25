@@ -154,6 +154,41 @@ test("globalSizeStep survives the legacy persistence round-trip (nested + flat)"
   assert.equal(migrateDesignDocument({ globalSizeStep:"L" }).typography.globalSizeStep, "L");
 });
 
+test("pin-element-size sets/clears element.pins.sizeStep without touching the base (law 5)", () => {
+  const added = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:"body", text:"Hi" },
+  });
+  const uid = added.document.content.elements[0].uid;
+  // Give it a generated base on master; the pin must not disturb it.
+  const based = applyDesignCommand(added.document, { type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_SIZE, uid, value:"L" });
+  assert.equal(based.document.content.elements[0].master.sizeStep, "L", "base on master");
+  const pinned = applyDesignCommand(based.document, { type:DESIGN_COMMAND_TYPES.CONTENT_PIN_ELEMENT_SIZE, uid, value:"S" });
+  assert.equal(pinned.document.content.elements[0].pins.sizeStep, "S", "pin recorded");
+  assert.equal(pinned.document.content.elements[0].master.sizeStep, "L", "base untouched by pin");
+  assert.deepEqual(pinned.changedPaths, [`content.elements.${uid}.pins.sizeStep`]);
+  // Same pin = no-op; clearing removes the pin so the element rejoins the global step.
+  assert.deepEqual(applyDesignCommand(pinned.document, { type:DESIGN_COMMAND_TYPES.CONTENT_PIN_ELEMENT_SIZE, uid, value:"S" }).changedPaths, []);
+  const cleared = applyDesignCommand(pinned.document, { type:DESIGN_COMMAND_TYPES.CONTENT_PIN_ELEMENT_SIZE, uid, value:null });
+  assert.equal(cleared.document.content.elements[0].pins.sizeStep, undefined, "pin cleared → follows global");
+  assert.deepEqual(cleared.changedPaths, [`content.elements.${uid}.pins.sizeStep`]);
+  // A bogus step is rejected (no throw, no path).
+  assert.deepEqual(applyDesignCommand(cleared.document, { type:DESIGN_COMMAND_TYPES.CONTENT_PIN_ELEMENT_SIZE, uid, value:"XL" }).changedPaths, []);
+});
+
+test("set-font-size-pin records/clears a legacy role pin, no-ops on same state, round-trips", () => {
+  const pinned = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_FONT_SIZE_PIN, role:"heading", pinned:true,
+  });
+  assert.equal(pinned.document.typography.fontSizePins.heading, true);
+  assert.deepEqual(pinned.changedPaths, ["typography.fontSizePins"]);
+  assert.deepEqual(applyDesignCommand(pinned.document, { type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_FONT_SIZE_PIN, role:"heading", pinned:true }).changedPaths, [], "same state no-op");
+  const cleared = applyDesignCommand(pinned.document, { type:DESIGN_COMMAND_TYPES.TYPOGRAPHY_SET_FONT_SIZE_PIN, role:"heading", pinned:false });
+  assert.equal(cleared.document.typography.fontSizePins.heading, undefined, "cleared → rejoins global");
+  // Survives the persistence round-trip.
+  const persisted = designDocumentToLegacyFields(pinned.document);
+  assert.equal(migrateDesignDocument(persisted).typography.fontSizePins.heading, true);
+});
+
 test("role-offset commands preserve a frozen solver base and can unpin", () => {
   const before = createDesignDocumentV1();
   const placed = applyDesignCommand(before, {

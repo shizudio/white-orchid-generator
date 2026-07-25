@@ -42,7 +42,7 @@ import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions,
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
 import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
-import { formatFamilyOf, legacyStepMult, resolveEffectiveStep } from "@/lib/type-scale.mjs";
+import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
@@ -2636,7 +2636,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       content:{ headline,subtext,attribution,dateText,microLabel,pillText,authorship:copyAuthors,elements:documentElements },
       composition:{ archetypeId,archetypeVariant:archVariant },
       palette:{ background:bgColor,field:fieldColorOverride,text:textColorId,backdrop:backdropMode,backgroundOpacity:bgAlpha,pins:pinnedProps },
-      typography:{ heroRegister,fontSizes,masterLayouts:typeLayouts,formatLayouts:typeLayoutsByDim,roleOffsetsByFormat:roleOffsetsByDim },
+      typography:{ heroRegister,fontSizes,globalSizeStep,fontSizePins,masterLayouts:typeLayouts,formatLayouts:typeLayoutsByDim,roleOffsetsByFormat:roleOffsetsByDim },
       media:{ treatment:photoTreatment,frame:photoFrame,masterTransform:imgT,formatTransforms:imgTByDim,formatPins:photoTouchedByDim },
       logo:{ variantPinned:logoVariantTouched,hidden:logoHidden,placementPinned:userLogoTouched,masterPlacement,formatPlacements:logoByDim },
       shapes:overlayLayers,
@@ -3361,7 +3361,16 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // photo_logo read zoneTc directly; the tc-branches use (frameBgTextColor||tc)).
     if(frameBgTextColor&&(!textColorId||textColorId==="auto"))zoneTc=frameBgTextColor;
     const _typeFamily=formatFamilyOf(dimId);     // tall|square|wide — drives the S/M/L spread
-    const fm=role=>fontMultOf(fontSizes,role,_typeFamily);   // per-category, per-family size multiplier
+    // (Global hierarchical size — client ruling 2026-07-23) The document's one S/M/L
+    // control scales ALL legacy roles at once, hierarchically: an UNPINNED role follows
+    // globalStepMult (title grows most / shrinks least; body least / most), composed on
+    // its generated per-role base; a PINNED role (fontSizePins[role]) ignores the global
+    // step entirely (law 5). globalStepMult is exactly 1.0 at global "M", so a default
+    // design is pixel-identical (fixture invariance).
+    const _globalStep=normalizeGlobalSizeStep(globalSizeStep);
+    const _fontPins=fontSizePins||{};
+    const fm=role=>fontMultOf(fontSizes,role,_typeFamily)
+      * (_fontPins[role] ? 1 : globalStepMult(role,_globalStep,_typeFamily));   // per-category, per-family, global-aware
     // Per-format readable-font floor for a fitText call (Task 4). `start` is the
     // call's start size. The ceiling is the SQUARE-baseline design size (start with
     // the per-format fontMult AND the S canvas-scale divided out) so the floor can
@@ -3600,12 +3609,21 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       for(const el of ordered){
         const txt=el.text.trim();
         const isCta=el.class==="cta";
-        const step=(el.pins&&el.pins.sizeStep)||(el.master&&el.master.sizeStep)||"M";
+        // (Global hierarchical size) An element's PIN (el.pins.sizeStep) overrides the
+        // document global step (law 5); an UNPINNED element follows the global step,
+        // composed on its generated base (el.master.sizeStep, default "M"). At global "M"
+        // the global multiplier is 1.0 → identical to before (fixture invariance). The
+        // per-class response weight (globalStepMult) keeps the hierarchy: a heading element
+        // grows/shrinks like the title, a body/caption/cta element stays restrained.
+        const _elPin=(el.pins&&el.pins.sizeStep)||null;
+        const _elBase=(el.master&&el.master.sizeStep)||"M";
+        const step=_elPin||_elBase;                       // the effective requested S/M/L
+        const _elGlobal=_elPin?1:globalStepMult(el.class,_globalStep,_typeFamily);
         // (type-scale) the S/M/L spread varies by format family so a step reads the same
         // on a tall portrait and a wide banner. The class floor still clamps the shrink.
         const _elBaseM=CLASS_BASE_PX[el.class]||30*S;
         const _elFloor=CLASS_FLOOR_PX[el.class]||16;
-        const px=Math.max(_elFloor, elementStepPx(_elBaseM, step, _typeFamily));
+        const px=Math.max(_elFloor, elementStepPx(_elBaseM, step, _typeFamily) * _elGlobal);
         // (Font Ruling B) Honor a pinned register — only when it is sanctioned for this class
         // under the brand config; an out-of-vocab/unsanctioned pin falls back to the class
         // default (never a broken face). The pin selects the class-config PATH (heading serif↔
@@ -3662,9 +3680,9 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // (type-scale / M2 honesty) sol.px is what actually PAINTED after the solver's own
         // capacity fit; resolveEffectiveStep reports whether the requested S/M/L survived so
         // the inspector pill can say "L (fits as M here)" instead of silently painting M.
-        const eff=isCta?null:resolveEffectiveStep({basePx:_elBaseM,step,family:_typeFamily,capacityPx:sol.px,floorPx:_elFloor});
+        const eff=isCta?null:resolveEffectiveStep({basePx:_elBaseM*_elGlobal,step,family:_typeFamily,capacityPx:sol.px,floorPx:_elFloor});
         out.push({uid:el.uid,class:el.class,placed:true,box,px:sol.px,face:sol.face,ink:sol.ink,band:!!sol.band,
-          sizeStep:step,effectiveStep:eff?eff.effectiveStep:step,sizeCapped:!!(eff&&eff.capped)});
+          sizeStep:step,sizePinned:!!_elPin,effectiveStep:eff?eff.effectiveStep:step,sizeCapped:!!(eff&&eff.capped)});
       }
       return out;
     };
@@ -6816,7 +6834,7 @@ export default function App() {
       register:(_docElRef.current?.content?.elements || []).find(d => d.uid === e.uid)?.register ?? null }));
     window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins, register:e.register??null }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
-    window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
+    window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, sizePinned:!!s.sizePinned, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
     window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
     return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
   }, [dispatchDesignCommand]);
