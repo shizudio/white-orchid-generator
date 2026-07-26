@@ -709,23 +709,85 @@ stripped from production). To re-run and compare:
 The fixture photo is a **fixed solid-colour stand-in** and all copy is fixed, so the only
 variable is the renderer itself.
 
+That three-step console flow is for **eyeballing a suspect cell only**. A headful browser
+is not the canonical environment, so its hashes are not comparable to the baseline — any
+capture that will be *diffed against* or *written to* the baseline must use the canonical
+environment defined next.
+
+**The canonical capture environment (required — measured 2026-07-26).** A fingerprint is
+comparable to the baseline *only* when captured in this exact context. Anything else is a
+different measurement, not a regression:
+
+| Element | Required value |
+|---|---|
+| Engine binary | Playwright-bundled **`chrome-headless-shell` 149.0.7827.55** (`ms-playwright/chromium_headless_shell-1228`) — i.e. plain `chromium.launch({ headless: true })` with **no** `executablePath` |
+| Headless mode | headless **shell** — *not* Chrome-for-Testing under `--headless=new` |
+| Build | isolated test-hooks production build: `WO_DIST_DIR=.next-fp NEXT_PUBLIC_WO_TEST_HOOKS=1 next build && next start`, from a throwaway worktree or the repo root (equivalent) |
+| Env keys | **all** Supabase/OpenAI/Higgsfield vars blanked in the build *and* the serve env; every non-localhost request aborted in the browser context |
+| Discipline | `await document.fonts.ready` → one warm-up `__woRenderFingerprint()` **discarded** → read the second call |
+| Determinism gate | double-capture in-process; reject the run unless both hash maps are byte-identical |
+
+**Sensitivity axes (measured over the 144-cell set, all other variables held fixed):**
+
+| Axis varied | Cells changed |
+|---|---|
+| Build path — repo root vs throwaway worktree | **0 / 144** |
+| Entry route — `/generate` direct vs landing + "Skip to the studio" | **0 / 144** |
+| Engine version — 147.0.7727.15 vs 149.0.7827.55 (both headless shell) | **0 / 144** |
+| Headless **mode** — headless-shell vs `--headless=new` | **84 / 144** |
+| Env keys — blanked/offline vs Supabase baked in + cloud brand row reachable | **135 / 144** |
+
+The axes that actually move cells are **headless mode** and **env-key presence**. Build
+path and entry route are inert, and the engine *version* is inert across 147↔149. That
+retires the earlier "cross-engine comparisons are invalid — Chrome/148 → Chromium/149
+shifts ~135 cells at the AA level" claim: the nearest measurable engine step produces
+**zero** change, so that historical shift was never an engine effect. Pin the **mode and
+the env**; record the engine version for the record, not as the controlling variable.
+
 **Two methodology rules (hard-won during the DLC-2 guard reconciliation):**
 
 1. **Capture only after `document.fonts.ready` + one warm-up render.** The first
    `__woRenderFingerprint()` of a session can race font loading and first-paint layout;
    discard it and read the *second* call. Every baseline and every comparison must clear
    fonts and warm up first, or a cell flips for reasons that have nothing to do with the code.
-2. **Baselines are engine-pinned — cross-engine comparisons are invalid.** Canvas
-   antialiasing is engine-specific, so the same geometry hashes differently across Chrome
-   builds (e.g. Chrome/148 → Chromium/149 shifts ~135 cells at the AA level with *zero*
-   geometry change). The baseline records the exact engine it was captured on (the `engine`
-   / `engineDetail` / `platform` fields); **only ever diff within that same harness.** On an
-   engine change, re-baseline **deliberately** (confirm geometry is unchanged same-engine
-   first — build the prior commit in a throwaway worktree on the *current* engine and diff
-   WIP-vs-that — then overwrite the baseline and bump the `engine` field in the same commit).
-   The committed baseline is currently pinned to **Chromium/149.0.7827.55** (Playwright-bundled,
-   the automated harness); the previous Chrome/148 baseline was retired on a deliberate,
-   geometry-verified engine bump.
+2. **Baselines are environment-pinned — only ever diff within the canonical environment
+   above.** Text rasterization differs by headless *mode*, and the brand row the renderer
+   reads differs by env-key presence; either one moves most of the set with *zero* geometry
+   change. The baseline records its full capture context (`engine` / `headlessMode` /
+   `buildConvention` / `envKeys` / `captureDiscipline` / `platform`). On a deliberate
+   environment change, re-baseline the **whole file in one machine capture** — never a
+   partial hand-merge (that is exactly how the v1 lineage below became incoherent).
+
+**Lineage: v1 retired, v2 reset (2026-07-26).** The v1 lineage (captured 2026-07-22 on
+Chromium/149) proved **non-reproducible**: a capture at `6a1aedf` — the very commit whose
+run produced v1's non-petal cells — differs from v1 in **90/144 cells** in the canonical
+environment, on the pinned engine, under the pinned discipline. Build path, entry route,
+engine version, headless mode, cloud-brand presence and serif-font availability were each
+varied and none closes the gap; every capture was deterministic (in-run double-capture
+identical; independent re-runs 0/144).
+
+Diagnosis: v1 was a **partial hand-merge across two environments, not a coherent capture**.
+Its two deliberate bumps each wrote only their own cells and left the other 132 untouched.
+The tell: the only cell groups where v1 agrees with a present-day capture are
+`arch:schedule_tile:*` and `arch:petal_window:*` — exactly the two groups those bumps
+rewrote. Related correction: `9d9982a` recorded the Fira Sans restore as shifting "exactly
+the 6 `arch:schedule_tile:*` cells"; the measured blast radius in the canonical environment
+is **86 cells across 19 archetype groups**. That 80-cell under-record — not the later
+render work — is the origin of the ~101-cell drift observed against v1 at HEAD.
+
+Attribution across the full v1→reset range (`6a1aedf` → `91e87b2`, canonical env, 16
+checkpoint captures, **zero unattributed cells**): only two commits move a pixel —
+`9d9982a` (Fira Sans 0-byte binary restore, **86 cells**) and `9d269ab` (orchid-petal purge,
+placed instances re-masked to shape-1, **6** `arch:petal_window` cells); net 89 changed, 55
+identical. Font Ruling B P1–P5, the per-format-family type scale, the legacy-hero
+fit-then-step fix, the text-elements slices and the global size cascade each changed **0
+cells** — render-neutral at fixture defaults, as designed.
+
+v2 is a full 144-cell machine capture at `91e87b2` in the canonical environment, geometry
+certified on the same build at reset time (born-clean 456/456, arch-stress 114/114,
+legacy-dup 30/30, zero offenders; unit 452/452, contract 25/25). The **84 cells** of v1
+divergence that no commit explains are written off as unreconstructable harness history —
+recorded here rather than silently absorbed.
 
 **The rule.** A fingerprint diff is *never* regenerated silently. A changed cell means
 either a **bug in the DLC change** (fix the code until the cell matches) or a
