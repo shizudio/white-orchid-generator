@@ -6320,6 +6320,7 @@ export default function App() {
     applyPatchRef, buildMaterialized, dispatchElementCommand, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
     setGenBrief, snapshotApplyableState, startNewPost,
+    dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     undoLastAiChange,
   } = useDesignPatchPipeline({
     chatNoteRef, layoutUserPinnedRef,
@@ -7131,6 +7132,8 @@ export default function App() {
     // (Slice 3) added-element authoring: doc + reactive placement ledger + the typed
     // element-command dispatcher, plus the picker/change-type disclosure state.
     designDocument, contentLedger, dispatchElementCommand,
+    // (Global hierarchical size) "Text size (all)" + the per-role pin grid bind to these.
+    dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     addTextOpen, setAddTextOpen, changeTypeOpen, setChangeTypeOpen,
   }} />;
 
@@ -8800,6 +8803,11 @@ function useDesignPatchPipeline(workspace) {
     applyPatchRef, buildMaterialized, dispatchElementCommand, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
     setGenBrief, snapshotApplyableState, startNewPost, executeWorkflowGroups,
+    // (Global hierarchical size) The size handlers the Text panel binds to. They live in
+    // this hook but render in InspectorWorkspace, so they must ride the same hand-mirrored
+    // prop path as dispatchElementCommand — hook return → App destructure → workspace
+    // object → panel destructure. Dropping any leg throws at click time (prop-drop class).
+    dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     undoLastAiChange
   };
 }
@@ -8824,6 +8832,7 @@ function InspectorWorkspace({ workspace }) {
     updateLayerT, updateTextLayout, videoObj,
     textSurfaceLuminance, hasFrameLayer,
     designDocument, contentLedger, dispatchElementCommand,
+    dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     addTextOpen, setAddTextOpen, changeTypeOpen, setChangeTypeOpen,
   } = workspace;
   // (Slice 3) The ADDED elements (non-migrated content.elements) as an inspector-facing
