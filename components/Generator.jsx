@@ -9210,7 +9210,11 @@ function InspectorWorkspace({ workspace }) {
           step in THIS format, say so from render truth (effectiveStep/sizeCapped) — the
           selected pill's honest state, never a silently-shrunk L pretending to be L. */}
       {(()=>{
-        const rt=liveSceneElements.find(s=>s.uid===uid);
+        // (prop-drop guard) liveSceneElements belongs to createEditorChromeModel, not this
+        // component — reading it here threw and blanked the whole studio the moment an added
+        // element's panel opened. Render truth comes from the ref this component already
+        // holds (same source, same pattern as the headlineSizeCapped note above).
+        const rt=(renderResultRef.current?.sceneElements||[]).find(s=>s.uid===uid);
         if(!rt||!rt.sizeCapped||!rt.effectiveStep||rt.effectiveStep===rt.sizeStep) return null;
         return <div role="note" style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"6px 0 0"}}>
           <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{rt.sizeStep}</strong> fits as <strong style={{fontFamily:F.subtitle,fontWeight:700,color:B.burnham}}>{rt.effectiveStep}</strong> in this format.
