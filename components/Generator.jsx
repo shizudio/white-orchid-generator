@@ -7124,6 +7124,10 @@ export default function App() {
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
     updateLayerT, updateTextLayout,
+    // (Symptom-3 remedy honesty) the contrast-remedy block needs the measured text
+    // surface luminance + frame-layer state — thread them or the panel throws (M6-adjacent
+    // prop-drop class; see the mediaObj/brandKit precedents).
+    textSurfaceLuminance, hasFrameLayer,
     // (Slice 3) added-element authoring: doc + reactive placement ledger + the typed
     // element-command dispatcher, plus the picker/change-type disclosure state.
     designDocument, contentLedger, dispatchElementCommand,
@@ -8818,6 +8822,7 @@ function InspectorWorkspace({ workspace }) {
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
     updateLayerT, updateTextLayout, videoObj,
+    textSurfaceLuminance, hasFrameLayer,
     designDocument, contentLedger, dispatchElementCommand,
     addTextOpen, setAddTextOpen, changeTypeOpen, setChangeTypeOpen,
   } = workspace;
