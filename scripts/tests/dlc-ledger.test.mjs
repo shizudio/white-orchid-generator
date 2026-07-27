@@ -27,6 +27,14 @@ const mappedSignal = () => ({
   copy: { headline: "*One* thing", subtext: "*Two* and *three*", attribution: "", dateText: "" },
   logo: { explicit: true, overlapsText: true, inFocalBand: true, inActionBand: true, illegible: true, pinned: true },
   safeZoneViolation: true,
+  // (Text unification Phase C) The relational-hierarchy advisory joins the mapped set:
+  // a body element pinned louder than the subheading. Keeps checker C the guard that
+  // catches a hierarchy finding shipping without a resolving contract ruleId.
+  textHierarchy: [
+    { id: "text:hero", class: "heading", px: 54, weight: 400 },
+    { id: "text:support", class: "subheading", px: 24, weight: 400 },
+    { id: "element:el_body_0", class: "body", px: 40, weight: 400, pinned: true },
+  ],
 });
 
 // runLocalAudit's ONLY findings without a contract ruleId today are the archetype

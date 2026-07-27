@@ -40,7 +40,7 @@ import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs
 import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
-import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
+import { placeTextElement, resolveTextTreatmentAt, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
@@ -3086,6 +3086,37 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         });
         renderTruth.audit.contentElements=_dyn;
         renderTruth.audit.dynamicElementCount=_dyn.filter(e=>e.placed).length;
+        /* (TEXT UNIFICATION Phase C — RELATIONAL HIERARCHY, client ruling 5 / DLC §12)
+           Render truth for the hierarchy check: what each text VOICE actually painted,
+           legacy roles and added elements in ONE list (they are one system now). The
+           system's own per-class sizes rank correctly by construction, so this only ever
+           fires on an explicit size pin that inverts the order — respected (law 5),
+           named by the advisory. Weights are the painted ones where the painter recorded
+           them; the hero's serif/heavySans register is its weight tell. */
+        const _pxOf=v=>Number.isFinite(v)&&v>0?v:0;
+        const _sizePins=fontSizePins||{};
+        const _hier=[];
+        if(_pxOf(fontMeta.headline)) _hier.push({ id:"text:hero", class:"heading", px:fontMeta.headline,
+          weight:(heroRegister==="heavySans"?700:400), pinned:!!_sizePins.headline });
+        if(_pxOf(fontMeta.subtext) && !fontMeta.subtextIsRows) _hier.push({ id:"text:support", class:"subheading",
+          px:fontMeta.subtext, weight:fontMeta.subtextWeight||400, pinned:!!_sizePins.subtext });
+        // The legacy DATE line is DELIBERATELY excluded (except where it IS the title —
+        // big_number's usesDateAsHero). Measured across 10 archetypes x 6 formats: in 21
+        // cells the ratified layouts paint the date larger than the support line as
+        // display type (e.g. motif_field/twitter date 86.9px vs support 53.8px). That is
+        // the archetype's own art direction (docs/visual-language-spec.md), not an
+        // inversion — and reporting a fresh generation would break law 4. The ranking
+        // covers the text VOICES the owner composes: the hero, the support line, and
+        // every added element.
+        if(_pxOf(fontMeta.date) && mat && mat.usesDateAsHero) _hier.push({ id:"text:date", class:"heading",
+          px:fontMeta.date, weight:300, pinned:!!_sizePins.date });
+        for(const p of paintedContentElements){
+          if(!p||p.placed===false||!_pxOf(p.px)) continue;
+          const _src=_added.find(el=>el.uid===p.uid);
+          _hier.push({ id:`element:${p.uid}`, class:p.class, px:p.px, weight:p.weight||400,
+            pinned:!!(_src&&_src.pins&&_src.pins.sizeStep) });
+        }
+        renderTruth.audit.textHierarchy=_hier;
         // (spec §4 remedy c) A roomier-layout candidate is offered ONLY when solver-verified.
         // No alternative-layout solve runs in this audit pass, so it stays unset here (never
         // offered blind); a future pass that verifies one sets renderTruth.audit.roomierLayout.
@@ -3641,7 +3672,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const align=(mat&&mat.roles&&mat.roles.hero&&mat.roles.hero.align)||"left";
       const colW=Math.max(120,(bw||((1-_sm.l-_sm.r)*w)));
       const baseInk=zoneTc||B.burnham;
-      const inkPoles=[B.burnham,B.whiteSmoke];
+      /* (TEXT UNIFICATION Phase C — AUTO IS THE DEFAULT, EXPLICIT IS A PIN) With Text
+         colour on Auto the element's ink flips to whichever brand pole reads best on the
+         surface underneath — re-checked on every solve, exactly like a legacy role. An
+         EXPLICIT text colour is the owner's choice: law 5 / M3 forbid silently overriding
+         it, so the flip is disabled and the ladder escalates weight → robust face → size
+         → band instead. The honest report is the existing surface-contrast finding. */
+      const inkPoles=textColorId==="auto"?[B.burnham,B.whiteSmoke]:[];
       const CLASS_BASE_PX={ heading:54*S, subheading:38*S, body:30*S, caption:26*S, cta:0.024*h };
       const CLASS_FLOOR_PX={ heading:34*S, subheading:26*S, body:22*S, caption:18*S, cta:0.016*h };
       /* ── OBSTACLES (TEXT UNIFICATION Phase B — NOTHING PHANTOM RESERVES SPACE) ──────
@@ -3735,11 +3772,25 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // a different candidate can never move the owner's placement (law 5); a legacy {dx,dy}
         // entry translates the solver placement. The solver still runs (clean base for obstacles).
         const _off=roleOff(`el:${el.uid}`);
-        const ex=_off.frozen ? (_off.bx+_off.dx-sol.w/2) : (sol.x+_off.dx);
-        const ey=_off.frozen ? (_off.by+_off.dy-sol.h/2) : (sol.y+_off.dy);
+        /* (TEXT UNIFICATION Phase C — CONTINUOUS ADAPTATION, client ruling 4) The solver
+           resolved ink/weight for the box IT chose. When the owner has DRAGGED this
+           element the painted box is somewhere else, so the treatment is re-resolved AT
+           THE PAINTED BOX through the same ladder — an element dragged from the ivory
+           field onto the photo flips its ink and escalates its weight automatically,
+           exactly as a legacy role does, on EVERY solve and not only at placement.
+           Un-dragged elements take the solver's own answer unchanged (byte-identical). */
+        const _dragged=!!(_off.frozen || _off.dx || _off.dy);
+        const _treat=_dragged ? (resolveTextTreatmentAt({
+          cfg, measure, surface, baseInk, inkPoles,
+          anchor: _off.frozen
+            ? { center:{ x:_off.bx+_off.dx, y:_off.by+_off.dy } }
+            : { topLeft:{ x:sol.x+_off.dx, y:sol.y+_off.dy } },
+        }) || sol) : sol;
+        const ex=_dragged ? _treat.x : sol.x;
+        const ey=_dragged ? _treat.y : sol.y;
         beginText();
         if(isCta){
-          const bs=sol.px, padX=bs*0.9, padY=bs*0.55, pillW=sol.w, pillH=sol.h, rad=pillH*0.5;
+          const bs=_treat.px, padX=bs*0.9, padY=bs*0.55, pillW=_treat.w, pillH=_treat.h, rad=pillH*0.5;
           const fill=ARCHETYPE_COLORS.softTangerine||B.tangerine;
           ctx.globalAlpha=1; ctx.fillStyle=fill;
           ctx.beginPath();
@@ -3751,19 +3802,19 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           ctx.textAlign="left"; ctx.textBaseline="alphabetic";
           ctx.fillText(txt.toUpperCase(), ex+padX, ey+padY+bs*0.82); ctx.letterSpacing="0px";
         }else{
-          if(sol.band){ const bc=hexLuminance(sol.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:ex,y:ey,w:sol.w,h:sol.h},bc,0.92,false); }
-          ctx.fillStyle=sol.ink; ctx.font=`${sol.weight} ${sol.px}px ${sol.face}`;
+          if(_treat.band){ const bc=hexLuminance(_treat.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:ex,y:ey,w:_treat.w,h:_treat.h},bc,0.92,false); }
+          ctx.fillStyle=_treat.ink; ctx.font=`${_treat.weight} ${_treat.px}px ${_treat.face}`;
           const lines=textLines(ctx,txt,colW);
-          drawTextLines(ctx,lines,ex,ey+sol.px,sol.w,sol.px*1.28,align);
+          drawTextLines(ctx,lines,ex,ey+_treat.px,_treat.w,_treat.px*1.28,align);
         }
         endText();
-        const box={x:ex,y:ey,w:sol.w,h:sol.h};
+        const box={x:ex,y:ey,w:_treat.w,h:_treat.h};
         placedBoxes.push(box);
         // (type-scale / M2 honesty) sol.px is what actually PAINTED after the solver's own
         // capacity fit; resolveEffectiveStep reports whether the requested S/M/L survived so
         // the inspector pill can say "L (fits as M here)" instead of silently painting M.
-        const eff=isCta?null:resolveEffectiveStep({basePx:_elBaseM*_elGlobal,step,family:_typeFamily,capacityPx:sol.px,floorPx:_elFloor});
-        out.push({uid:el.uid,class:el.class,placed:true,box,px:sol.px,face:sol.face,ink:sol.ink,band:!!sol.band,
+        const eff=isCta?null:resolveEffectiveStep({basePx:_elBaseM*_elGlobal,step,family:_typeFamily,capacityPx:_treat.px,floorPx:_elFloor});
+        out.push({uid:el.uid,class:el.class,placed:true,box,px:_treat.px,face:_treat.face,weight:_treat.weight,ink:_treat.ink,band:!!_treat.band,
           sizeStep:step,sizePinned:!!_elPin,effectiveStep:eff?eff.effectiveStep:step,sizeCapped:!!(eff&&eff.capped)});
       }
       return out;
@@ -4335,6 +4386,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           ctx.restore();
           if(_schedRowsAreHero) fontMeta.headline=timeSize;   // the rows ARE the title here
           fontMeta.subtext=activitySize;
+          // (Phase C hierarchy) The schedule ROWS are tabular layout content, not the
+          // support VOICE — they are art-directed to read larger than the title band in
+          // the wide formats. Flag them so the relational-hierarchy check does not read
+          // this ratified layout as an inversion (measured: 2/60 generated cells).
+          fontMeta.subtextIsRows=true;
           setTextBounds(zone.h);
           if(_roleB){
             _roleB.support={...zone}; // schedule rows edit via the Details field
@@ -7018,13 +7074,20 @@ export default function App() {
     // never an obstacle" needs a driver that can seat a real archetype and blank its copy.
     // TEST_HOOKS only — stripped from production alongside the rest of this block.
     window.__woApplyPatch = (patch, options) => (applyPatchRef.current || (() => []))(patch, options || { source:"ui" });
-    window.__woElementFaces = () => (renderResultRef.current?.contentElements || []).map(e => ({ uid:e.uid, class:e.class, placed:!!e.placed, face:e.face??null,
+    // (Phase C) The painted TREATMENT per element — ink and weight included, so a live
+    // guard can prove the continuous accessibility adaptation (a drag from field to photo
+    // re-resolves the ink) instead of inferring it from a screenshot.
+    window.__woElementFaces = () => (renderResultRef.current?.contentElements || []).map(e => ({ uid:e.uid, class:e.class, placed:!!e.placed, face:e.face??null, ink:e.ink??null, weight:e.weight??null, band:!!e.band, px:e.px??null,
       register:(_docElRef.current?.content?.elements || []).find(d => d.uid === e.uid)?.register ?? null }));
     window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins, register:e.register??null }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
     window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, sizePinned:!!s.sizePinned, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
+    // (Phase C) The relational-hierarchy render truth + the live findings, so the
+    // inversion advisory can be verified from the ledger rather than from pixels.
+    window.__woTextHierarchy = () => (renderResultRef.current?.auditSignal?.textHierarchy) || null;
+    window.__woFindings = () => (renderResultRef.current?.findings || []).map(f => ({ id:f.id, ruleId:f.ruleId, severity:f.severity, message:f.message }));
     window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
-    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woApplyPatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
+    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woApplyPatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woTextHierarchy; delete window.__woFindings; delete window.__woHitTest; } catch {} };
   }, [dispatchDesignCommand]);
   // Refs so the ledger console hooks (installed after runAiAudit is defined, below)
   // read the latest merged ledger + raw store each render without a TDZ on runAiAudit.
