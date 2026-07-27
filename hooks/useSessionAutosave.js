@@ -18,6 +18,10 @@ export function useSessionAutosave({
   briefMessage,
   actionsRef,
   setCloudConfigured,
+  // (tombstone guard) Latched by the editor when a dispatched edit emptied copy —
+  // the owner's deliberate clear. Without it saveSession holds an all-empty
+  // document rather than overwriting a stored record that still has words.
+  copyEmptiedByOwnerRef,
   delay = 2500,
 }) {
   const timerRef = useRef(null);
@@ -45,10 +49,12 @@ export function useSessionAutosave({
       liked: prior?.liked === true,
       exportedAt: prior?.exportedAt ?? null,
     };
-    saveSession(record).then(result => {
+    saveSession(record, {
+      copyEmptiedByOwner: copyEmptiedByOwnerRef?.current === true,
+    }).then(result => {
       if (result?.configured) setCloudConfigured(true);
     });
-  }, [actionsRef, conversation, sessionId, setCloudConfigured]);
+  }, [actionsRef, conversation, copyEmptiedByOwnerRef, sessionId, setCloudConfigured]);
 
   useEffect(() => {
     if (!ready || !sessionId) return undefined;

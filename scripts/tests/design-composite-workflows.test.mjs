@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyDesignCommand, createDesignDocumentV1, hasUserFormatOverride } from "../../lib/design-document.mjs";
-import { mergeCurrentContent, planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
+import { TEMPLATE_APPLY_INTENTS, resolveTemplateMergeSource, mergeCurrentContent, planArchetypeMaterializationWorkflow, planCopyAuthorshipWorkflow, planFormatResetWorkflow, planFurniturePatchWorkflow, planLogoPatchWorkflow, planMediaSourceWorkflow, planPalettePinWorkflow, planPhotoTransformWorkflow, planShapeCollectionWorkflow, planShapeMutationWorkflow, planShapePatchWorkflow, planSnapshotRestoreWorkflow, planTemplateApplicationWorkflow, planTypographyPlacementWorkflow, shouldCommitPatchHistory } from "../../lib/design-composite-workflows.mjs";
 
 const applyGroups = (document, groups) => groups.reduce(
   (current, workflowGroup) => workflowGroup.commands.reduce(
@@ -505,6 +505,53 @@ test("planTemplateApplicationWorkflow carries ALL current content when a current
   assert.ok(after.content.elements.some(element=>element.uid==="el_body_owner"));
   assert.equal(after.palette.text,"tangerine");
   assert.equal(after.logo.assetId,"s1-green");
+});
+
+// ── RESTORE IS NOT A RE-SKIN (data-loss regression, 2026-07-27) ──────────────
+// Session bootstrap and "open a stored post" both ride planTemplateApplicationWorkflow.
+// With the re-skin merge applied to them, the freshly-mounted (empty) canvas was read as
+// the owner's content and every word of the restored post was blanked — then the 2.5s
+// autosave wrote the emptied document over the good stored record.
+test("a RESTORE opens the stored design verbatim even though a (blank) current document exists", () => {
+  const stored=incomingTemplateDocument();          // stands in for the stored session
+  const freshlyMountedCanvas=createDesignDocumentV1();  // boot document: zero copy
+  const groups=planTemplateApplicationWorkflow({
+    document:stored,
+    currentDocument:freshlyMountedCanvas,
+    intent:"restore",
+    metadata:{dimensionId:"ig_square",exportFormat:"png"},
+    alreadyMaterialized:true,
+  });
+  const after=applyGroups(freshlyMountedCanvas,groups);
+
+  assert.equal(after.content.headline,"Template headline","stored headline survives the restore");
+  assert.equal(after.content.subtext,"Template subtext");
+  assert.equal(after.content.attribution,"Template attribution");
+  assert.ok(after.content.elements.some(element=>element.uid==="el_heading_tpl"),
+    "a stored added element survives the restore");
+});
+
+test("a restore never inherits the live canvas's copy, even when the canvas has words", () => {
+  // Opening post B while post A is on the canvas must show B's copy, not A's.
+  const groups=planTemplateApplicationWorkflow({
+    document:incomingTemplateDocument(),
+    currentDocument:editedInProgressDocument(),
+    intent:"restore",
+    alreadyMaterialized:true,
+  });
+  const after=applyGroups(createDesignDocumentV1(),groups);
+  assert.equal(after.content.headline,"Template headline");
+  assert.ok(!after.content.elements.some(element=>element.uid==="el_body_owner"),
+    "the other post's added element does not leak into the restored one");
+});
+
+test("the merge source resolves by intent, not by whether a current document was passed", () => {
+  const current=editedInProgressDocument();
+  assert.equal(resolveTemplateMergeSource({intent:"restore",currentDocument:current}),null);
+  assert.equal(resolveTemplateMergeSource({intent:"reskin",currentDocument:current}),current);
+  assert.equal(resolveTemplateMergeSource({currentDocument:current}),current,"re-skin is the default");
+  assert.equal(resolveTemplateMergeSource({intent:"reskin",currentDocument:null}),null);
+  assert.deepEqual([...TEMPLATE_APPLY_INTENTS],["reskin","restore"]);
 });
 
 test("planTemplateApplicationWorkflow without a current document replaces wholesale (legacy path)", () => {

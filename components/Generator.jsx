@@ -43,7 +43,7 @@ import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-pla
 import { placeTextElement, resolveTextTreatmentAt, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
-import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
+import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS, LEGACY_ROLE_ORDER } from "@/lib/text-elements.mjs";
 import { LEGACY_FIELD_TO_ROLE } from "@/lib/text-slot-fill.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
@@ -6320,6 +6320,13 @@ export default function App() {
   const [sessionTitle, setSessionTitle] = useState(""); // AI-derived from the brief
   const sessionBootstrapActionsRef = useRef({});
   const sessionSaveActionsRef = useRef({});
+  // (tombstone guard — lib/sessions.js shouldHoldEmptyingSave) Latches when a
+  // DISPATCHED edit blanks a copy field: the inspector's "Clear text", clearing the
+  // fields one by one, an added element emptied or removed. Restore does NOT route
+  // through these paths, so a restore that arrives empty stays unlatched and the
+  // autosave holds instead of overwriting the stored words. Reset per session so the
+  // latch never carries across a reload or a post switch.
+  const copyEmptiedByOwnerRef = useRef(false);
   const moodboardActionsRef = useRef({});
   const postActionsRef = useRef({});
   const templateGuardRef = useRef(null);
@@ -6559,7 +6566,7 @@ export default function App() {
     dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     undoLastAiChange,
   } = useDesignPatchPipeline({
-    chatNoteRef, layoutUserPinnedRef,
+    chatNoteRef, layoutUserPinnedRef, copyEmptiedByOwnerRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
     bgAlpha, bgColor, brandKitFromContext, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
@@ -7301,7 +7308,7 @@ export default function App() {
   } = useProductWorkflows({
     AI_UNDO_DEPTH, acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
     archetypeId, attribution, buildMaterialized, canvasRef, closeInspector,
-    cloudTplConfigured, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
+    cloudTplConfigured, copyEmptiedByOwnerRef, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
     designTemplates, dimensionId, dispatchDesignCommand,
     dispatchEditorSelection, draw, drawRef, editingTemplate, exportFormat,
     firstShotResolveRef, fontsLoaded, genBrief, headline, image, imgT,
@@ -7450,7 +7457,7 @@ function useProductWorkflows(workspace) {
   const {
     AI_UNDO_DEPTH, acks, activeTemplateName, applyPatch, applyPatchRef, archVariant,
     archetypeId, attribution, buildMaterialized, canvasRef, closeInspector,
-    cloudTplConfigured, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
+    cloudTplConfigured, copyEmptiedByOwnerRef, curType, currentLiked, dateText, designDocument, executeWorkflowGroups,
     designTemplates, dimensionId, dispatchDesignCommand,
     dispatchEditorSelection, draw, drawRef, editingTemplate, exportFormat,
     firstShotResolveRef, fontsLoaded, genBrief, headline, image, imgT,
@@ -7583,7 +7590,11 @@ function useProductWorkflows(workspace) {
     briefMessage: genBrief?.message || "",
     actionsRef: sessionSaveActionsRef,
     setCloudConfigured: setSessionCloudCfg,
+    copyEmptiedByOwnerRef,
   });
+  // The owner-clear latch is per session: a reload or a post switch starts it OFF so a
+  // restore that arrives empty can never inherit a previous session's permission to save.
+  useEffect(() => { copyEmptiedByOwnerRef.current = false; }, [copyEmptiedByOwnerRef, sessionId]);
   postActionsRef.current = {
     createState: currentTemplateState,
     scene: () => genBrief?.scene,
@@ -8656,7 +8667,7 @@ function EditorShell({ workspace }) {
 
 function useDesignPatchPipeline(workspace) {
   const {
-    chatNoteRef, layoutUserPinnedRef,
+    chatNoteRef, layoutUserPinnedRef, copyEmptiedByOwnerRef,
     H, W, advisorDot, aiUndoStack, archVariant, archetypeId, attribution, backdropMode,
     bgAlpha, bgColor, brandKitFromContext, canvasRef, canvasShellRef, closeInspector,
     commandPathCollectorRef, copyAuthors, copyAuthorsRef, dateText,
@@ -8731,6 +8742,12 @@ function useDesignPatchPipeline(workspace) {
   // content/add-element + set-element-* commands via addTextElement/editElements compiled
   // in compileDesignPatchCommands, so both entry points share one reducer.
   const dispatchElementCommand = (command) => {
+    // (tombstone guard) Emptying or removing a text element is the owner emptying
+    // their own design — same latch as the copy-field clears in applyPatch.
+    if (command?.type === "content/remove-element"
+      || (command?.type === "content/set-element-text" && String(command.value ?? "").trim() === "")) {
+      copyEmptiedByOwnerRef.current = true;
+    }
     const preEditSnapshot = manualHarmRef.current.pending ? null : snapshotApplyableState();
     const result = dispatchDesignCommand(command) || {};
     if ((result.changedPaths || []).length) noteManualEdit(["element-edit"], preEditSnapshot);
@@ -8967,6 +8984,13 @@ function useDesignPatchPipeline(workspace) {
          MANUAL-EDIT harmonize pass runs after the burst settles.               */
   const applyPatch = (patch, opts = {}) => {
     if (!patch || typeof patch !== "object") return [];
+    // (tombstone guard) A dispatched patch that blanks a copy field is the owner
+    // emptying their own design — "Clear text", or clearing the fields one by one.
+    // Latch it so the autosave is allowed to persist an all-empty document.
+    if (LEGACY_ROLE_ORDER.some(field => field in patch
+      && (patch[field] == null || String(patch[field]).trim() === ""))) {
+      copyEmptiedByOwnerRef.current = true;
+    }
     // (B3) SOFT CANVAS SETTLE — a subtle, fast opacity cross-fade so a discrete
     // change (chat / inspector / fix) feels performed, not teleported. NEVER during
     // a live drag/pan (interaction stays 1:1): continuous drag patches carry

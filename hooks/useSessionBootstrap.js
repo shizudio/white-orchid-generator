@@ -4,6 +4,7 @@ import {
   getCurrentSessionId,
   installFeedbackDump,
   localGetSession,
+  localSaveSession,
   looksLikeGuardSession,
   newSessionId,
   purgeGuardSessions,
@@ -69,9 +70,12 @@ export function useSessionBootstrap({
     const applyRecord = record => {
       if (cancelled) return;
       const actions = actionsRef.current;
+      // A restore is NOT a re-skin: the stored design opens verbatim. Without the
+      // intent the merge reads the freshly-mounted (empty) canvas as the owner's
+      // content and blanks every word of the restored post.
       actions.applyDesignTemplate?.({
         state: pinRestoredFormat(record.state, firstPaintDimensionId),
-      });
+      }, { intent: "restore" });
       setSessionId(record.id);
       setSessionTitle(record.title || "");
       setSessionConversation(record.conversation || []);
@@ -134,6 +138,19 @@ export function useSessionBootstrap({
               || cloudSignature !== appliedSignature) {
               applyRecord(cloudRecord);
             }
+            // (graceful-degradation contract: state ALWAYS mirrors to localStorage)
+            // A cloud-only restore left no local mirror, so the autosave's tombstone
+            // guard had no stored baseline to compare against on the very reload that
+            // is most at risk. Mirroring the restored record closes that hole and
+            // costs one write of state the device just received.
+            localSaveSession({
+              id: cloudRecord.id,
+              title: cloudRecord.title,
+              state: cloudRecord.state,
+              conversation: cloudRecord.conversation,
+              liked: cloudRecord.liked === true,
+              updatedAt: cloudRecord.updatedAt || Date.now(),
+            });
             return;
           }
         }

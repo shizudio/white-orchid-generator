@@ -124,7 +124,9 @@ export function usePostActions({
       exportedAt: record.exportedAt ?? null,
     });
     const actions = postActionsRef.current;
-    actions.applyDesignTemplate?.({ state: record.state });
+    // Opening a stored post is a RESTORE, not a re-skin — the post's own copy must
+    // open verbatim rather than inheriting whatever is on the canvas right now.
+    actions.applyDesignTemplate?.({ state: record.state }, { intent: "restore" });
     setSessionId(record.id);
     setCurrentSessionId(record.id);
     setSessionTitle(record.title || "");

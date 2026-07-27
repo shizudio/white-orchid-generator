@@ -104,7 +104,12 @@ export function useTemplateManagement({
     return true;
   };
 
-  const applyDesignTemplate = template => {
+  // `intent` separates the two callers of this one path (see planTemplateApplicationWorkflow):
+  // the template gallery RE-SKINS (current canvas content rides over), while session
+  // bootstrap and opening a stored post RESTORE (the stored design opens verbatim). Passing
+  // the live document as "current" on a restore blanked every word of the restored post and
+  // the 2.5s autosave then wrote the emptied document over the good record.
+  const applyDesignTemplate = (template, { intent = "reskin" } = {}) => {
     const saved = template?.state;
     if (!saved) return;
     let restored;
@@ -145,6 +150,7 @@ export function useTemplateManagement({
       : null;
     actions.executeWorkflowGroups(planTemplateApplicationWorkflow({
       document:migrated,
+      intent,
       // (Re-skin ruling 2026-07-25, pins law 5) A template apply is a re-skin: ALL of the
       // canvas's current content (owner AND AI-authored copy, added text elements, pins)
       // rides onto the template, which supplies only the design system (layout, palette,
