@@ -4,7 +4,7 @@ import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
-import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement } from '@/lib/assistant-intents';
+import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest } from '@/lib/assistant-intents';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -1034,11 +1034,6 @@ export async function POST(request) {
     return Response.json({ error: 'One moment — that was a lot of requests. Please wait a few seconds and try again.' }, { status: 429 });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return Response.json({ error: "AI isn't set up yet. You can still use the studio — everything works without it." }, { status: 503 });
-  }
-
   let body;
   try {
     body = await request.json();
@@ -1062,6 +1057,43 @@ export async function POST(request) {
   // "tell me what you want" guard that the chat contexts need.
   if (context !== 'caption' && !messages.length) {
     return Response.json({ error: 'Tell me a little about what you want to create.' }, { status: 400 });
+  }
+
+  // ── DESIGN POLISH BELT (docs/design-polish-spec.md) ─────────────────────────
+  // A whole-design "polish / clean this up / make it better" ask routes to the
+  // client's deterministic Polish pass — the SAME action as the Polish button —
+  // and short-circuits BEFORE the model call and before the key gate: the pass
+  // runs its deterministic stages client-side and makes its own single audited
+  // AI call (money law: no wasted chat-model spend routing a deterministic
+  // gesture), and stages 1–3 stay fully available with no OPENAI_API_KEY at all.
+  // Present tense — the pass reports its own honest, changedPaths-backed summary
+  // when it completes, so nothing is claimed here that hasn't happened yet.
+  if (context === 'editor') {
+    const polishAskText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    if (detectPolishRequest(polishAskText)) {
+      const polishReply = "Running a full polish pass now — I'll tighten contrast and readability, clear any clutter, rebalance the composition, then list exactly what changed. One tap of Undo restores everything.";
+      const polishPayload = { reply: polishReply, patch: {}, imageB64: null, polish: true };
+      if (body.stream === true) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            const send = (obj) => { try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* closed */ } };
+            send({ type: 'reply_delta', text: polishReply });
+            send({ type: 'done', ...polishPayload });
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' },
+        });
+      }
+      return Response.json(polishPayload);
+    }
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: "AI isn't set up yet. You can still use the studio — everything works without it." }, { status: 503 });
   }
 
   let brandKit = null;

@@ -90,6 +90,7 @@ import { useDesignDocumentController } from "@/hooks/useDesignDocumentController
 import { useDesignWorkflowExecutor } from "@/hooks/useDesignWorkflowExecutor";
 import { useInspectorRenderTruth } from "@/hooks/useInspectorRenderTruth";
 import { useDesignHistoryActions } from "@/hooks/useDesignHistoryActions";
+import { useDesignPolish } from "@/hooks/useDesignPolish";
 import { useManualEditBurst } from "@/hooks/useManualEditBurst";
 import { createDesignHistorySnapshot } from "@/lib/design-history.mjs";
 import { designPatchInteractionTags, isContinuousDesignPatch, prepareDesignPatch, resolveDesignPatchCompletion } from "@/lib/design-patch-preparation.mjs";
@@ -7333,6 +7334,39 @@ export default function App() {
     auditFindingsRef,
     pinnedPropertiesRef: pinnedPropsRef,
   });
+  /* ── DESIGN POLISH (docs/design-polish-spec.md) ─────────────────────────────
+     The one-tap "make it better" pass: deterministic repair → de-clutter →
+     composition re-solve → ONE audited AI art-direction call → verified summary.
+     All mutations ride applyDesignPatch (no new mutation paths); the whole pass
+     is ONE undo transaction; the summary lands in the chat voice (chatNoteRef),
+     every claim changedPaths-backed. Triggered by the Polish button below the
+     canvas AND the chat belt ("polish" / "clean this up" / "make it better"). */
+  const { startDesignPolish, polishing } = useDesignPolish({
+    fontsLoaded,
+    auditAllFormats,
+    runLocalAudit,
+    findingAckPinned,
+    pinnedPropertiesRef: pinnedPropsRef,
+    userLogoTouched,
+    applyDesignPatch,
+    renderResultRef,
+    designDocument,
+    chatDesignState,
+    captureAuditImage,
+    dimensionId,
+    chatNoteRef,
+    refreshReadyCheck,
+    sessionId,
+    aiUndoDepth: aiUndoStack.length,
+  });
+  // Polish live-check driver (TEST_HOOKS builds only, stripped from production).
+  // Accepts { auditFetcher } so a verification run can MOCK the paid stage-4 call
+  // (money law: the driver never spends; the button's real tap is the user's spend).
+  useEffect(() => {
+    if (typeof window === "undefined" || !TEST_HOOKS) return;
+    window.__woPolish = (options) => startDesignPolish(options || {});
+    return () => { try { delete window.__woPolish; } catch {} };
+  }, [startDesignPolish]);
   // NOTE: the former global-state collision guard useEffect was removed. Logo
   // placement (spec §1 default + §4 focal/text collision guard) is now resolved
   // deterministically PER DIMENSION inside renderScene via pickLogoPlacement, so it
@@ -7552,7 +7586,7 @@ export default function App() {
     ghostSlots, imgRef, inspectorOpen:!!inspectorEl, inspectorWorkspace, issueBoxOf, ledgerCheck, loadFile,
     mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
-    overlayChromeVisible, photoSel, photoT, postTiles, postType, previewRef,
+    overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
     refreshPhoto, refreshPostTiles, refreshStage, refreshNotice, refreshingPhoto,
     renderExportPanel, renderFeedGallery, renderTruth, resetFormatToMaster,
@@ -7562,7 +7596,7 @@ export default function App() {
     sessionInitialMessages, sessionRestoreKey, setAdjustedPopover, setAdvisorDot,
     setAuditOpen, setEditingTemplate, setExportFail, setExportNudge,
     setExportOpen, setFeedOpen, setSessionConversation, setShowLibPicker,
-    setTopMenu, showLibPicker, snapGuide, startNewPost, subtext, textRole,
+    setTopMenu, showLibPicker, snapGuide, startDesignPolish, startNewPost, subtext, textRole,
     textSelected, toggleLike, topBarButtons, topMenu, topMenuContent, tplNotice,
     undoLastAiChange,
   }} />;
@@ -8107,7 +8141,7 @@ function EditorShell({ workspace }) {
     ghostSlots, imgRef, inspectorOpen, inspectorWorkspace, issueBoxOf, ledgerCheck, loadFile,
     mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
-    overlayChromeVisible, photoSel, photoT, postTiles, postType, previewRef,
+    overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
     refreshPhoto, refreshPostTiles, refreshStage, refreshNotice, refreshingPhoto,
     renderExportPanel, renderFeedGallery, renderTruth, resetFormatToMaster,
@@ -8117,7 +8151,7 @@ function EditorShell({ workspace }) {
     sessionInitialMessages, sessionRestoreKey, setAdjustedPopover, setAdvisorDot,
     setAuditOpen, setEditingTemplate, setExportFail, setExportNudge,
     setExportOpen, setFeedOpen, setSessionConversation, setShowLibPicker,
-    setTopMenu, showLibPicker, snapGuide, startNewPost, subtext, textRole,
+    setTopMenu, showLibPicker, snapGuide, startDesignPolish, startNewPost, subtext, textRole,
     textSelected, toggleLike, topBarButtons, topMenu, topMenuContent, tplNotice,
     undoLastAiChange
   } = workspace;
@@ -8266,6 +8300,7 @@ function EditorShell({ workspace }) {
             seed={chatSeed}
             chipCtx={{ hasImage: !!mediaObj, hasCaption: !!(((postType === "quote" ? attribution : subtext) || "").trim()), hasDate: !!(dateText && dateText.trim()) }}
             onChangePhoto={mediaObj ? refreshPhoto : null}
+            onPolish={startDesignPolish}
             onNewPost={startNewPost}
             liked={currentLiked}
             onMoreLikeThis={moreLikeThis}
@@ -8521,6 +8556,23 @@ function EditorShell({ workspace }) {
                 </div>
                 );
               })()}
+              {/* ── POLISH (docs/design-polish-spec.md) ── The one-tap "make it
+                  better" pass, beside Export where the finishing gestures live.
+                  One tap → deterministic repair, de-clutter, hierarchy re-solve,
+                  ONE AI art-direction call → one honest summary in the chat
+                  voice, one Undo restores everything. Disabled while a pass runs
+                  (one pass at a time). Also reachable by chat: "polish", "clean
+                  this up", "make it better". */}
+              <button type="button" onClick={()=>startDesignPolish()} disabled={polishing}
+                aria-label="Polish my design"
+                title={polishing ? "Polishing — one moment" : "Polish my design — fix readability, clear clutter, rebalance, then list exactly what changed. One Undo restores everything"}
+                style={{display:"inline-flex",alignItems:"center",gap:6,
+                  padding:"7px 13px",borderRadius:999,border:`1px solid ${B.burnham}55`,background:"#fff",
+                  color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",
+                  cursor:polishing?"wait":"pointer",opacity:polishing?0.7:1}}>
+                <span aria-hidden="true" style={{fontSize:12,lineHeight:1}}>✦</span>
+                {polishing ? "Polishing…" : "Polish"}
+              </button>
               {/* (Export CTA — ratified) The primary finish, the ONE sanctioned
                   tangerine. Its popover opens to the RIGHT of the button (in the
                   empty margin right of the strip) and NEVER overlaps the canvas

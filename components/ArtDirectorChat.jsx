@@ -326,7 +326,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, noteRef, liked, onMoreLikeThis }) {
+export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onPolish, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, noteRef, liked, onMoreLikeThis }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
   // paint; reshuffled to a fresh mix after mount (see effect below).
@@ -750,10 +750,19 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       if (data.refreshPhoto === true && typeof onChangePhoto === 'function') {
         try { onChangePhoto(); photoRefreshed = true; } catch { /* keep the reply */ }
       }
+      // (Design Polish belt) The route routed a whole-design "polish / clean this
+      // up / make it better" ask to the client's deterministic Polish pass — the
+      // SAME action as the Polish button. The pass appends its own honest,
+      // changedPaths-backed summary (noteRef) when it completes, so the present-
+      // tense reply here is honest and the no-op apology below is suppressed.
+      let polishStarted = false;
+      if (data.polish === true && typeof onPolish === 'function') {
+        try { polishStarted = onPolish() !== false; } catch { /* keep the reply */ }
+      }
       const summaryParts = [];
       if (changeKeys.length) summaryParts.push(summarizeKeys(changeKeys));
       if (photoLanded) summaryParts.push('photo');
-      const didChange = changeKeys.length > 0 || photoLanded || photoRefreshed;
+      const didChange = changeKeys.length > 0 || photoLanded || photoRefreshed || polishStarted;
       // Which provider made the photo (Higgsfield primary, gpt-image-1 fallback).
       const providerLabel = photoLanded
         ? (data.imageProvider === 'higgsfield' ? 'Higgsfield' : data.imageProvider === 'openai' ? 'gpt-image-1' : null)
@@ -1081,7 +1090,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       commitLog();
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, onChangePhoto, renderTruth, fileFeedback, fileFeedbackAddendum]);
+  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, onChangePhoto, onPolish, renderTruth, fileFeedback, fileFeedbackAddendum]);
 
   // (findings actions-model law) Expose an imperative send so a finding's "Shorten it
   // for me" ai-fix action can route a targeted prompt through the SAME assistant +
