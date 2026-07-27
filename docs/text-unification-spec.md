@@ -36,9 +36,14 @@
 - Battery: born-clean 456+/456+, arch-stress, legacy-dup, fingerprint v2 (element-free/no-action designs byte-identical; merge-activated renders documented per §23 if fixtures gain cells).
 - Live (the client's exact repro): design with empty caption/title slots → "+ Add text" → Heading → text lands IN the title slot, no false "no room"; unlimited subsequent adds succeed until the crowding advisory (not a block) appears; one Text panel lists all; auto ink/weight adapts when the element is dragged from field to photo; a body pinned larger than the heading raises the inversion advisory.
 
+## Amendment — 2026-07-27 client rulings (post-landing refinements)
+
+1. **Default fills are Heading + Body**, not Caption + Support: a fresh design's default text rows present under the standard class vocabulary — the primary slot is HEADING, the secondary is BODY. The legacy "Caption"/"Support line" labels/mappings are retired from the default presentation (the underlying declared roles remap accordingly per archetype; the ratified role-label vocabulary updates to match).
+2. **Class-exclusive adds:** the "+ Add text" picker GREYS OUT any class already in use on the design — one Heading, one Subheading, one Body, one Caption, one Button maximum. This AMENDS ruling 2's "unlimited adds": adds are bounded by CLASS UNIQUENESS (never by space or count otherwise); the crowding advisory remains the voice on density within that bound. The greyed option follows the ratified disabled-affordance pattern (visibly inert + tap explains why: "This design already has a Heading — edit it in the list above"). Open question flagged to the client: whether BODY should later become repeatable (multi-paragraph designs); implemented exclusive-per-class as ruled until they say otherwise.
+
 ## Sequencing
 
-Builds strictly AFTER task #57 lands (same code territory: drop logic, deadRoles, ContentFieldsPanel). Phases land in order A→B→C or B→A→C at the implementer's discretion per risk, each phase committed green with the full battery.
+Builds strictly AFTER task #57 lands (same code territory: drop logic, deadRoles, ContentFieldsPanel). Phases land in order A→B→C or B→A→C at the implementer's discretion per risk, each phase committed green with the full battery. The 2026-07-27 amendment builds after the phase A-C verifier completes.
 
 ## Implementation checkpoints
 
