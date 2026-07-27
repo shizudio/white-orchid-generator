@@ -1,0 +1,14 @@
+<svg width="57.58" height="57.29" viewBox="0 0 57.58 57.29" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Brand petal (client ruling 2026-07-27, law 3: derived, never invented).
+     This is the LOWER-LEFT SWEEPING PETAL of the ratified brand orchid mark,
+     path geometry copied VERBATIM from
+     public/assets/logos/primary/primary-bg-green.svg (identical geometry in
+     primary-circle.svg): the "M73,121.9 c8.1-6.1,18.5-7.9,29.2-8.7 …" petal,
+     translated by (-56.02,-113.2) into its own tight viewBox (bbox measured via
+     getBBox). Only the M is translated; every curve segment — including the
+     small column notch beside the tip, part of the mark's genuine geometry —
+     is the mark's own relative path data, untouched.
+     FULL opacity by design (shape-1's fill-opacity 0.4 alpha-saturation lesson,
+     commits 9d269ab/acf5a8f) — a mask asset must be opaque. -->
+<path d="M16.98,8.7c8.1-6.1,18.5-7.9,29.2-8.7h0c0,3.2,2.6,5.8,5.7,5.8s5.7-2.6,5.7-5.7c0,9.8-.5,30.1-7.5,39.2-15.1,19.6-36.7,21.7-45,13.4s-7.8-29.1,11.9-44.1h0Z" fill="#F5F6E7"></path>
+</svg>

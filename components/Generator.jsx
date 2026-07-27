@@ -24,7 +24,7 @@ import { planDesignPatchCompositeWorkflows, resolveDesignPatchTransitions } from
 import { hasUserFormatOverride } from "@/lib/design-document.mjs";
 import { runLocalAudit as computeLocalAudit, partitionIssues, extractAuditFindings, PLATFORM_SAFE } from "@/lib/audit-local";
 import { newTurnId, getCurrentSessionId, localGetSession, logFeedback as logFeedbackClient, looksLikeGuardSession } from "@/lib/sessions";
-import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_BRAND_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT } from "@/lib/brand-defaults";
+import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_BRAND_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT, PETAL_WINDOW_MASK_ASSET } from "@/lib/brand-defaults";
 import { editorSelectionReducer, selectionInspectorKey, selectionSceneId } from "@/lib/editor-selection.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
 import {
@@ -2149,9 +2149,10 @@ function convertLegacyLayoutShape(document, { archetypeId = null, variant = 0, p
   const frame = document?.media?.frame;
   if (!frame || (frame.type !== "shapeMask" && frame.type !== "petalMask")) return document;
   if ((document.shapes || []).some(s => s && s.origin === "layout")) return migrateLegacyLayoutShape(document, null);
-  // (client ruling 2026-07-23) A legacy petalMask converts to the sanctioned
-  // silhouette (shape-1), never the retired off-brand orchid-petal.
-  const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : RETIRED_OVERLAY_REPLACEMENT;
+  // (client ruling 2026-07-27) A legacy petalMask converts to the BRAND petal
+  // derived from the ratified orchid mark (PETAL_WINDOW_MASK_ASSET) — never the
+  // retired off-brand orchid-petal, and no longer the interim shape-1 egg.
+  const assetId = frame.type === "shapeMask" ? (frame.shapeId || "shape-1") : PETAL_WINDOW_MASK_ASSET;
   const ar = (DEFAULT_OVERLAYS.find(a => a.id === assetId)?.ratio) || 1;
   const arch = archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null;
   const byDim = {}; let masterT = null;
@@ -3148,7 +3149,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // are absent from that cell (the former 112/114 arch-stress false positive).
       let overrideShapeLayer=null;
       if(_isOverrideRender&&(mat?.photoFrame?.type==="shapeMask"||mat?.photoFrame?.type==="petalMask")){
-        const assetId=mat.photoFrame.type==="shapeMask"?(mat.photoFrame.shapeId||"shape-1"):RETIRED_OVERLAY_REPLACEMENT;
+        const assetId=mat.photoFrame.type==="shapeMask"?(mat.photoFrame.shapeId||"shape-1"):PETAL_WINDOW_MASK_ASSET;
         const image=archAssetImgs.current[assetId];
         const ratio=(image?.width&&image?.height)?image.width/image.height:1;
         const bounds=fittedFrameBounds(mat.photoFrame.box,w,h,sm,ratio);
@@ -4050,7 +4051,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const jobs=[];
         if(frame.type==="petalMask"||frame.type==="shapeMask"){
           const m0=clampBox(frame.box);
-          const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):RETIRED_OVERLAY_REPLACEMENT];
+          const shapeImg=archAssetImgs.current[frame.type==="shapeMask"?(frame.shapeId||"shape-1"):PETAL_WINDOW_MASK_ASSET];
           const m = (m0&&shapeImg) ? (()=>{
             const ar=(shapeImg.width&&shapeImg.height)?shapeImg.width/shapeImg.height:1;
             let mw=m0.w, mh=mw/ar;
@@ -9994,14 +9995,14 @@ function TemplateCard({template,onClick}){
     inner=<div style={{position:"absolute",inset:"3%",borderRadius:3,overflow:"hidden",border:`1px solid ${B.whiteSmoke}99`}}>
       <img src={s.imageSrc} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} /></div>;
   }else if(arch==="petal_window"){
-    // (R2 alpha-saturation, CSS twin) shape-1.svg ships fill-opacity 0.4, and a CSS
-    // alpha-mask multiplies that straight into the photo — the purge (9d269ab)
-    // re-pointed this mock from the OPAQUE orchid-petal.svg to shape-1 and the card's
-    // photo went 60% transparent ("a very badly rendered blob"). The canvas painter
-    // saturates the same asset with 8 stacked draws (1-(0.6^8)≈0.98); CSS mask layers
-    // composite additively (mask-composite: add is the default), so stacking the SAME
-    // url 8 times is the exact twin — one source-of-truth asset, no inline geometry.
-    const _silUrl=Array(8).fill("url(/assets/shapes/shape-1.svg)").join(",");
+    // (client ruling 2026-07-27) The card's mask is the BRAND petal derived from
+    // the ratified orchid mark (PETAL_WINDOW_MASK_ASSET → petal-brand.svg), the
+    // same single source-of-truth asset the canvas painter masks through — no
+    // inline geometry. petal-brand ships FULL opacity by design (the shape-1
+    // fill-opacity 0.4 saturation saga, 9d269ab/acf5a8f, cannot recur), so one
+    // mask layer suffices; the canvas painter's 8-stack alpha-saturation is a
+    // no-op on an already-opaque silhouette and the two surfaces stay twins.
+    const _silUrl="url(/assets/shapes/petal-brand.svg)";
     inner=<>
       <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:_silUrl,maskImage:_silUrl,WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
       <div style={{position:"absolute",left:"8%",top:"30%",width:"48%"}}>

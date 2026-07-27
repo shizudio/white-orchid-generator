@@ -190,6 +190,11 @@ insert into brand_overlays (slug, name, storage_path, kind, category, ratio_num,
   -- removed from DEFAULT_OVERLAY_ASSETS + this seed together (mirror-check 9 stays
   -- 1:1). A live cloud row must be deleted by the owner (see the ship note); the
   -- tray guard (RETIRED_OVERLAY_ASSETS) suppresses it regardless of source.
+  -- The petal-brand row was ADDED 2026-07-27 (client ruling): the BRAND petal
+  -- derived from the ratified orchid mark (see petal-brand.svg provenance) —
+  -- the Petal Window's mask silhouette. Mirrors DEFAULT_OVERLAY_ASSETS 1:1;
+  -- ratio 5758/5729 reproduces the exact 57.58x57.29 viewBox float.
+  ('petal-brand',  'Petal',        '/assets/shapes/petal-brand.svg',         'center',    'overlays',    5758, 5729, 0, '00000000-0000-0000-0000-000000000001'),
   ('shape-1',      'Shape 1',      '/assets/shapes/shape-1.svg',             'center',    'overlays',    169, 207, 1, '00000000-0000-0000-0000-000000000001'),
   ('shape-2',      'Shape 2',      '/assets/shapes/shape-2.svg',             'center',    'overlays',    217, 196, 2, '00000000-0000-0000-0000-000000000001'),
   ('shape-3',      'Shape 3',      '/assets/shapes/shape-3.svg',             'center',    'overlays',    173, 207, 3, '00000000-0000-0000-0000-000000000001'),
