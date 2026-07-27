@@ -9994,8 +9994,16 @@ function TemplateCard({template,onClick}){
     inner=<div style={{position:"absolute",inset:"3%",borderRadius:3,overflow:"hidden",border:`1px solid ${B.whiteSmoke}99`}}>
       <img src={s.imageSrc} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} /></div>;
   }else if(arch==="petal_window"){
+    // (R2 alpha-saturation, CSS twin) shape-1.svg ships fill-opacity 0.4, and a CSS
+    // alpha-mask multiplies that straight into the photo — the purge (9d269ab)
+    // re-pointed this mock from the OPAQUE orchid-petal.svg to shape-1 and the card's
+    // photo went 60% transparent ("a very badly rendered blob"). The canvas painter
+    // saturates the same asset with 8 stacked draws (1-(0.6^8)≈0.98); CSS mask layers
+    // composite additively (mask-composite: add is the default), so stacking the SAME
+    // url 8 times is the exact twin — one source-of-truth asset, no inline geometry.
+    const _silUrl=Array(8).fill("url(/assets/shapes/shape-1.svg)").join(",");
     inner=<>
-      <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:"url(/assets/shapes/shape-1.svg)",maskImage:"url(/assets/shapes/shape-1.svg)",WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
+      <img src={s.imageSrc} alt="" style={{position:"absolute",top:"30%",right:"6%",width:"40%",height:"46%",objectFit:"cover",filter:"saturate(0.7) sepia(0.2) hue-rotate(80deg)",WebkitMaskImage:_silUrl,maskImage:_silUrl,WebkitMaskSize:"contain",maskSize:"contain",WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center"}} />
       <div style={{position:"absolute",left:"8%",top:"30%",width:"48%"}}>
         <div style={{fontFamily:serif,fontSize:18,fontWeight:600,color:ink,lineHeight:1.02}}>{headline}</div>
         {s.subtext&&<div style={{fontFamily:FU.body,fontSize:8,color:`${ink}bb`,marginTop:6}}>{sm(s.subtext)}</div>}
