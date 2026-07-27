@@ -1747,7 +1747,7 @@ function measureHeroLines(ctx, words, register, size, maxW){
 function drawHeroText(ctx, str, opts){
   const {x, y, maxW, maxH, align="left", register="serif", caps=false,
          start=120, minSize=28, leading=1.02, exactSize=null,
-         accentInk=null, baseInk=null, tracking=0} = opts;
+         accentInk=null, baseInk=null, tracking=0, required=false} = opts;
   const words= caps
     ? stripHeroMarkers(str).toUpperCase().split(/\s+/).filter(Boolean).map(t=>({text:t,italic:false,space:true}))
     : heroWords(str);
@@ -1767,17 +1767,41 @@ function drawHeroText(ctx, str, opts){
       size-=2;
     }
   }
+  // ── (Client ruling 2026-07-26 — THE TITLE ALWAYS PAINTS) ──────────────────────────
+  // "text should always be visible, especially the heading and according to info
+  // hierarchy." For a REQUIRED role (the hero/heading — DLC §10/§11 required content is
+  // "never silently lost") the adaptation ladder gets a TERMINAL rung below the roomier
+  // variant: step the type down to its readable FLOOR, re-wrap, and paint ANYWAY — the
+  // words stay on canvas even when the box is honestly too small, and the overflow is
+  // reported as an advisory (content.required-over-capacity) with real remedies instead
+  // of a blank canvas and a "Not shown in this layout" banner. Inert when the copy fits
+  // (the loop's guard is false) and inert for every OPTIONAL role, which keeps its
+  // complete-or-absent contract below. Born-clean is unaffected: generation writes copy
+  // to the measured budget (copy-fit Tier 1), so a fresh design never reaches this rung.
+  if(required && fit && fit.lines.length*size*lr>maxH && size>minSize){
+    let floorSize=size, floorFit=fit;
+    while(floorSize-2>=minSize){
+      floorSize-=2;
+      floorFit=measureHeroLines(ctx,words,register,floorSize,maxW);
+      if(floorFit.lines.length*floorSize*lr<=maxH) break;
+    }
+    size=floorSize; fit=floorFit;
+  }
   // (r3 fix #3) apply optional hero tracking now that the size is known (em → px).
   if(tracking) ctx.letterSpacing=`${tracking*size}px`;
   const lineHeight=size*lr;
   // Complete-or-absent: never paint only the first part of a headline. If the fitted
   // lines still exceed the box at the readable floor, the caller records a dropped
-  // role and the audit offers a real copy/layout remedy.
-  let truncated=false;
+  // role and the audit offers a real copy/layout remedy — UNLESS the role is required,
+  // in which case the complete (wrapped, possibly overflowing) block paints and the
+  // caller records an over-capacity advisory instead. Either way the copy is never CUT:
+  // complete-or-absent becomes complete-or-advisory for required content.
+  let truncated=false, overflowed=false;
   if(fit && fit.lines.length*lineHeight>maxH){
     const maxLines=Math.max(1,Math.floor(maxH/lineHeight));
-    truncated=fit.lines.length>maxLines;
-    if(truncated) fit={...fit,lines:[],lineCount:0};
+    const past=fit.lines.length>maxLines;
+    if(past && required) overflowed=true;
+    else if(past){ truncated=true; fit={...fit,lines:[],lineCount:0}; }
   }
   // Draw.
   ctx.textBaseline="alphabetic";
@@ -1806,7 +1830,7 @@ function drawHeroText(ctx, str, opts){
     if(baseInk) ctx.fillStyle=baseInk;
   });
   if(tracking) ctx.letterSpacing="0px"; // reset so later draws are unaffected
-  return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount, truncated};
+  return {size, lineHeight, lines:fit.lines, usedH:fit.lineCount*lineHeight, lineCount:fit.lineCount, truncated, overflowed};
 }
 
 // All-caps micro-label with +0.05–0.12em letterspacing (spec §3). Returns the
@@ -2698,9 +2722,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // floor; here we DROP tertiary/secondary copy that still won't fit rather than
     // overflow the safe zone, and record which fields were dropped for a UI hint.
     const dropped=[];
+    // (Client ruling 2026-07-26 — the title always paints) Roles the painter kept VISIBLE
+    // past the layout's honest capacity (required content: painted, not dropped). They are
+    // NEVER in `dropped`/deadRoles — they are on canvas — but they earn the honest
+    // content.required-over-capacity advisory with shorten / roomier-layout / edit remedies.
+    const overCapacity=[];
     const fontMeta={};   // resolved font px per role for this render (Task 4)
     const renderTruth={
-      textBounds:null,roleBounds:{},logoBox:null,photoBox:null,deadRoles:[],audit:null,logoOverlap:false,
+      textBounds:null,roleBounds:{},logoBox:null,photoBox:null,deadRoles:[],overCapacityRoles:[],audit:null,logoOverlap:false,
       surface:{
         resolved:{background:curBg?.color||null,field:curBg?.color||null,text:tc||null,backdrop:"none"},
         requestedResolved:{text:tc||null},
@@ -3130,6 +3159,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         assets:model.assets,
         layoutContext:model.layoutContext,
       }):model;
+      // (Client ruling 2026-07-26) Publish the over-capacity set as render truth before the
+      // contracts read it: these roles PAINTED (they are absent from deadRoles by
+      // construction) but exceeded the layout's capacity at the readable floor.
+      renderTruth.overCapacityRoles=[...overCapacity];
       const contractEvaluation=evaluateRenderContracts({
         model:contractModel,dimensionId:dimId,width:w,height:h,
         textBounds:renderTruth.textBounds,
@@ -3141,6 +3174,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         photoBox:renderTruth.photoBox,
         subjectBox,subjectWindow,shapes:renderedShapes,
         textMetrics:fontMeta,deadRoles:renderTruth.deadRoles,
+        overCapacityRoles:renderTruth.overCapacityRoles,
         mediaSource:{width:mediaDimensions.iw,height:mediaDimensions.ih},
         logoEvidence:auditLogo,
         surfaceEvidence:{
@@ -4041,6 +4075,17 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // support text: subtext, else attribution (if not already used as the eyebrow),
       // else the headline (for big_number where the date is the hero).
       const supportText = stripHeroMarkers(ccSubtext || (eyebrow!==ccAttribution?ccAttribution:"") || (isBigNum?ccHeadline:"") || "");
+      // ── (Client ruling 2026-07-26 — THE TITLE ALWAYS PAINTS) NO HERO-LESS LAYOUT ───────
+      // "Not shown in this layout: the title" is retired as an outcome. An archetype whose
+      // materialized layout declares NO hero slot may not swallow the required role: give
+      // it a hero block inside the text-safe margins so the ladder below (reflow →
+      // de-collision → floor → paint-anyway) has somewhere to work. This is the hero's
+      // mirror of synthesizeMissingEditorialRoles (which already does exactly this for the
+      // OPTIONAL support/eyebrow). Inert for every archetype that authors a hero — i.e.
+      // all of today's — so it moves no pixels at fixture defaults.
+      if(heroFinal && !heroBox){
+        heroBox=clampText({x:smText.l,y:0.32,w:1-smText.l-smText.r,h:0.34});
+      }
       // ── (WP-W0 specimen 3) NO SILENTLY-DEAD ROLES ────────────────────────────
       // An archetype without an authored support / eyebrow box used to swallow
       // content the user typed (inspector field filled, canvas unchanged, nothing
@@ -4359,6 +4404,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           // as italic, but in the SAME hero ink (never a second colour at the hero level).
           accentInk: null,
           baseInk: heroInk,
+          // (Client ruling 2026-07-26) THE HERO IS REQUIRED CONTENT (DLC §10/§11,
+          // content-typography-contract ROLE_DEFINITIONS.hero.required). It is never
+          // dropped complete-or-absent in any format: the ladder ends at "paint anyway
+          // at the floor" + an honest advisory, never a blank canvas.
+          required: true,
         });
         endText();
         fontMeta.headline=hr.size;
@@ -4367,6 +4417,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         fontMeta.headlineNatural=reflow.heroNaturalPx;
         fontMeta.headlineSizeCapped=!!reflow.heroSizeCapped;
         if(hr.truncated){
+          // Unreachable while the hero is required (above) — kept as the honest fallback
+          // if a future caller ever paints a NON-required hero through this branch.
           _midCut++;
           if(!dropped.includes("Headline")) dropped.push("Headline");
           usedH=0;
@@ -4374,6 +4426,9 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           usedH=hr.usedH;
           setTextBounds(hr.usedH);
           if(_roleB) _roleB.hero={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:Math.max(hr.usedH,hr.size||0)};
+          // Painted, but past the box at the readable floor → the honest advisory. No
+          // `dropped` entry (nothing was left off) and no dead role (it IS on canvas).
+          if(hr.overflowed && !overCapacity.includes("hero")) overCapacity.push("hero");
         }
       }
       // ── THE EYEBROW ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 2b-i) ──
