@@ -232,15 +232,24 @@ Array order may order peers inside a band; it never moves an item across semanti
 10  media
 20  structural media frames/masks
 30  structural panels and underlays
+35  decoration/icons/dividers
 40  content and typography
 50  brand/legal marks
 60  structural overlays
-70  decoration/icons/dividers
 80  editor chrome (never exported)
 ```
 
+**Client ruling 2026-07-27 (ratified):** *"once i add more than 1 shape, text cannot be
+shown, make sure text and logo are the top layers."* Decoration and added shapes moved
+from band 70 (above content and marks) to band 35 (below both): content/typography and
+brand/legal marks always paint above every added shape and decoration layer. This makes
+the yield rule structural instead of aspirational — the previous ladder placed decoration
+above the very content it was required to yield to, and the implementation obeyed the
+ladder. Background, media and the structural bands are unchanged.
+
 An explicit brand profile may move a structural overlay below content, but decoration may
-never cover required content or marks merely because it was added later.
+never cover required content or marks — the band order now enforces this by construction
+rather than relying on later-added layers behaving.
 
 ## 9. Format contract
 

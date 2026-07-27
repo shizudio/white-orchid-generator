@@ -85,6 +85,29 @@ test("invalid direct values are ignored and composite fields stay visible", () =
   ]);
 });
 
+test("fieldFollowsBackground lands bgColor on the visible field of a materialized design", () => {
+  // The model's schema has no fieldColor — on a materialized design a plain bgColor
+  // change is shadowed by the palette-variant field, so the caller flags materialized
+  // no-layout-switch patches and the compiler writes the field too (render truth).
+  const plan = compileDesignPatchCommands({ bgColor:"butter" }, { fieldFollowsBackground:true });
+  const after = applyEntries(createDesignDocumentV1(), plan.afterMaterialization);
+  assert.equal(after.palette.background, "butter");
+  assert.equal(after.palette.field, "butter");
+  // Both writes share the one patchField — the changed summary stays "background".
+  assert.deepEqual(plan.afterMaterialization.map(e => e.patchField), ["bgColor", "bgColor"]);
+
+  // The belt's explicit fieldColor decision wins — no duplicate follow write.
+  const beltPlan = compileDesignPatchCommands(
+    { bgColor:"butter", fieldColor:"sage" }, { fieldFollowsBackground:true });
+  const afterBelt = applyEntries(createDesignDocumentV1(), beltPlan.afterMaterialization);
+  assert.equal(afterBelt.palette.field, "sage");
+
+  // Without the flag (legacy design, or a genuine layout switch) behavior is unchanged.
+  const offPlan = compileDesignPatchCommands({ bgColor:"butter" });
+  const afterOff = applyEntries(createDesignDocumentV1(), offPlan.afterMaterialization);
+  assert.equal(afterOff.palette.field, null);
+});
+
 test("null and non-object patches produce an empty plan", () => {
   assert.deepEqual(compileDesignPatchCommands(null), {
     beforeMaterialization:[], afterMaterialization:[], compatibilityFields:[],

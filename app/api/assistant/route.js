@@ -256,6 +256,9 @@ const COLOUR_WORD_TO_TOKEN = [
   [/\bmauve\b|\blilac\b|\bplum\b|\bwisteria\b|\bpurple\b|\bviolet\b/i, 'wisteria'],
   [/\bterracotta\b|\bterra\s*cotta\b|\brust\b|\bclay\b|\bbrick\b|\bwarm\s*orange\b/i, 'terracotta'],
   [/\bbutter\b|\bcream\b|\bpale\s*yellow\b|\bbuttery\b|\bprimrose\b/i, 'butter'],
+  // Warm neutrals (the client's live "beige" ask fell through to the model path,
+  // whose schema can't express the visible field on a materialized design).
+  [/\bbeige\b|\btaupe\b|\bsand\b|\bsandy\b|\btan\b|\boat(?:meal)?\b|\becru\b/i, 'butter'],
   [/\bsky\b|\bpowder\s*blue\b|\bbaby\s*blue\b|\bpale\s*blue\b|\bblue\b/i, 'sky'],
   [/\bsage\b|\bmint\b|\bsoft\s*green\b|\bpale\s*green\b/i, 'sage'],
   [/\bceladon\b/i, 'celadon'],

@@ -3141,7 +3141,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           transform:t,
           painted:!!image,
           paintFraction:layer.structural?1:decorationPaintFraction(decorationAlphaGrid(image)),
-          z:(layer.mode||"frame")==="frame"?15:60,
+          // (Client ruling 2026-07-27 / DLC §8) added non-frame shapes are DECORATION
+          // BELOW content+marks (band 35): painted under the text, so a pointer over an
+          // overlapping text+shape spot now resolves to the visible-on-top text.
+          z:(layer.mode||"frame")==="frame"?15:35,
         };
       });
       // Guard/calibration renders paint a temporary archetype without mutating the
@@ -3587,6 +3590,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // any band the guard had to BLOCK because it would have overlapped a silhouette — it
     // must stay 0 in normal operation; __woArchStress asserts it (sabotage-testable).
     let _activeShapeBoxes = [];
+    // (Client ruling 2026-07-27) ADDED (non-motif, non-media-host) flat shape
+    // silhouettes drawn UNDER the content band. They are SURFACES text sits on —
+    // per DLC §7 content × structural shape/decoration resolves (never blocks) and
+    // per §15 contrast is measured on the final surface beneath the role — so they
+    // feed the placement solvers as SOFT obstacles and the ink samplers as
+    // sample-the-canvas zones, never the reflow's avoid set.
+    let _softShapeBoxes = [];
     let _bandOverShape = 0;
     const _rectsHit=(a,b)=>!!(a&&b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y);
     // The single choke point for every contrast band. Enforces §6a: auto band suppressed
@@ -3738,7 +3748,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const _freeSlots={ hero:_freeSlotBox("hero","hero"), support:_freeSlotBox("support","support"), microLabel:_freeSlotBox("microLabel","eyebrow") };
       if(typeof window!=="undefined"&&TEST_HOOKS){ window.__woObstacleDump=()=>({w,h,safe:safeBox,noBand,mediaObj:!!mediaObj,
         hard:{hero:rb.hero,support:rb.support,eyebrow:rb.eyebrow,date:rb.date,pill:rb.pill,logo:renderTruth.logoBox,shapes:_activeShapeBoxes.slice()},
-        soft:{photo:renderTruth.photoBox},freeSlots:_freeSlots}); }
+        soft:{photo:renderTruth.photoBox,shapes:_softShapeBoxes.slice()},freeSlots:_freeSlots}); }
       const SLOT_PREFERENCE={ heading:["hero","support"], subheading:["support","hero"], body:["support","hero"], caption:["microLabel"], cta:[] };
       const slotAnchorsFor=(className)=>(SLOT_PREFERENCE[className]||[])
         .map(key=>({ key, box:_freeSlots[key] }))
@@ -3918,7 +3928,18 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       let inkColor=(fieldOverrideId
         ? (hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke)
         : (BG_OPTIONS.find(b=>b.id===(pal.ink))?.color)||(hexLuminance(fieldColor)>0.5?B.burnham:B.whiteSmoke));
-      if(textColorId&&textColorId!=="auto") inkColor=B[textColorId]||inkColor;
+      if(textColorId&&textColorId!=="auto"&&B[textColorId]){
+        // Explicit ink: a USER pin (pinnedProps.textColorId — only UI picks sync pins)
+        // is honoured verbatim whatever the field (law 5; the advisor dot is the voice
+        // on a failing pin). An UNPINNED explicit ink is AI-authored residue from an
+        // earlier palette — a suggestion, not a choice: it holds only while it still
+        // clears the 4.5 floor on the CURRENT field, else the auto-derived accessible
+        // ink above stands (the client's beige-field ivory-text illegibility bug).
+        if(pinnedProps?.textColorId
+          || contrastRatio(hexLuminance(fieldColor),hexLuminance(B[textColorId]))>=4.5){
+          inkColor=B[textColorId];
+        }
+      }
       // (R2a) ACCENT ACTIVATION — resolve the ONE accent ink for this variant. When
       // accentUse names a real colour (softTangerine on suitable pastel/ivory variants,
       // or a pastel), the hero's ITALIC emphasis word renders in it (spec §3 mixed
@@ -4149,35 +4170,57 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // (study-1 like-12). Each obstacle carries `canCompose`: true when the shape
       // has a known solid tint the ink reads against (≥4.5:1), so the reflow may
       // COMPOSE the text ON the shape (study-2 mood-8) instead of avoiding it.
-      // Solid decor shapes are ALSO drawn early — UNDER the text — so both the
-      // composed (blob-behind-text) and avoided cases render with text on top;
-      // the late topLayers pass skips them (outline/lineart rings stay on top but
-      // still register as obstacles). User accessories are untouched.
+      // ── (Client ruling 2026-07-27 — TEXT AND LOGO ARE THE TOP LAYERS) ────────
+      // "once i add more than 1 shape, text cannot be shown, make sure text and
+      // logo are the top layers." EVERY added (non-frame) shape layer now paints
+      // EARLY — under content and marks — whatever its mode or asset category. The
+      // former late pass painted outline/lineart rings, accessories and non-builtin
+      // fill shapes ON TOP of the text and the logo, so a later-added shape could
+      // bury the copy. DLC §8 now bands decoration BELOW content+marks; the late
+      // pass survives only as a skip-list catch for undecoded layers. Structural
+      // frame layers are untouched (the frame-job pass above, under content).
       const _decorEarly=new Set();
       const decorObstacles=[];
+      const _octailEarly = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
       for(const layer of topLayers){
         const a=overlays.find(o=>o.id===layer.assetId);
-        const isDecor=layer.motif||(a&&a.category==="overlays");
-        if(!isDecor) continue;
         const img=overlayImgs.current[layer.assetId]||archAssetImgs.current[layer.assetId];
         if(!img) continue;
         const t=resolveT(layer);
         const ratio=(img.width&&img.height)?img.width/img.height:(a?.ratio||1);
         const ow=(t.scale??0.2)*w, oh=ow/ratio;
         const dBox={x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh};
-        let canCompose=false, fill=null;
-        if((layer.mode||"frame")==="overlay"&&layer.motif){
-          fill=mixHex(ARCHETYPE_COLORS[t.colorId]||B.celadon,B.burnham,0.22);
-          canCompose=contrastRatio(hexLuminance(fill),hexLuminance(inkColor))>=4.5;
+        if(layer.motif){
+          // System MOTIF decor — byte-identical to the pre-ruling path: compose-or-
+          // avoid obstacle + §6a band exclusion + the early tinted draw. (A motif in
+          // a non-overlay mode keeps its late draw exactly as before.)
+          const fill=mixHex(ARCHETYPE_COLORS[t.colorId]||B.celadon,B.burnham,0.22);
+          const canCompose=contrastRatio(hexLuminance(fill),hexLuminance(inkColor))>=4.5;
+          decorObstacles.push({box:dBox,canCompose});
+          _activeShapeBoxes.push(dBox);   // (§6a) no band may slice a silhouette
+          if((layer.mode||"frame")==="overlay"){ const tinted=tintedAccessory(img,fill); drawOverlayLayer(ctx,tinted||img,w,h,t); _decorEarly.add(layer); }
+          continue;
         }
-        decorObstacles.push({box:dBox,canCompose});
-        _activeShapeBoxes.push(dBox);   // (§6a) a free shape is a band-exclusion obstacle — no band may slice it
-        // Early (under-text) draw for solid overlay-mode decor.
-        if((layer.mode||"frame")==="overlay"){
-          if(layer.motif){ const tinted=tintedAccessory(img,fill); drawOverlayLayer(ctx,tinted||img,w,h,t); }
-          else { const fc=layer.fillColor&&B[layer.fillColor]; const src=fc?tintedAccessory(img,fc):img; drawOverlayLayer(ctx,src||img,w,h,t); }  // (Free shapes) fill = brand-tinted silhouette
-          _decorEarly.add(layer);
+        const isAccessory=a?.category==="accessories";
+        if(!isAccessory){
+          // Built-in free shapes keep their pre-ruling hero-reflow obstacle; UPLOADED
+          // silhouettes stay out of decorObstacles (the reflow never avoided them and
+          // per the policy they are a SURFACE, not a wall). But now that EVERY
+          // non-accessory silhouette paints UNDER the text, each one joins the §6a
+          // band-exclusion set (a band may never slice a silhouette it paints above)
+          // and the soft-surface set (shape-paint-policy: obstacle "surface" — the
+          // element solver already softens it via kind:"silhouette").
+          if(a&&a.category==="overlays") decorObstacles.push({box:dBox,canCompose:false});
+          _activeShapeBoxes.push(dBox);   // (§6a) band-exclusion, never placement refusal
+          _softShapeBoxes.push(dBox);     // a SURFACE, never a wall (DLC §7 R)
         }
+        // The one early (under content+marks) draw — same painters/tints the late
+        // pass used; only the ORDER moved.
+        if(layer.mode==="outline"){ drawOutlineLayer(ctx,_octailEarly,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08); }
+        else if(layer.mode==="lineart"){ drawLineArtLayer(ctx,_octailEarly,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72); }
+        else if(isAccessory){ const colorId=t.colorId||"auto"; const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,a.ratio)).id:colorId; drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t); }
+        else { const fc=layer.fillColor&&B[layer.fillColor]; const src=fc?tintedAccessory(img,fc):img; drawOverlayLayer(ctx,src||img,w,h,t); }  // (Free shapes) fill = brand-tinted silhouette
+        _decorEarly.add(layer);
       }
       // (§2.9.2) Non-photo frame silhouettes are solid colour fields the text must
       // not cross; they were already painted (and pushed to _activeShapeBoxes) by the
@@ -4503,30 +4546,36 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           _pR.w=Math.min(0.98*w,heroBox.x+heroBox.w+_padX)-_pR.x;
           _pR.h=Math.min(0.98*h,_pBot+_pad)-_pR.y;
           // Rounded pill/card: full pill ends on a one-liner, soft card on stacked copy.
-          const _rad=Math.min(_pR.h*0.5,0.09*Math.min(w,h));
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(_pR.x+_rad,_pR.y);
-          ctx.arcTo(_pR.x+_pR.w,_pR.y,_pR.x+_pR.w,_pR.y+_pR.h,_rad);
-          ctx.arcTo(_pR.x+_pR.w,_pR.y+_pR.h,_pR.x,_pR.y+_pR.h,_rad);
-          ctx.arcTo(_pR.x,_pR.y+_pR.h,_pR.x,_pR.y,_rad);
-          ctx.arcTo(_pR.x,_pR.y,_pR.x+_pR.w,_pR.y,_rad);
-          ctx.closePath();
-          ctx.fillStyle=fieldColor;
-          ctx.fill();
-          ctx.restore();
-          // Ink vs the PILL colour (not the photo): pins verbatim; else ensure ≥4.5.
-          if(!pinnedProps?.textColorId){
-            const _bgL=hexLuminance(fieldColor);
-            if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5){
-              const _iv=contrastRatio(_bgL,hexLuminance(B.whiteSmoke)), _gr=contrastRatio(_bgL,hexLuminance(B.burnham));
-              heroInk=_iv>=_gr?B.whiteSmoke:B.burnham;
-              if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5) heroInk=B[suggestTextColor(_bgL)];
+          // Degenerate-rect guard: when the hero box lands at/below the canvas bottom
+          // the clamped card height goes ≤0 and a negative radius makes arcTo THROW
+          // (IndexSizeError), killing the whole render. A card with no area paints
+          // nothing — never crashes.
+          if(_pR.w>1 && _pR.h>1){
+            const _rad=Math.max(0,Math.min(_pR.h*0.5,0.09*Math.min(w,h)));
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(_pR.x+_rad,_pR.y);
+            ctx.arcTo(_pR.x+_pR.w,_pR.y,_pR.x+_pR.w,_pR.y+_pR.h,_rad);
+            ctx.arcTo(_pR.x+_pR.w,_pR.y+_pR.h,_pR.x,_pR.y+_pR.h,_rad);
+            ctx.arcTo(_pR.x,_pR.y+_pR.h,_pR.x,_pR.y,_rad);
+            ctx.arcTo(_pR.x,_pR.y,_pR.x+_pR.w,_pR.y,_rad);
+            ctx.closePath();
+            ctx.fillStyle=fieldColor;
+            ctx.fill();
+            ctx.restore();
+            // Ink vs the PILL colour (not the photo): pins verbatim; else ensure ≥4.5.
+            if(!pinnedProps?.textColorId){
+              const _bgL=hexLuminance(fieldColor);
+              if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5){
+                const _iv=contrastRatio(_bgL,hexLuminance(B.whiteSmoke)), _gr=contrastRatio(_bgL,hexLuminance(B.burnham));
+                heroInk=_iv>=_gr?B.whiteSmoke:B.burnham;
+                if(contrastRatio(_bgL,hexLuminance(heroInk))<4.5) heroInk=B[suggestTextColor(_bgL)];
+              }
             }
+            zoneTc=heroInk;
+            // The auto logo (if the user re-enables one) must clear the whole card.
+            frameBox=_pR;
           }
-          zoneTc=heroInk;
-          // The auto logo (if the user re-enables one) must clear the whole card.
-          frameBox=_pR;
         }else if(isPhotoLabel && heroBox){
           // Bottom scrim: transparent → burnham, covering the lower ~28% of the tile so
           // the label + descenders always sit on a dark wash. Forces the label ink white.
@@ -5606,8 +5655,44 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     const _legacyCapOff=roleOff("support");
     let _legacyCapBox=null;
 
+    // ── (Client ruling 2026-07-27 — TEXT AND LOGO ARE THE TOP LAYERS) ────────────
+    // The legacy stacked painters drew every overlay-mode shape at the very END of
+    // the render — on top of the headline, caption AND logo — so one added fill
+    // shape could bury the copy. Added shapes now paint through this helper right
+    // after each branch's background/photo section, BEFORE any text or logo draw
+    // (DLC §8: decoration bands below content+marks). The old tail-of-render pass
+    // calls the same helper as a catch-all; the shared painted-set makes a double
+    // draw impossible. Painted non-accessory silhouettes join _activeShapeBoxes so
+    // §6a holds now that bands paint ABOVE the shapes (a band may never slice a
+    // silhouette). Fixture/legacy-guard designs carry no added shapes → the guard
+    // cells are byte-identical by construction.
+    const _legacyShapesPainted=new Set();
+    const _legacyOcv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
+    const paintAddedShapeLayers=()=>{
+      topLayers.forEach(layer=>{
+        if(_legacyShapesPainted.has(layer)) return;
+        const img=overlayImgs.current[layer.assetId]; if(!img) return;
+        _legacyShapesPainted.add(layer);
+        const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
+        if(asset?.category!=="accessories"){
+          const ratio=(img.width&&img.height)?img.width/img.height:(asset?.ratio||1);
+          const ow=(t.scale??0.2)*w, oh=ow/ratio;
+          _activeShapeBoxes.push({x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh});   // (§6a)
+          _softShapeBoxes.push({x:(t.x??0.5)*w-ow/2,y:(t.y??0.5)*h-oh/2,w:ow,h:oh});     // a SURFACE, never a wall (DLC §7 R)
+        }
+        if(layer.mode==="outline"){drawOutlineLayer(ctx,_legacyOcv,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);return;}
+        if(layer.mode==="lineart"){drawLineArtLayer(ctx,_legacyOcv,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);return;}
+        if(asset?.category==="accessories"){
+          const colorId=t.colorId||"auto";
+          const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;
+          drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);
+        }else drawOverlayLayer(ctx,img,w,h,t);
+      });
+    };
+
     if(postType==="photo_logo"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
+      paintAddedShapeLayers();   // (2026-07-27) shapes under text+logo
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,58*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",58*S*scale*fm("highlight"),40*S));
         const preUsed=hf.lines.length*hf.lineHeight;
@@ -5641,6 +5726,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // over the photo) is RETIRED — photos render warm/near-raw (warmGrade) and text
       // legibility comes from a LOCALIZED band/scrim under the text zone only.
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}}
+      paintAddedShapeLayers();   // (2026-07-27) shapes under text+logo
       const drawQuoteText=()=>{
         beginText();const q=stripHeroMarkers(headline)||"\u201CThe mind is not a vessel to be filled, but a fire to be kindled.\u201D",credit=stripHeroMarkers(attribution||subtext);
         ctx.fillStyle=frameBgTextColor||zoneTc;const quoteFit=fitText(ctx,q,s=>`italic 500 ${s}px ${F.quote}`,82*S*scale*fm("heading"),bw,maxTextH-(credit?80*S:0),lineRatio,mf("headline",82*S*scale*fm("heading"),52*S));
@@ -5664,6 +5750,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // a LOCALIZED band under the text zone only (drawBackdrop below).
         else{drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}
       }}
+      paintAddedShapeLayers();   // (2026-07-27) shapes under text+logo
       const drawEventText=()=>{
       beginText();ctx.fillStyle=frameBgTextColor||zoneTc;let used=0;
       if(headline){const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,42*S*scale*fm("subheading"),bw,maxTextH*0.24,1.1,mf("headline",42*S*scale*fm("subheading"),32*S));fontMeta.headline=hf.size;ctx.font=`700 ${hf.size}px ${F.subtitle}`;ctx.letterSpacing=`${1.5*S}px`;used+=drawTextLines(ctx,hf.lines,bx,by,bw,hf.lineHeight,align);ctx.letterSpacing="0px";}
@@ -5711,6 +5798,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // (WP-U green-filter fix) full-frame brand tint retired → warm-graded photo +
       // a LOCALIZED band under the text zone only (drawBackdrop below).
       if(!hasFrame){ctx.fillStyle=withAlpha(curBg.color,bgAlpha);ctx.fillRect(0,0,w,h);if(mediaObj){drawPhoto();PHOTO_TREATMENTS.warmGrade(ctx,0,0,w,h);}}
+      paintAddedShapeLayers();   // (2026-07-27) shapes under text+logo
       const drawTextPostText=()=>{
       beginText();ctx.fillStyle=frameBgTextColor||zoneTc;let used=0;
       if(subtext){const introFit=fitText(ctx,stripHeroMarkers(subtext),s=>`italic 400 ${s}px ${F.quote}`,54*S*scale*fm("subheading"),bw,maxTextH*0.27,lineRatio,mf("intro",54*S*scale*fm("subheading"),36*S));ctx.font=`italic 400 ${introFit.size}px ${F.quote}`;used+=drawTextLines(ctx,introFit.lines,bx,by,bw,introFit.lineHeight,align);}
@@ -5740,6 +5828,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       putLogo({x:bx,y:by,w:bw,h:used});
     }else if(postType==="texture_text"){
       if(!hasFrame){if(mediaObj){ctx.fillStyle=withAlpha(curBg?.color||B.burnham,bgAlpha);ctx.fillRect(0,0,w,h);drawPhoto();}else blank("Drop an image or video to begin");}
+      paintAddedShapeLayers();   // (2026-07-27) shapes under text+logo
       if(headline){
         const hf=fitText(ctx,stripHeroMarkers(headline).toUpperCase(),s=>`700 ${s}px ${F.subtitle}`,72*S*scale*fm("highlight"),bw,maxTextH,lineRatio,mf("headline",72*S*scale*fm("highlight"),52*S));
         const preUsed=hf.lines.length*hf.lineHeight;
@@ -5991,26 +6080,10 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       };
     }
 
-    // ── Overlay-mode layers (drawn on top of everything) ──
-    const ocv = topLayers.some(l=>(l.mode==="outline"||l.mode==="lineart")) ? (()=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;})() : null;
-    topLayers.forEach(layer => {
-      const img = overlayImgs.current[layer.assetId];
-      if (!img) return;
-      const asset=overlays.find(o=>o.id===layer.assetId),t=resolveT(layer);
-      if(layer.mode==="outline"){
-        drawOutlineLayer(ctx,ocv,img,w,h,t,B[layer.outlineColor]||layer.outlineColor||B.tangerine,layer.outlineWidth??0.08);
-        return;
-      }
-      if(layer.mode==="lineart"){
-        drawLineArtLayer(ctx,ocv,img,w,h,t,B[layer.lineArtColor||layer.outlineColor]||layer.lineArtColor||B.burnham,layer.lineArtThreshold??0.72);
-        return;
-      }
-      if(asset?.category==="accessories"){
-        const colorId=t.colorId||"auto";
-        const selected=colorId==="auto"?accessibleAccessoryColor(sampleCanvasLuminance(ctx,w,h,t,asset.ratio)).id:colorId;
-        drawOverlayLayer(ctx,tintedAccessory(img,B[selected]||B.burnham),w,h,t);
-      }else drawOverlayLayer(ctx,img,w,h,t);
-    });
+    // ── (Client ruling 2026-07-27) Catch-all shape paint — layers a branch without a
+    // background section never reached. Idempotent via the shared painted-set; on the
+    // covered postTypes above this is a no-op, so text and logo stay the top layers.
+    paintAddedShapeLayers();
 
     return finishRender();
 
@@ -8936,7 +9009,13 @@ function useDesignPatchPipeline(workspace) {
         }
       }
       const applied = [];
-      const semanticPatchPlan = compileDesignPatchCommands(patch);
+      // A bgColor change on a materialized design must ALSO land on the visible field
+      // (the variant palette shadows background there) — but not during a genuine
+      // layout switch, where the incoming archetype's authored palette must win.
+      const semanticPatchPlan = compileDesignPatchCommands(patch, {
+        fieldFollowsBackground: !!(archetypeId && archetypeId !== "none")
+          && !(typeof patch.archetypeId === "string" && patch.archetypeId !== archetypeId),
+      });
       const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
         dispatchCommand:dispatchDesignCommand,
       }));

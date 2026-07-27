@@ -70,10 +70,11 @@ test("registry: every blocking rule declares at least one executable remedy", ()
 });
 
 test("registry: Z_BANDS is strictly increasing and complete against doc §8", () => {
-  // Doc §8 bands: 0 background · 10 media · 20 structural media · 30 structural
-  // underlay · 40 content/typography · 50 brand/legal · 60 structural overlay ·
-  // 70 decoration · 80 editor chrome.
-  const EXPECTED = [0, 10, 20, 30, 40, 50, 60, 70, 80];
+  // Doc §8 bands (client ruling 2026-07-27 — decoration below content+marks):
+  // 0 background · 10 media · 20 structural media · 30 structural underlay ·
+  // 35 decoration · 40 content/typography · 50 brand/legal ·
+  // 60 structural overlay · 80 editor chrome.
+  const EXPECTED = [0, 10, 20, 30, 35, 40, 50, 60, 80];
   const values = Object.values(Z_BANDS);
   const sorted = [...values].sort((a, b) => a - b);
   assert.deepEqual(sorted, EXPECTED, "Z_BANDS values do not match doc §8 ladder");
@@ -81,6 +82,16 @@ test("registry: Z_BANDS is strictly increasing and complete against doc §8", ()
     assert.ok(sorted[i] > sorted[i - 1], "Z_BANDS not strictly increasing");
   }
   assert.ok(Object.isFrozen(Z_BANDS));
+});
+
+test("registry: client ruling 2026-07-27 — decoration bands below content AND marks", () => {
+  // "once i add more than 1 shape, text cannot be shown, make sure text and logo
+  // are the top layers." The named relations, not just the sorted ladder, so a
+  // future band renumbering cannot silently re-invert the ruling.
+  assert.ok(Z_BANDS.DECORATION < Z_BANDS.CONTENT, "decoration must paint under content/typography");
+  assert.ok(Z_BANDS.DECORATION < Z_BANDS.BRAND_MARK, "decoration must paint under brand/legal marks");
+  assert.ok(Z_BANDS.CONTENT < Z_BANDS.BRAND_MARK, "marks stay above content (unchanged)");
+  assert.ok(Z_BANDS.DECORATION > Z_BANDS.STRUCTURAL_UNDERLAY, "decoration still paints over structural underlays");
 });
 
 test("registry: legacy shape-mode aliases round-trip exactly (overlay↔fill, lineart↔line-art)", () => {
