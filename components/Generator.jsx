@@ -4235,8 +4235,47 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       // split on " | " (or newlines). Renders inside the hero box zone; skips the normal
       // hero/support draw for this archetype.
       if(isSchedule && heroBox){
+        // ── (Client ruling 2026-07-26 — THE TITLE ALWAYS PAINTS) ────────────────────
+        // schedule_tile was the ONE layout that STRUCTURALLY swallowed the required
+        // hero: the rows own the whole hero zone, so a title typed alongside the
+        // details painted nothing and the inspector said "Not shown in this layout:
+        // the title" — the client's exact banner. (Measured pre-fix by sweeping every
+        // archetype × 6 formats × 3 size steps: schedule_tile was the ONLY offender,
+        // and it offended in 18/18 of its cells.) DLC §10: required content that
+        // cannot fit forces a layout change, never a silent loss — so the layout
+        // changes: the title takes a band at the top of the zone, the rows take the
+        // rest, and the hero rides the same required ladder as everywhere else.
+        // When the Details field is EMPTY the rows ARE the title (nothing else to
+        // paint): that path is byte-identical, and we simply publish the drawn zone
+        // as the HERO's box so render truth stops calling a painted title missing.
+        const _schedRowsAreHero=!String(ccSubtext||"").trim();
+        let _schedZone=heroBox;
+        if(!_schedRowsAreHero && heroFinal){
+          const _titleH=Math.max(MIN_FONT_PX.headline(h)*1.15, Math.min(heroBox.h*0.30, 0.13*h));
+          beginText(); ctx.fillStyle=heroInk;
+          const _tr=drawHeroText(ctx,heroFinal,{
+            x:heroBox.x,y:heroBox.y,maxW:heroBox.w,maxH:_titleH,
+            align:mat.roles?.hero?.align||"left", register, caps:!!mat.caps,
+            start:_titleH*0.66, minSize:MIN_FONT_PX.headline(h),
+            leading:mat.heroLeading||(register==="serif"?1.02:1.05),
+            baseInk:heroInk,
+            required:true,   // the heading is never dropped — DLC §11
+          });
+          endText();
+          fontMeta.headline=_tr.size;
+          const _titleUsed=Math.max(_tr.usedH,_tr.size||0);
+          usedH=_titleUsed;
+          if(_roleB) _roleB.hero={x:heroBox.x,y:heroBox.y,w:heroBox.w,h:_titleUsed};
+          if(_tr.overflowed && !overCapacity.includes("hero")) overCapacity.push("hero");
+          const _titleGap=Math.max(0.018*h,(_tr.size||0)*0.42);
+          const _rowsTop=heroBox.y+_titleUsed+_titleGap;
+          const _rowsH=heroBox.y+heroBox.h-_rowsTop;
+          // The rows keep at least half the zone; if the title genuinely ate it, the
+          // rows fall back to the bottom half rather than collapsing to nothing.
+          _schedZone={x:heroBox.x,y:_rowsTop,w:heroBox.w,h:Math.max(heroBox.h*0.45,_rowsH)};
+        }
         const schedulePlan=planScheduleRows({
-          raw:ccSubtext||heroFinal||"",box:heroBox,width:w,height:h,
+          raw:ccSubtext||heroFinal||"",box:_schedZone,width:w,height:h,
           stripMarkers:stripHeroMarkers,
         });
         if(schedulePlan){
@@ -4255,9 +4294,16 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             ctx.letterSpacing="0px";
           });
           ctx.restore();
-          fontMeta.headline=timeSize; fontMeta.subtext=activitySize;
+          if(_schedRowsAreHero) fontMeta.headline=timeSize;   // the rows ARE the title here
+          fontMeta.subtext=activitySize;
           setTextBounds(zone.h);
-          if(_roleB) _roleB.support={...zone}; // schedule rows edit via the Details field
+          if(_roleB){
+            _roleB.support={...zone}; // schedule rows edit via the Details field
+            // The rows-are-the-title case: the headline IS painted (as the rows), so
+            // publish its box. Without this, render truth reported the visible title
+            // as a dead role and the banner claimed a loss that never happened.
+            if(_schedRowsAreHero) _roleB.hero={...zone};
+          }
         }
       }
       // (Bug B fix) FULL-BLEED TEXT LEGIBILITY — the editorial branch draws hero/support
@@ -7202,7 +7248,7 @@ export default function App() {
      the layer list). */
   const inspectorWorkspace = <InspectorWorkspace workspace={{
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
-    archVariant, archetypeId, attribution, backdropMode, bgAlpha, bgSel,
+    archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
     closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
     effectiveFieldId, effectiveFieldOpt, effectiveT, foldOpen, fontSizes,
     furnitureOverrides, headline, heroRegister, image, imageObj, imgRef,
@@ -8912,7 +8958,7 @@ function useDesignPatchPipeline(workspace) {
 function InspectorWorkspace({ workspace }) {
   const {
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
-    archVariant, archetypeId, attribution, backdropMode, bgAlpha, bgSel,
+    archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
     closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
     effectiveFieldId, effectiveFieldOpt, effectiveT, foldOpen, fontSizes,
     furnitureOverrides, headline, heroRegister, image, imageObj, imgRef, inspectorEl, inspectorNotes,
