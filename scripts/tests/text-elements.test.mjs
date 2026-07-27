@@ -109,7 +109,7 @@ test("migration never births an element for an empty or absent legacy role", () 
   assert.deepEqual(elements.map(e => e.sourceRole), ["headline"]);
 });
 
-test("resolveTextElements preserves a canonical collection but derives a legacy one", () => {
+test("resolveTextElements preserves added elements and PROJECTS the legacy roles", () => {
   const preserved = resolveTextElements({ elements: [{ uid: "el_x", class: "cta", text: "Buy" }] });
   assert.equal(preserved.length, 1);
   assert.equal(preserved[0].class, "cta");
@@ -121,9 +121,41 @@ test("resolveTextElements preserves a canonical collection but derives a legacy 
 test("element derivation is idempotent and JSON-round-trip stable", () => {
   const content = { headline: "H", subtext: "S", pillText: "P" };
   const once = deriveElementsFromLegacyContent(content);
-  // Re-resolving the derived collection preserves it byte-for-byte.
-  const twice = resolveTextElements({ elements: once });
-  assert.equal(JSON.stringify(twice), JSON.stringify(once));
-  const roundTrip = resolveTextElements({ elements: JSON.parse(JSON.stringify(once)) });
-  assert.equal(JSON.stringify(roundTrip), JSON.stringify(once));
+  // Re-resolving a CANONICAL content object (fixed fields + the collection) preserves
+  // it byte-for-byte — the projection reproduces exactly what was stored.
+  const canonical = { ...content, elements: once };
+  assert.equal(JSON.stringify(resolveTextElements(canonical)), JSON.stringify(once));
+  assert.equal(JSON.stringify(resolveTextElements(JSON.parse(JSON.stringify(canonical)))), JSON.stringify(once));
+});
+
+test("(merge) the legacy element is a LIVE projection — editing the field moves the element", () => {
+  // Before the merge this drifted: the stored legacy:headline element kept the OLD
+  // words while content.headline held the new ones — two things wearing one name.
+  const once = deriveElementsFromLegacyContent({ headline: "Old", subtext: "S" });
+  const projected = resolveTextElements({ headline: "New", subtext: "S", elements: once });
+  const hero = projected.find(e => e.sourceRole === "headline");
+  assert.equal(hero.text, "New");
+  // Clearing the field retires the element entirely (no empty legacy elements).
+  const cleared = resolveTextElements({ headline: "", subtext: "S", elements: once });
+  assert.equal(cleared.some(e => e.sourceRole === "headline"), false);
+});
+
+test("(merge) projection preserves per-element metadata pinned on a migrated role", () => {
+  const stored = deriveElementsFromLegacyContent({ headline: "H" })
+    .map(e => ({ ...e, priority: 42, register: "heavySans", pins: { sizeStep: "L" } }));
+  const projected = resolveTextElements({ headline: "H2", elements: stored });
+  assert.equal(projected[0].text, "H2");
+  assert.equal(projected[0].priority, 42);
+  assert.equal(projected[0].register, "heavySans");
+  assert.deepEqual(projected[0].pins, { sizeStep: "L" });
+});
+
+test("(merge) added elements keep their stored order after the projected roles", () => {
+  const elements = [
+    ...deriveElementsFromLegacyContent({ headline: "H" }),
+    { uid: "el_body_0", class: "body", text: "one" },
+    { uid: "el_cta_1", class: "cta", text: "two" },
+  ];
+  const projected = resolveTextElements({ headline: "H", elements });
+  assert.deepEqual(projected.map(e => e.uid), ["legacy:headline", "el_body_0", "el_cta_1"]);
 });

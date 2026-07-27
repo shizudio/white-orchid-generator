@@ -369,19 +369,92 @@ test("one format reset clears every local design override and ownership marker",
 });
 
 test("add-element generates a unique uid and reports one changed path (one undo)", () => {
+  // `body` maps to NO declared legacy slot, so it is always a genuine added element
+  // (the slot-fill merge is exercised by its own tests below).
   const before = createDesignDocumentV1();
   const result = applyDesignCommand(before, {
     type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
-    element:{ class:"caption", text:"Doors open 9am" },
+    element:{ class:"body", text:"Doors open 9am" },
   });
   assert.equal(result.document.content.elements.length, 1);
   const added = result.document.content.elements[0];
-  assert.equal(added.class, "caption");
+  assert.equal(added.class, "body");
   assert.equal(added.text, "Doors open 9am");
   assert.equal(added.authorship, "owner");
   assert.equal(added.required, false);
   assert.equal(typeof added.uid, "string");
   assert.deepEqual(result.changedPaths, [`content.elements.${added.uid}`]);
+});
+
+test("(merge) adding a heading into an EMPTY declared title slot BECOMES the role", () => {
+  // docs/text-unification-spec.md §Phase B, client ruling 3. One identity: the add
+  // writes the role's field, the collection re-projects, and there is no second text.
+  const before = createDesignDocumentV1();
+  assert.equal(before.content.headline, "");
+  const result = applyDesignCommand(before, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ class:"heading", text:"Now enrolling" },
+  });
+  assert.equal(result.document.content.headline, "Now enrolling");
+  assert.deepEqual(result.changedPaths, ["content.headline", "content.elements.legacy:headline"]);
+  assert.equal(result.document.content.elements.length, 1);
+  assert.equal(result.document.content.elements[0].uid, "legacy:headline");
+  assert.equal(result.document.content.elements[0].sourceRole, "headline");
+  assert.equal(result.document.content.elements[0].class, "heading");
+});
+
+test("(merge) a FILLED slot is not re-filled — the add stays a genuine element", () => {
+  const seeded = createDesignDocumentV1({ headline:"Already here" });
+  const result = applyDesignCommand(seeded, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
+    element:{ class:"heading", text:"Second heading" },
+  });
+  assert.equal(result.document.content.headline, "Already here");
+  assert.equal(result.document.content.elements.filter(e => !e.sourceRole).length, 1);
+  assert.match(result.changedPaths[0], /^content\.elements\.el_heading_/);
+});
+
+test("(merge) slot-fill maps each class to its declared role family", () => {
+  const fill = (cls, seed = {}) => {
+    const doc = createDesignDocumentV1(seed);
+    const out = applyDesignCommand(doc, { type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:cls, text:"X" } });
+    return out.changedPaths[0];
+  };
+  assert.equal(fill("heading"), "content.headline");
+  assert.equal(fill("subheading"), "content.subtext");
+  assert.equal(fill("caption"), "content.dateText");                        // date is the declared caption slot
+  assert.match(fill("caption", { dateText:"18 Sep" }), /^content\.elements\./);   // filled slot → element
+  assert.match(fill("body"), /^content\.elements\./);                      // body has no legacy slot
+  assert.match(fill("cta"), /^content\.elements\./);                       // no badge declared → element
+  // A quote's support line IS its attribution.
+  const quote = createDesignDocumentV1({ postType:"quote" });
+  const out = applyDesignCommand(quote, { type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:"subheading", text:"— Aisha" } });
+  assert.equal(out.changedPaths[0], "content.attribution");
+});
+
+test("(merge) editing / removing a MIGRATED element writes the role's own field", () => {
+  const doc = createDesignDocumentV1({ headline:"First" });
+  const edited = applyDesignCommand(doc, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_SET_ELEMENT_TEXT, uid:"legacy:headline", value:"Second",
+  });
+  assert.equal(edited.document.content.headline, "Second");
+  assert.deepEqual(edited.changedPaths, ["content.headline"]);
+  assert.equal(edited.document.content.elements[0].text, "Second");
+  const removed = applyDesignCommand(edited.document, {
+    type:DESIGN_COMMAND_TYPES.CONTENT_REMOVE_ELEMENT, uid:"legacy:headline",
+  });
+  assert.equal(removed.document.content.headline, "");
+  assert.equal(removed.document.content.elements.length, 0);
+});
+
+test("(merge) the add→role identity round-trips through persistence unchanged", () => {
+  const added = applyDesignCommand(createDesignDocumentV1(), {
+    type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:"heading", text:"Now enrolling" },
+  }).document;
+  const reloaded = createDesignDocumentV1(JSON.parse(JSON.stringify(added)));
+  assert.equal(JSON.stringify(reloaded.content), JSON.stringify(added.content));
+  assert.equal(reloaded.content.elements.length, 1);
+  assert.equal(reloaded.content.elements[0].uid, "legacy:headline");
 });
 
 test("add-element with a colliding explicit uid is a safe no-op", () => {

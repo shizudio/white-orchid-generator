@@ -44,6 +44,7 @@ import { placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass, date
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS } from "@/lib/text-elements.mjs";
+import { LEGACY_FIELD_TO_ROLE } from "@/lib/text-slot-fill.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
@@ -3643,10 +3644,43 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const inkPoles=[B.burnham,B.whiteSmoke];
       const CLASS_BASE_PX={ heading:54*S, subheading:38*S, body:30*S, caption:26*S, cta:0.024*h };
       const CLASS_FLOOR_PX={ heading:34*S, subheading:26*S, body:22*S, caption:18*S, cta:0.016*h };
-      // Obstacle set: every drawn role box + logo + photo window + active shapes; each
-      // newly-placed element joins it so added elements de-collide against one another (reflow).
-      const baseObstacles=[rb.hero,rb.support,rb.eyebrow,rb.date,rb.pill,renderTruth.logoBox,renderTruth.photoBox,..._activeShapeBoxes]
+      /* ── OBSTACLES (TEXT UNIFICATION Phase B — NOTHING PHANTOM RESERVES SPACE) ──────
+         HARD: things that genuinely cannot be written over — every DRAWN role box, the
+         logo, and the active shape silhouettes. A role that drew nothing contributes
+         nothing: an empty declared slot is opportunity, never occupancy (ruling 2).
+         SOFT: the photo window. ROOT CAUSE of the client's "clearly there is space"
+         report — the photo window was HARD, so on a full-bleed layout (window = the whole
+         canvas) EVERY candidate collided and the honest-looking "No room in this format"
+         fired on an empty canvas. Text over media is the normal case; the whole
+         register-escalation ladder (ink flip → heavier weight → robust face → size →
+         band) exists to make it legible. Soft means the solver still PREFERS a spot clear
+         of the photo (pass 1) and only lands on it when nothing else clears (pass 2).
+         Each newly-placed element joins the hard set so added elements de-collide. */
+      const baseObstacles=[rb.hero,rb.support,rb.eyebrow,rb.date,rb.pill,renderTruth.logoBox,..._activeShapeBoxes]
         .filter(Boolean).map(b=>({x:b.x,y:b.y,w:b.w,h:b.h}));
+      const softObstacles=[renderTruth.photoBox].filter(Boolean).map(b=>({x:b.x,y:b.y,w:b.w,h:b.h}));
+      /* ── EMPTY DECLARED SLOTS ARE CANDIDATES (Phase B, ruling 2) ────────────────────
+         An archetype zone whose copy is blank drew nothing, so it is absent from
+         roleBounds — correctly not an obstacle, but it was also invisible to the solver,
+         which only knew the relational ladders (below-hero / corners / …). It is now
+         offered as the FIRST candidate for a matching class: the clearest, most
+         art-directed space on the canvas is exactly the slot the layout reserved for
+         that kind of text. `mat.roles` rects are canvas fractions. */
+      const _freeSlotBox=(matRole,drawnKey)=>{
+        if(rb[drawnKey]) return null;                                  // the role drew → not free
+        const r=mat&&mat.roles&&mat.roles[matRole];
+        if(!r||!(r.w>0)||!(r.h>0)) return null;
+        return { x:r.x*w, y:r.y*h, w:r.w*w, h:r.h*h, align:r.align||align };
+      };
+      const _freeSlots={ hero:_freeSlotBox("hero","hero"), support:_freeSlotBox("support","support"), microLabel:_freeSlotBox("microLabel","eyebrow") };
+      const SLOT_PREFERENCE={ heading:["hero","support"], subheading:["support","hero"], body:["support","hero"], caption:["microLabel"], cta:[] };
+      const slotAnchorsFor=(className)=>(SLOT_PREFERENCE[className]||[])
+        .map(key=>({ key, box:_freeSlots[key] }))
+        .filter(entry=>!!entry.box)
+        .map(({key,box})=>({ id:`slot-${key}`, at:(bw)=>({
+          x: box.align==="center" ? box.x+(box.w-bw)/2 : box.align==="right" ? box.x+box.w-bw : box.x,
+          y: box.y,
+        }) }));
       const placedBoxes=[];
       const out=[];
       for(const el of ordered){
@@ -3680,16 +3714,21 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         if(!cfg){ out.push({uid:el.uid,class:el.class,placed:false,reason:"unknown-class"}); continue; }
         const geom={ heroBox, usedH, gap:Math.max(0.014*h,px*0.4), dGap:Math.max(0.014*h,px*0.4),
           ebGap:Math.max(0.012*h,px*0.5), supBelow:!!supBox, supBox:!!supBox, supBottom, safe:_sm, w, h, align, eyebrow:_eyebrow };
-        const cands=buildElementAnchors(el.class, geom);
+        // Empty declared slots lead the candidate order; the ratified relational ladder
+        // follows unchanged, so an element with no free slot places exactly as before.
+        const cands=[...slotAnchorsFor(el.class), ...buildElementAnchors(el.class, geom)];
         // measure adapter — CTA measures its own pill box; text classes wrap at the column width.
         const measure=isCta
           ? (mpx,face)=>{ const bs=mpx,padX=bs*0.9,padY=bs*0.55; ctx.font=`600 ${bs}px ${face}`; ctx.letterSpacing=`${0.10*bs}px`; const t=txt.toUpperCase(); const tw=ctx.measureText(t).width+0.10*bs*Math.max(0,t.length-1); ctx.letterSpacing="0px"; return { w:tw+padX*2, h:bs+padY*2 }; }
           : (mpx,face,weight)=>{ ctx.font=`${weight} ${mpx}px ${face}`; const lines=textLines(ctx,txt,colW); const lw=Math.min(colW,Math.max(0,...lines.map(l=>ctx.measureText(l).width))); return { w:lw, h:mpx*1.28*Math.max(1,lines.length) }; };
         const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
         const sol=placeTextElement({
-          cfg, candidates:cands, hardObstacles:[...baseObstacles,...placedBoxes], softObstacles:[],
+          cfg, candidates:cands, hardObstacles:[...baseObstacles,...placedBoxes], softObstacles,
           safe:safeBox, focalBox:null, measure, surface, baseInk, inkPoles,
         });
+        // (Phase B, ruling 3) "No room in this format" may only surface after the empty
+        // declared slots were considered AND the relational ladder was genuinely
+        // exhausted — both passes, every rung. `sol === null` now means exactly that.
         if(!sol){ out.push({uid:el.uid,class:el.class,placed:false,reason:"no-clean-candidate"}); continue; }
         // Owner drag pin (roleOff keyed by uid) — the same per-format offset infra the roles use.
         // A FROZEN entry pins the element CENTRE at (bx+dx, by+dy) so a re-solve that would pick
@@ -6974,13 +7013,18 @@ export default function App() {
     // Generic design-command dispatch for live guards (test-hooks only) — e.g. set a solid
     // field so a register switch is visible without the photo-legibility escalation firing.
     window.__woDispatch = (command) => dispatchDesignCommand(command)?.changedPaths || [];
+    // (Text unification) Generic PATCH apply for live guards. Archetype materialization
+    // has no typed-command equivalent, so proving "an empty DECLARED slot is a candidate,
+    // never an obstacle" needs a driver that can seat a real archetype and blank its copy.
+    // TEST_HOOKS only — stripped from production alongside the rest of this block.
+    window.__woApplyPatch = (patch, options) => (applyPatchRef.current || (() => []))(patch, options || { source:"ui" });
     window.__woElementFaces = () => (renderResultRef.current?.contentElements || []).map(e => ({ uid:e.uid, class:e.class, placed:!!e.placed, face:e.face??null,
       register:(_docElRef.current?.content?.elements || []).find(d => d.uid === e.uid)?.register ?? null }));
     window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins, register:e.register??null }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
     window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, sizePinned:!!s.sizePinned, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));
     window.__woHitTest = (x, y) => { const hit = hitTestScene(renderResultRef.current?.sceneElements || [], x, y, { types:["text"], minSize:24, padding:8 }); return hit ? { id:hit.id, uid:hit.uid||null, role:hit.role, class:hit.elementClass||null } : null; };
-    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
+    return () => { try { delete window.__woAddElement; delete window.__woSetElementText; delete window.__woRemoveElement; delete window.__woSetElementRegister; delete window.__woDispatch; delete window.__woApplyPatch; delete window.__woElementFaces; delete window.__woDocElements; delete window.__woScene; delete window.__woContentElements; delete window.__woHitTest; } catch {} };
   }, [dispatchDesignCommand]);
   // Refs so the ledger console hooks (installed after runAiAudit is defined, below)
   // read the latest merged ledger + raw store each render without a TDZ on runAiAudit.
@@ -7250,7 +7294,7 @@ export default function App() {
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
     archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
     closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
-    effectiveFieldId, effectiveFieldOpt, effectiveT, foldOpen, fontSizes,
+    effectiveFieldId, effectiveFieldOpt, effectiveT, focusTextField, foldOpen, fontSizes,
     furnitureOverrides, headline, heroRegister, image, imageObj, imgRef,
     inspectorEl, inspectorNotes,
     isOverride, layoutShapeFlash, layoutShapeSecRef, logoObj, logoOverlapHint,
@@ -8960,7 +9004,7 @@ function InspectorWorkspace({ workspace }) {
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
     archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
     closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
-    effectiveFieldId, effectiveFieldOpt, effectiveT, foldOpen, fontSizes,
+    effectiveFieldId, effectiveFieldOpt, effectiveT, focusTextField, foldOpen, fontSizes,
     furnitureOverrides, headline, heroRegister, image, imageObj, imgRef, inspectorEl, inspectorNotes,
     isOverride, layoutShapeFlash, layoutShapeSecRef, logoObj, logoOverlapHint,
     logoHidden, logoPosition, logoSel, markTab, mediaKind, mediaObj, microLabel,
@@ -9000,7 +9044,13 @@ function InspectorWorkspace({ workspace }) {
     const result = dispatchElementCommand({ type:"content/add-element", element:{ class:cls, text:starter } });
     const path = (result.changedPaths || []).find(p => p.startsWith("content.elements."));
     const uid = path ? path.split(".")[2] : null;
-    if (uid) { selectElement("text", null, `el:${uid}`); setAddTextOpen(false); setChangeTypeOpen(false); }
+    setAddTextOpen(false); setChangeTypeOpen(false);
+    // (Phase B — SLOT FILL) When the add BECAME a declared role, its identity is the
+    // migrated `legacy:<field>` element and its editable home is that role's row. Focus
+    // it, so the owner sees exactly where their heading went (honesty: the panel names
+    // the place the text landed instead of opening an empty element row).
+    if (uid && uid.startsWith("legacy:")) { focusTextField(LEGACY_FIELD_TO_ROLE[uid.slice(7)] || "hero"); return uid; }
+    if (uid) selectElement("text", null, `el:${uid}`);
     return uid;
   };
   const MoreFold = ({ id, children, label = "More options" }) => {
