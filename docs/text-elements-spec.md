@@ -6,7 +6,8 @@
 
 1. "I should be able to add more text elements (heading, subheading, body, caption, CTA button etc) in any format available" — text elements become a dynamic collection, not a fixed archetype slot list.
 2. "AI can recommend how to improve — ie simplify / summarize if it's too crowded" — crowding is an ADVISORY with executable remedies, never a hard cap. (Client: "yes advisory".)
-3. Element classes are a CLOSED, brand-governed set of five (client: "just five"): `heading | subheading | body | caption | cta`. No freeform font/size picker — unlimited elements, unlimited words, only brand-sanctioned ways for text to look. New classes are added to the brand profile by governed decision, never by a user dropdown.
+3. **(2026-07-26, ratified)** *"i typed title half way and it disappeared, telling me that the title cannot appear in this format. This should not be the case, text should always be visible, especially the heading and according to info hierarchy."* — the `heading` class (and the legacy hero role it migrates from) is REQUIRED content: it is never dropped complete-or-absent in any format. Its adaptation ladder ends in **paint anyway at the floor** plus the honest `content.required-over-capacity` advisory (DLC §11 terminal rung; copy-fit Tier 0b). Where a layout must genuinely shed text, it sheds bottom-up by class priority — `caption`/`body` before `subheading`; `heading` never. A second clause of the same ruling: while a text element is being EDITED it always paints live at least at floor — no drop, no readiness-banner flip between keystrokes; the settled verdict runs on blur.
+4. Element classes are a CLOSED, brand-governed set of five (client: "just five"): `heading | subheading | body | caption | cta`. No freeform font/size picker — unlimited elements, unlimited words, only brand-sanctioned ways for text to look. New classes are added to the brand profile by governed decision, never by a user dropdown.
 
 ## 1. Document model
 

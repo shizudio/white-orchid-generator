@@ -281,6 +281,37 @@ adaptations.
 Default adaptation order: roomier layout/variant → available lines → approved type treatment
 within floors → verified AI rewrite when authorized → omit optional role → ask user.
 
+**Terminal rung for a REQUIRED role (client ruling 2026-07-26, ratified).** Verbatim: *"i
+typed title half way and it disappeared, telling me that the title cannot appear in this
+format. This should not be the case, text should always be visible, especially the heading
+and according to info hierarchy."* The adaptation order above may never bottom out in a
+blank canvas for required content. When every rung is exhausted, the required role
+**paints anyway** — complete and wrapped, at its readable floor, accepting an imperfect
+box — and the overflow is reported as `content.required-over-capacity` (warning, remedies:
+shorten the copy / a solver-verified roomier layout / edit it myself). Consequences of
+this rule:
+
+- Complete-or-absent (`content.complete-or-absent`) is the contract for **optional** roles
+  and added elements only. For required content it becomes **complete-or-advisory**: the
+  copy is never cut and never hidden, and the honest state is a finding, not an absence.
+- A layout that declares no slot for the required role must **change** (synthesize a block
+  inside the text-safe margins, or reallocate its zone) rather than swallow the content —
+  the §10 "required content that cannot fit forces a layout change" clause, enforced at
+  paint time. `schedule_tile` was the one layout that violated this; it now reserves a
+  title band above the rows.
+- "Switch to a layout that shows it" is a **remedy on the finding**, never the price of
+  seeing your own words.
+- Hierarchy: where a layout genuinely must shed text, it sheds bottom-up by class priority
+  (caption/body before subheading; the heading never).
+- Born-clean is unaffected: generation writes copy to measured budgets (copy-fit Tier 1),
+  so a fresh design never reaches this rung.
+
+**Editing grace (same ruling).** While a role's field or on-canvas editor is focused, its
+verdict is not final: it paints live at least at its floor, its drop is never published,
+and the readiness banner never flips between keystrokes. The settled resolution and its
+findings run on blur. Live renders only — calibration, guard and export sweeps never see an
+editor cursor.
+
 ## 12. Typography contract
 
 Each brand profile defines role tokens with approved font assets/weights, size range,
@@ -750,6 +781,14 @@ the env**; record the engine version for the record, not as the controlling vari
    `__woRenderFingerprint()` of a session can race font loading and first-paint layout;
    discard it and read the *second* call. Every baseline and every comparison must clear
    fonts and warm up first, or a cell flips for reasons that have nothing to do with the code.
+   **Addendum (measured 2026-07-27): one warm-up render is not enough on a freshly mounted
+   editor.** The background format-preview / decoded-asset queues keep mutating shared
+   render state for several seconds after mount, so a capture taken too early differs from
+   the settled render in **113/144 cells with zero code change** — while an *in-process*
+   double capture at that same early moment is perfectly stable (0/144), i.e. the
+   determinism gate cannot detect it. **Settle first:** take round-trip-separated captures
+   until two consecutive ones are byte-identical (2 rounds observed in practice), and only
+   then run the in-process double capture that the determinism gate checks.
 2. **Baselines are environment-pinned — only ever diff within the canonical environment
    above.** Text rasterization differs by headless *mode*, and the brand row the renderer
    reads differs by env-key presence; either one moves most of the set with *zero* geometry
@@ -788,6 +827,20 @@ certified on the same build at reset time (born-clean 456/456, arch-stress 114/1
 legacy-dup 30/30, zero offenders; unit 452/452, contract 25/25). The **84 cells** of v1
 divergence that no commit explains are written off as unreconstructable harness history —
 recorded here rather than silently absorbed.
+
+**Baseline v2 → v2.1 (2026-07-27, deliberate).** Six cells —
+`arch:schedule_tile:{ig_portrait,ig_square,story,twitter,facebook,banner}`. Reason: the
+2026-07-26 "the title always paints" ruling (§11 terminal rung). `schedule_tile` was the
+only layout that structurally swallowed the required hero — the rows owned the whole hero
+zone, so a title typed alongside the details painted nothing (measured pre-fix at
+`b167bd2` by sweeping every archetype × 6 formats × 3 size steps: schedule_tile was the
+sole offender and offended in 18/18 of its cells). The title now takes a band at the top
+of the zone and the rows take the rest. The fixture copy carries both a headline and a
+subtext, so all six cells now paint a title they previously omitted; reviewed on canvas in
+all six formats before the bump. The other **138/144 cells are byte-identical** — the
+required-content ladder and the editing-grace gate are render-neutral at fixture defaults,
+as designed. Certified on the same build: born-clean 456/456, arch-stress 114/114,
+legacy-dup 30/30, unit 452/452, contract 25/25.
 
 **The rule.** A fingerprint diff is *never* regenerated silently. A changed cell means
 either a **bug in the DLC change** (fix the code until the cell matches) or a
