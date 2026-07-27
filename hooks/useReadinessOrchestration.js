@@ -7,6 +7,7 @@ import {
   runLocalAudit as computeLocalAudit,
   withoutAuditFindings,
 } from "@/lib/audit-local";
+import { shouldDeferFreshnessWork } from "@/lib/readiness-policy.mjs";
 
 /** Owns deterministic local audit caching and the six-format readiness ledger. */
 export function useReadinessOrchestration({
@@ -20,6 +21,11 @@ export function useReadinessOrchestration({
   readyCheck,
   setReadyCheck,
   devHooks,
+  // (Typing lag, 2026-07-27) The role currently being typed into, or null. The sweep
+  // below is advisory freshness, never something the owner is waiting on, so it must
+  // not spend six offscreen renders between two keystrokes — the editing grace that
+  // already governs the live draw extends to it.
+  editing = false,
 }) {
   const localAuditCacheRef = useRef({ sig: null, findings: null });
   const currentDesignFingerprintRef = useRef(designFingerprint);
@@ -109,12 +115,16 @@ export function useReadinessOrchestration({
   // never touches the live canvas and never writes to cloud (harness-safe by construction).
   const refreshReadyCheckRef = useRef(refreshReadyCheck);
   refreshReadyCheckRef.current = refreshReadyCheck;
+  // While a text field is focused the sweep is suspended entirely; blur re-runs this
+  // effect, so the ledger still lands ~2s after the owner stops typing — the same
+  // freshness, none of the mid-keystroke cost.
   useEffect(() => {
+    if (shouldDeferFreshnessWork({ editingRole: editing })) return undefined;
     const timer = setTimeout(() => {
       try { refreshReadyCheckRef.current(); } catch { /* the sweep is advisory; never block edits */ }
     }, 2000);
     return () => clearTimeout(timer);
-  }, [designFingerprint]);
+  }, [designFingerprint, editing]);
 
   return {
     runLocalAudit,

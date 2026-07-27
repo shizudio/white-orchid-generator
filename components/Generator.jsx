@@ -6988,6 +6988,7 @@ export default function App() {
     readyCheck,
     setReadyCheck,
     devHooks: DEV_HOOKS,
+    editing: !!editingRole,
   });
 
   const {
@@ -7191,6 +7192,7 @@ export default function App() {
     applyDesignPatch,
     sessionId,
     dimensionId,
+    editing: !!editingRole,
   });
 
   // Render the current format off-screen for the optional, user-triggered AI audit.
@@ -7237,7 +7239,7 @@ export default function App() {
 
   useFormatPreviewQueue({enabled:fontsLoaded,dimensions:DIMENSIONS,renderScene,computeReadyAll,
     onThumbnail:(id,url)=>setFormatThumbs(previous=>({...previous,[id]:url})),onReady:setReadyCheck,
-    signature:designFingerprint});
+    signature:designFingerprint,editing:!!editingRole});
 
   /* ── Canvas direct-manipulation lifecycle ── */
   const {

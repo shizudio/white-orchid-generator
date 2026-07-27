@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { logFeedback as logFeedbackClient, newTurnId } from "@/lib/sessions";
+import { shouldDeferFreshnessWork } from "@/lib/readiness-policy.mjs";
 
 const MAX_SILENT_ROUNDS = 2;
 
@@ -112,11 +113,20 @@ export function useManualEditHarmonization({
   applyDesignPatch,
   sessionId,
   dimensionId,
+  // (Typing lag, 2026-07-27) The role currently being typed into, or null. This repair
+  // pass runs a SIX-FORMAT offscreen sweep, and the burst debounce is 600ms — shorter
+  // than the pause between two words. It therefore landed mid-sentence, repeatedly.
+  // The editing grace that already governs the live draw's dropped-role verdict extends
+  // here: while a text field is focused the burst stays PENDING and the repair waits for
+  // blur, when the copy is settled and the repair is worth computing once.
+  editing = false,
 }) {
   useEffect(() => {
     if (!manualTick) return;
     const manual = manualHarmonizationRef.current;
     if (!manual.pending) return;
+    // hold — pending stays set, blur re-runs this effect
+    if (shouldDeferFreshnessWork({ editingRole: editing })) return;
     manual.pending = false;
     const touched = manual.touched || new Set();
     const snapshot = manual.snap;
@@ -183,6 +193,7 @@ export function useManualEditHarmonization({
     harmonizeRef,
     manualHarmonizationRef,
     manualTick,
+    editing,
     pinnedPropertiesRef,
     runLocalAudit,
     sessionId,

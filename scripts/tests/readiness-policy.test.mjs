@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {createExportAuthorization,createReadinessPolicyState,createReadinessReviewState,findingAcknowledgedByMap,findingHasActionableRemedy,readinessDomainForFinding} from "../../lib/readiness-policy.mjs";
+import {createExportAuthorization,createReadinessPolicyState,createReadinessReviewState,findingAcknowledgedByMap,findingHasActionableRemedy,readinessDomainForFinding, shouldDeferFreshnessWork } from "../../lib/readiness-policy.mjs";
 
 test("readiness separates technical, accessibility, brand and channel state",()=>{
   const state=createReadinessPolicyState([
@@ -79,4 +79,21 @@ test("export remains closed while readiness is unknown",()=>{
   assert.deepEqual(createExportAuthorization(null,"ig_square"),{
     known:false,allAllowed:false,currentAllowed:false,firstBlockedDimensionId:null,blockedDimensionIds:[],
   });
+});
+
+// ── Editing grace for background freshness work (typing lag, 2026-07-27) ──────
+// One rule, read by all three background passes (format preview queue, manual-edit
+// harmonizer, readiness sweep) so their gating cannot drift apart (M6).
+test("background freshness work defers while a text field is focused", () => {
+  assert.equal(shouldDeferFreshnessWork({ editingRole: "hero" }), true);
+  assert.equal(shouldDeferFreshnessWork({ editingRole: "support" }), true);
+  assert.equal(shouldDeferFreshnessWork({ editingRole: "el:el_body_2" }), true);
+});
+
+test("it runs whenever nothing is being typed into — blur, drag, load, no argument", () => {
+  assert.equal(shouldDeferFreshnessWork({ editingRole: null }), false, "blur");
+  assert.equal(shouldDeferFreshnessWork({ editingRole: false }), false, "boolean call sites");
+  assert.equal(shouldDeferFreshnessWork({ editingRole: "" }), false, "empty role is no role");
+  assert.equal(shouldDeferFreshnessWork({}), false);
+  assert.equal(shouldDeferFreshnessWork(), false, "never defer on a missing argument");
 });
