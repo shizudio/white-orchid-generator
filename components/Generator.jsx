@@ -108,6 +108,7 @@ import {
 import { planCompleteSupportPlacement } from "@/lib/editorial-support-policy.mjs";
 import {
   materializeArchetypeLayout,
+  isTextOnlyArchetype,
   resolveArchetypeVariant as archetypeVariant,
 } from "@/lib/archetype-layout-policy.mjs";
 
@@ -8914,6 +8915,26 @@ function useDesignPatchPipeline(workspace) {
           else { patch = { ...patch, archetypeId: target }; autoSwitchedTo = target; }
         }
       }
+      // (client ruling 2026-07-27 — §7d, the mirror of §7b) PHOTO-ADD ON A WORDS-ONLY
+      // LAYOUT AUTO-SWITCHES TO A PHOTO LAYOUT. A text-only archetype has no media
+      // model — a photo added there (upload, library pick, AI generate, chat ask: any
+      // imageSrc patch) would paint nowhere, a silent no-op (M2). The base switches to
+      // a photo-capable layout in the SAME patch — ONE undoable step. Target picked the
+      // §7b copy-aware way; copy always carries (materializeArchetype), each text role
+      // keeps its role identity in the new layout's zones, pins re-solve per law 5.
+      // PINS LAW: an explicitly user-pinned layout is OFFERED the switch, never
+      // overridden — and the offer is honest that the pinned layout shows no photo.
+      let photoAutoSwitchedTo = null, pendingPhotoSwitchOffer = null;
+      if (typeof patch.imageSrc === "string" && patch.imageSrc
+          && typeof patch.archetypeId !== "string"
+          && isTextOnlyArchetype(archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null)) {
+        const hasSecondaryCopy = !!(String(subtext||"").trim() || String(attribution||"").trim());
+        const target = pickFullBleedTargetForShapeAdd({ hasSecondaryCopy });
+        if (target && target !== archetypeId) {
+          if (layoutUserPinnedRef.current) pendingPhotoSwitchOffer = target;
+          else { patch = { ...patch, archetypeId: target }; photoAutoSwitchedTo = target; }
+        }
+      }
       const applied = [];
       const semanticPatchPlan = compileDesignPatchCommands(patch);
       const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
@@ -8955,8 +8976,9 @@ function useDesignPatchPipeline(workspace) {
       // layout, so subsequent shape adds OFFER the pure-photo switch instead of overriding
       // it. A systemFreeVariables archetype change is a FRESH generation — the system's own
       // free choice — so it CLEARS the pin (a new design starts unpinned). The shape-add
-      // auto-switch itself (autoSwitchedTo) neither pins nor clears.
-      if (transitions.archetype.id !== "none" && !autoSwitchedTo) {
+      // auto-switch itself (autoSwitchedTo) neither pins nor clears — and neither does
+      // the §7d photo-add auto-switch (photoAutoSwitchedTo), same law.
+      if (transitions.archetype.id !== "none" && !autoSwitchedTo && !photoAutoSwitchedTo) {
         if (opts.systemFreeVariables) layoutUserPinnedRef.current = false;
         else if (opts.uiSource) layoutUserPinnedRef.current = true;
       }
@@ -9007,6 +9029,14 @@ function useDesignPatchPipeline(workspace) {
       chatNoteRef.current?.("Switched to full photo so your shape has room. Tap Undo to keep the split layout.");
     } else if (pendingShapeSwitchOffer) {
       chatNoteRef.current?.("Shapes usually sit best on a full-photo layout — just ask for a full-photo layout if you'd like me to switch.");
+    } else if (photoAutoSwitchedTo && applied.includes("archetypeId")) {
+      // (§7d) Honest, deterministic: the layout really changed inside THIS patch so the
+      // photo has a place, and the words came along. Mention the shape cleanup only
+      // when the switch really removed added shapes (§7c) in the same step.
+      const photoSwitchName = ARCHETYPES_BY_ID[photoAutoSwitchedTo]?.name || photoAutoSwitchedTo;
+      chatNoteRef.current?.(`Switched to ${photoSwitchName} so your photo shows — your words came along.${clearedAddedShapes ? " Removed your added shapes so it reads clean." : ""} Tap Undo to go back to the words-only layout.`);
+    } else if (pendingPhotoSwitchOffer) {
+      chatNoteRef.current?.("Saved your photo — but the words-only layout you picked has no photo spot. Ask for a photo layout and I'll switch so it shows.");
     } else if (clearedAddedShapes && applied.includes("archetypeId")) {
       // (§7c) The switch really removed the added shapes inside THIS patch — say so
       // honestly, and point at the one undo that restores shapes + layout together.

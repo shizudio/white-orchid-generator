@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   archetypeFormatClass,
+  isTextOnlyArchetype,
   materializeArchetypeLayout,
   resolveArchetypeElements,
   resolveArchetypeVariant,
@@ -94,3 +95,23 @@ test("materialization never mutates archetype specification data", () => {
   assert.deepEqual(ARCHETYPE, before);
 });
 
+
+// ── (client ruling 2026-07-27, element-placement-spec §7d) text-only detection ──
+// The photo-add auto-switch fires ONLY on archetypes with no media model at all.
+// Derived from geometry (the §7b honesty rule): no photo column, no mask, no
+// card, not full-bleed. Frozen here so a geometry edit or a new archetype can't
+// silently change which layouts auto-switch on a photo add.
+test("isTextOnlyArchetype: only a no-media-model archetype is text-only", () => {
+  // A manifesto-like text field: no photo/mask/card, not fullBleed → text-only.
+  assert.equal(isTextOnlyArchetype({ elements: { hero: { x: 0.1, y: 0.2, w: 0.8, h: 0.4 } } }), true);
+  // An editorial split (bounded photo column) has a media model.
+  assert.equal(isTextOnlyArchetype({ elements: { hero: {}, photo: { x: 0.55, y: 0, w: 0.45, h: 1 } } }), false);
+  // A mask window (petal_window / shape_cutout) has a media model.
+  assert.equal(isTextOnlyArchetype({ special: "petalWindow", elements: { mask: { x: 0.46, y: 0.34, w: 0.52, h: 0.54 } } }), false);
+  // A floated card hosts the photo.
+  assert.equal(isTextOnlyArchetype({ special: "floatedCard", elements: { card: { x: 0.2, y: 0.2, w: 0.6, h: 0.5 } } }), false);
+  // Full-bleed IS the photo — never text-only.
+  assert.equal(isTextOnlyArchetype({ fullBleed: true, elements: { hero: {} } }), false);
+  // The free layout (no archetype) is not in §7d's scope.
+  assert.equal(isTextOnlyArchetype(null), false);
+});

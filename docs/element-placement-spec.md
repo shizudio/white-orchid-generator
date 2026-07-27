@@ -153,6 +153,29 @@ that carried user-added shape layers across a swap; DLC §3.4 carries the pointe
 - Interaction-time only — the fingerprint fixtures add no shapes, so default renders are
   pixel-identical (0/144).
 
+## 7d · Photo-add on a words-only layout auto-switches to a photo layout (RATIFIED 2026-07-27)
+
+The mirror of §7b. On a TEXT-ONLY archetype (no media model: no photo column, no mask, no
+card, not full-bleed — `isTextOnlyArchetype`, derived from geometry so a new text field is
+covered automatically), adding a photo (upload, library pick, AI generate, chat ask — any
+`imageSrc` patch) auto-switches the base to a photo-capable layout as ONE honest undoable
+step.
+
+- **Target** — chosen the §7b copy-aware way (`pickFullBleedTargetForShapeAdd`): a design
+  carrying secondary copy goes to `message_pill` (its born-clean contrast pill keeps the
+  caption legible over the photo); a headline-only design goes to `documentary`.
+- **Text is preserved** — copy carries over always (law); each text role keeps its role
+  identity in the new layout, so it lands in the nearest equivalent zone the new layout
+  allows; owner-added text elements ride `content.elements` untouched. User placement
+  pins carry per the pins law where geometrically valid, else nearest-valid via the
+  standard re-solve (materializeArchetype).
+- **PINS LAW (M3 / law 5)** — identical to §7b: an explicitly user-pinned layout is never
+  overridden; the switch is OFFERED in the chat voice instead, and the reply is honest
+  that a words-only layout has no photo spot. The auto-switch itself neither pins nor
+  clears (`layoutUserPinnedRef`).
+- **One undo** reverts the switch and the photo together.
+- Interaction-time only — fingerprint fixtures are unaffected (0/144).
+
 ## 8 · Build phases (estimate: the largest single build since the archetype system)
 
 - **P1 — the solver core**: extract the logo's candidate/filter/score loop into a shared `placeElement()`; date + eyebrow + badge adopt it (the three "Not shown" offenders). Archetype priors read from existing `elements{}`.
