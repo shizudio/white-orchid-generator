@@ -39,3 +39,66 @@
 ## Sequencing
 
 Builds strictly AFTER task #57 lands (same code territory: drop logic, deadRoles, ContentFieldsPanel). Phases land in order A→B→C or B→A→C at the implementer's discretion per risk, each phase committed green with the full battery.
+
+## Implementation checkpoints
+
+**All three phases LANDED 2026-07-27** (A → B → C), each committed green.
+
+- **Phase A — one Text home (`fe97c6a`).** A single **Text** pill in the rail
+  (`hooks/useInspectorModel.js`); the post-type-named Caption/Text pill and the
+  per-element pills are retired. Its panel lists every text as a row — filled legacy
+  roles (`components/ContentFieldsPanel.jsx`, each field wrapped in a labelled row
+  carrying the ratified client-facing role name from `lib/text-role-labels.mjs`) and
+  added elements alike; the selected row expands in place to that element's controls
+  (size/pin/Auto, register, change type, priority, Remove + "Deleting is undoable").
+  "+ Add text" closes the same list. `selectionInspectorKey` no longer forks an
+  `el:<uid>` role into its own inspector, so canvas selection of ANY text routes to the
+  one panel and `focusTextField` focuses the row by `data-wo-role`; `selectionSceneId`
+  is untouched, so the mobile half-sheet auto-scroll still resolves `element:<uid>`.
+  Mobile parity is by construction (one shared `renderTextPanel`). Render-neutral.
+
+- **Phase B — full merge (`9997919`).** `lib/text-slot-fill.mjs` (pure) decides which
+  DECLARED role an added class becomes: heading→hero, subheading→support (the
+  attribution on a quote), caption→eyebrow then date, cta→pill; `body` maps to nothing.
+  **Merge representation:** the add compiles, in the reducer, into a write of that
+  role's CONTENT FIELD, and the legacy-role elements became a LIVE PROJECTION of the
+  fixed fields (`projectTextElements`) instead of a stored snapshot that drifted —
+  per-element metadata (priority/register/pins) survives the projection, and
+  set-element-text / remove-element on a migrated uid write the role's own field. One
+  storage, one paint, one undo, one round-trip; an untouched document projects
+  byte-identically to what it stored. Empty declared slot rects now LEAD the solver's
+  candidate order, and the photo window moved from the hard to the SOFT obstacle set
+  (it was the phantom that made a full-bleed layout refuse every candidate). "No room
+  in this format" can only surface after both passes are exhausted.
+
+- **Phase C — one treatment (`60dd0c5`).** `resolveTextTreatmentAt` re-resolves ink /
+  weight / band at the PAINTED box on every solve, so a dragged element adapts
+  continuously; an explicit Text colour is honoured as a pin for elements too.
+  `lib/text-hierarchy.mjs` (pure) declares the class ranking and verifies it from
+  render truth, raising the new contract rule `typography.hierarchy-inverted`
+  (advisory) naming the inversion with remedies. The three element-system advisories
+  (crowding, unplaced element, hierarchy) now reach the ledger as non-blocking `info`
+  rows — before this they were computed and had no surface at all.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| Client repro — 10 archetypes × 6 formats, every field blank, "+ Add text → Heading" | lands IN the title slot **60/60**, 0 false no-room (**6/60** hard-refused before) |
+| Second heading with the title already filled | places as a free element **59/60**; the one refusal (schedule_tile/story) is genuine — the rows own the whole platform-safe band |
+| Unlimited adds | 8 consecutive adds accepted, **0** refusals; no count-based cap anywhere |
+| Continuous ink | drag field→photo on editorial_split: ink `#254E48`→`#F5F6E7`, weight 400→700, band false→true |
+| Hierarchy on GENERATED designs | **0/60** cells raise the advisory (21/60 and then 2/60 before the two measured exclusions) |
+| Gates | unit 481/481, contract 25/25 (checker C sabotage-proven on the new rule), mirror 11/11, born-clean 456/456, arch-stress 114/114, legacy-dup 30/30, fingerprint v2 **144/144, 0 diffs** |
+
+### Deferred, with pickup
+
+- **The crowding advisory's live fire** (text-elements-spec §"Outstanding checks") is
+  now surfaceable — Phase C opened the ledger path — but was not re-verified on a
+  genuinely over-budget canvas: in the merged system most adds slot-fill into declared
+  roles, so reaching the budget needs `body` adds specifically. Pickup: add ≥5 `body`
+  elements to an `editorial_split` design and assert the `layout.whitespace-budget`
+  row plus its three remedies in the Export review list.
+- **The hierarchy advisory's remedies are not yet one-tap actions** (`fix: null`, like
+  the crowding advisory's). The registry declares `release-size-pin` /
+  `raise-primary-role`; wiring them through `constraint-remedies.mjs` is the next slice.
