@@ -40,7 +40,7 @@ import { projectFocalSubjectBox } from "@/lib/render-constraint-measurements.mjs
 import { decorationPaintFraction } from "@/lib/decoration-paint-intersection.mjs";
 import { decorationAlphaGrid, decorationPaintIntersectsRect, drawableDimensions, drawPhotoWithTransform, fittedFrameBounds, photoGeometry, structuralPaintStraddlesRect } from "@/lib/canvas-render-adapters.js";
 import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-placement-policy.mjs";
-import { placeTextElement, resolveTextTreatmentAt, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
+import { placeTextElement, classifyPlacementObstacles, resolveTextTreatmentAt, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
 import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS, LEGACY_ROLE_ORDER } from "@/lib/text-elements.mjs";
@@ -3682,20 +3682,44 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       const CLASS_BASE_PX={ heading:54*S, subheading:38*S, body:30*S, caption:26*S, cta:0.024*h };
       const CLASS_FLOOR_PX={ heading:34*S, subheading:26*S, body:22*S, caption:18*S, cta:0.016*h };
       /* ── OBSTACLES (TEXT UNIFICATION Phase B — NOTHING PHANTOM RESERVES SPACE) ──────
-         HARD: things that genuinely cannot be written over — every DRAWN role box, the
-         logo, and the active shape silhouettes. A role that drew nothing contributes
-         nothing: an empty declared slot is opportunity, never occupancy (ruling 2).
-         SOFT: the photo window. ROOT CAUSE of the client's "clearly there is space"
-         report — the photo window was HARD, so on a full-bleed layout (window = the whole
-         canvas) EVERY candidate collided and the honest-looking "No room in this format"
-         fired on an empty canvas. Text over media is the normal case; the whole
-         register-escalation ladder (ink flip → heavier weight → robust face → size →
-         band) exists to make it legible. Soft means the solver still PREFERS a spot clear
-         of the photo (pass 1) and only lands on it when nothing else clears (pass 2).
-         Each newly-placed element joins the hard set so added elements de-collide. */
-      const baseObstacles=[rb.hero,rb.support,rb.eyebrow,rb.date,rb.pill,renderTruth.logoBox,..._activeShapeBoxes]
-        .filter(Boolean).map(b=>({x:b.x,y:b.y,w:b.w,h:b.h}));
-      const softObstacles=[renderTruth.photoBox].filter(Boolean).map(b=>({x:b.x,y:b.y,w:b.w,h:b.h}));
+         An obstacle is classified by WHAT IT IS, not by which array it happened to land
+         in. The DLC §7 collision matrix is the law: content × logo/legal mark is `B`
+         (blocking); content × structural shape and content × protected subject are `R`
+         (RESOLVE) — and "resolve" means place-with-treatment, never refuse.
+
+         HARD (`B` — genuinely cannot be written over): every DRAWN text role box (text on
+         text is unreadable at any treatment) and the logo/legal mark. A role that drew
+         nothing contributes nothing: an empty declared slot is opportunity, never
+         occupancy (ruling 2). Each newly-placed element joins this set so added elements
+         de-collide from each other.
+
+         SOFT (`R` — a legitimate text SURFACE, resolved by the contrast ladder): the photo
+         window AND the structural silhouettes/panels/fields in `_activeShapeBoxes`. Per
+         DLC §15 the composed surface is `… -> structural panel -> local legibility
+         treatment -> content`: a structural panel is something content sits ON, and
+         contrast is measured on the final surface beneath each role.
+
+         ROOT CAUSE of the client's "clearly there is space" report (twice now). 9997919
+         fixed the photo window; the SAME phantom survived one array over, because every
+         frame silhouette and every free shape is pushed to `_activeShapeBoxes` as the
+         §6a BAND-exclusion set and that set was then reused verbatim as a PLACEMENT
+         exclusion. Those are different questions: a band may not slice a silhouette
+         (§6a, geometric), but TEXT may absolutely sit on one — a flat colour field is the
+         most reliable surface there is. Because a silhouette's obstacle rect is its
+         asset's BOUNDING BOX (a large organic blob's box is mostly empty), one scaled-up
+         shape covered the whole canvas and every candidate collided, so the
+         honest-looking "No room in this format" fired on a ~90%-empty design.
+
+         Soft means the solver still PREFERS a spot clear of both (pass 1) and only lands
+         on one when nothing else clears (pass 2), where the register-escalation ladder
+         (ink flip → heavier weight → robust face → size → band) makes it legible. A
+         refusal now means the candidates were GENUINELY exhausted. */
+      const { hard:baseObstacles, soft:softObstacles }=classifyPlacementObstacles([
+        ...[rb.hero,rb.support,rb.eyebrow,rb.date,rb.pill].map(box=>({kind:"text",box})),
+        { kind:"mark",    box:renderTruth.logoBox },
+        { kind:"surface", box:renderTruth.photoBox },
+        ..._activeShapeBoxes.map(box=>({kind:"silhouette",box})),
+      ]);
       /* ── EMPTY DECLARED SLOTS ARE CANDIDATES (Phase B, ruling 2) ────────────────────
          An archetype zone whose copy is blank drew nothing, so it is absent from
          roleBounds — correctly not an obstacle, but it was also invisible to the solver,
@@ -3710,6 +3734,9 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         return { x:r.x*w, y:r.y*h, w:r.w*w, h:r.h*h, align:r.align||align };
       };
       const _freeSlots={ hero:_freeSlotBox("hero","hero"), support:_freeSlotBox("support","support"), microLabel:_freeSlotBox("microLabel","eyebrow") };
+      if(typeof window!=="undefined"&&TEST_HOOKS){ window.__woObstacleDump=()=>({w,h,safe:safeBox,noBand,mediaObj:!!mediaObj,
+        hard:{hero:rb.hero,support:rb.support,eyebrow:rb.eyebrow,date:rb.date,pill:rb.pill,logo:renderTruth.logoBox,shapes:_activeShapeBoxes.slice()},
+        soft:{photo:renderTruth.photoBox},freeSlots:_freeSlots}); }
       const SLOT_PREFERENCE={ heading:["hero","support"], subheading:["support","hero"], body:["support","hero"], caption:["microLabel"], cta:[] };
       const slotAnchorsFor=(className)=>(SLOT_PREFERENCE[className]||[])
         .map(key=>({ key, box:_freeSlots[key] }))
@@ -3758,7 +3785,17 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const measure=isCta
           ? (mpx,face)=>{ const bs=mpx,padX=bs*0.9,padY=bs*0.55; ctx.font=`600 ${bs}px ${face}`; ctx.letterSpacing=`${0.10*bs}px`; const t=txt.toUpperCase(); const tw=ctx.measureText(t).width+0.10*bs*Math.max(0,t.length-1); ctx.letterSpacing="0px"; return { w:tw+padX*2, h:bs+padY*2 }; }
           : (mpx,face,weight)=>{ ctx.font=`${weight} ${mpx}px ${face}`; const lines=textLines(ctx,txt,colW); const lw=Math.min(colW,Math.max(0,...lines.map(l=>ctx.measureText(l).width))); return { w:lw, h:mpx*1.28*Math.max(1,lines.length) }; };
-        const surface=(box,ink)=>{ if(!mediaObj) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
+        /* (DLC §15) Contrast is measured ON THE FINAL SURFACE beneath the role. `null`
+           means "flat brand field": the zone-resolved baseInk already contrasts it, so no
+           flip is forced — that shortcut is what keeps a field-only design byte-identical.
+           But a box sitting on a STRUCTURAL SILHOUETTE is NOT on the flat field; the
+           surface there is the shape's own colour and must be sampled from the rendered
+           canvas exactly like a photo zone. Without this, text placed over the blob would
+           keep the field's ink and go illegible — the very outcome that made silhouettes
+           look unplaceable. Sampling only when the box overlaps a soft surface leaves the
+           flat-field path (and its result) untouched. */
+        const _onSampledSurface=(box)=>!!mediaObj||softObstacles.some(o=>_rectsHit(box,o));
+        const surface=(box,ink)=>{ if(!_onSampledSurface(box)) return null; const zc=measureZoneContrast(ctx,{x:box.x,y:box.y,w:box.w,h:box.h,cw:w,ch:h},ink); return zc?{min:zc.min,maxV:zc.maxV}:null; };
         const sol=placeTextElement({
           cfg, candidates:cands, hardObstacles:[...baseObstacles,...placedBoxes], softObstacles,
           safe:safeBox, focalBox:null, measure, surface, baseInk, inkPoles,
@@ -7087,6 +7124,7 @@ export default function App() {
     // re-resolves the ink) instead of inferring it from a screenshot.
     window.__woElementFaces = () => (renderResultRef.current?.contentElements || []).map(e => ({ uid:e.uid, class:e.class, placed:!!e.placed, face:e.face??null, ink:e.ink??null, weight:e.weight??null, band:!!e.band, px:e.px??null,
       register:(_docElRef.current?.content?.elements || []).find(d => d.uid === e.uid)?.register ?? null }));
+    window.__woShapes = () => (_docElRef.current?.shapes || []).map(s => ({ uid:s.uid, assetId:s.assetId, mode:s.mode, origin:s.origin, master:s.master }));
     window.__woDocElements = () => (_docElRef.current?.content?.elements || []).map(e => ({ uid:e.uid, class:e.class, text:e.text, sourceRole:e.sourceRole, priority:e.priority, pins:e.pins, register:e.register??null }));
     window.__woScene = () => (renderResultRef.current?.sceneElements || []).map(s => ({ id:s.id, type:s.type, role:s.role, uid:s.uid||null, elementClass:s.elementClass||null, z:s.z, interactive:s.interactive, bounds:s.bounds }));
     window.__woContentElements = () => (renderResultRef.current?.sceneElements || []).filter(s => s.uid).map(s => ({ id:s.id, uid:s.uid, class:s.elementClass, z:s.z, interactive:s.interactive, bounds:s.bounds, px:s.px??null, sizeStep:s.sizeStep??null, sizePinned:!!s.sizePinned, effectiveStep:s.effectiveStep??null, sizeCapped:!!s.sizeCapped }));

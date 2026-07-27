@@ -5,7 +5,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  placeTextElement, makeDateClass, makeEyebrowClass, makeBadgeClass,
+  placeTextElement, classifyPlacementObstacles, OBSTACLE_KINDS,
+  makeDateClass, makeEyebrowClass, makeBadgeClass,
   dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors,
   buildContentBlockAnchors, makeHeadingClass, makeSubheadingClass, makeBodyClass,
   makeSupportClass, resolveElementClassConfig, buildElementAnchors,
@@ -310,4 +311,80 @@ test("dateFurnitureObstacles — projects rule/index/counterweight/badge boxes; 
   assert.deepEqual(obs[0], { x: 100, y: 185, w: 300, h: 30 });     // rule
   assert.equal(dateFurnitureObstacles({}, 1000, 1000).length, 0);  // no furniture → empty
   assert.equal(dateFurnitureObstacles(null, 1000, 1000).length, 0);
+});
+
+/* ── OBSTACLE CLASSIFICATION (DLC §7 collision matrix; the blob-refusal fix) ────────
+   The client's live bug: a structural silhouette (a flat colour blob — a layout-origin
+   fill shape) was collected into the §6a BAND-exclusion set, and that set was then
+   reused verbatim as a PLACEMENT exclusion. Because a silhouette's rect is its asset's
+   BOUNDING BOX, one scaled-up shape covered the canvas and every added text was refused
+   on a ~90%-empty design. The matrix says content × structural shape is `R` — resolve,
+   i.e. place-with-treatment — never `B`. */
+
+test("classifyPlacementObstacles — the matrix decides: mark/text HARD, silhouette/surface SOFT", () => {
+  const box = n => ({ x: n, y: n, w: 100, h: 50 });
+  const { hard, soft } = classifyPlacementObstacles([
+    { kind: "text", box: box(10) },
+    { kind: "mark", box: box(20) },          // logo/legal mark — matrix `B`
+    { kind: "silhouette", box: box(30) },    // structural shape/panel — matrix `R`
+    { kind: "surface", box: box(40) },       // the media window — matrix `R`
+  ]);
+  assert.deepEqual(hard.map(b => b.x), [10, 20]);
+  assert.deepEqual(soft.map(b => b.x), [30, 40]);
+  assert.deepEqual(hard[0], { x: 10, y: 10, w: 100, h: 50 });   // plain rects, extras stripped
+  assert.equal(OBSTACLE_KINDS.mark, "hard");
+  assert.equal(OBSTACLE_KINDS.silhouette, "soft");
+});
+
+test("classifyPlacementObstacles — nothing drawn occupies nothing; unknown kinds fail closed", () => {
+  const { hard, soft } = classifyPlacementObstacles([
+    { kind: "text", box: null },                                  // an empty declared slot
+    { kind: "text", box: undefined },
+    { kind: "silhouette", box: { x: 0, y: 0, w: 0, h: 50 } },      // zero-area → not an obstacle
+    { kind: "silhouette", box: { x: 0, y: 0, w: 10, h: 0 } },
+    { kind: "mystery", box: { x: 5, y: 5, w: 10, h: 10 } },        // unrecognised → HARD
+  ]);
+  assert.deepEqual(soft, []);
+  assert.deepEqual(hard, [{ x: 5, y: 5, w: 10, h: 10 }]);
+  assert.deepEqual(classifyPlacementObstacles(), { hard: [], soft: [] });
+  assert.deepEqual(classifyPlacementObstacles(null), { hard: [], soft: [] });
+});
+
+test("a silhouette does not refuse text — it is a SURFACE the contrast ladder resolves", () => {
+  const blob = { x: 0, y: 0, w: 1000, h: 1000 };          // the blob's bounding box
+  const cands = [{ id: "only", at: () => ({ x: 100, y: 100 }) }];
+  const call = obs => placeTextElement({
+    cfg: makeBodyClass(30, F), candidates: cands,
+    hardObstacles: obs.hard, softObstacles: obs.soft,
+    safe: { x0: 0, y0: 0, x1: 1000, y1: 1000 }, focalBox: null,
+    measure: fixedMeasure(200, 60),
+    // Sampled surface: a dark silhouette → the light pole is the legible ink (rung 0 flip).
+    surface: (_b, ink) => ({ min: ink === "#F5F6E7" ? 9 : 1.2, maxV: 0.01 }),
+    baseInk: "#254E48", inkPoles: ["#254E48", "#F5F6E7"],
+  });
+  const placed = call(classifyPlacementObstacles([{ kind: "silhouette", box: blob }]));
+  assert.ok(placed, "a flat structural silhouette must not refuse text");
+  assert.deepEqual([placed.x, placed.y], [100, 100]);
+  assert.equal(placed.ink, "#F5F6E7");     // the ladder's rung 0 resolved the ink
+  assert.equal(placed.band, false);        // resolved without the last-resort band
+  // The same rect as a MARK still blocks: this is a reclassification, not a weakening —
+  // the logo keeps its hard veto (matrix `B`).
+  assert.equal(call(classifyPlacementObstacles([{ kind: "mark", box: blob }])), null);
+});
+
+test("soft surfaces are PREFERRED-clear, not ignored — pass 1 still wins when space exists", () => {
+  const blob = { x: 0, y: 0, w: 300, h: 300 };
+  const { hard, soft } = classifyPlacementObstacles([{ kind: "silhouette", box: blob }]);
+  const sol = placeTextElement({
+    cfg: makeBodyClass(30, F),
+    candidates: [
+      { id: "on-blob", at: () => ({ x: 10, y: 10 }) },      // sits on the silhouette
+      { id: "clear",   at: () => ({ x: 500, y: 500 }) },    // clear of everything
+    ],
+    hardObstacles: hard, softObstacles: soft,
+    safe: { x0: 0, y0: 0, x1: 1000, y1: 1000 }, focalBox: null,
+    measure: fixedMeasure(100, 40), surface: solidSurface,
+    baseInk: "#254E48", inkPoles: ["#254E48", "#F5F6E7"],
+  });
+  assert.equal(sol.id, "clear");   // the art-directed clear spot still beats the blob
 });
