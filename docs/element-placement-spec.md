@@ -124,6 +124,35 @@ room."*).
   shapes, so default renders are pixel-identical). Live-verified both viewports across the
   editorial/full-bleed/photo-led/text-only set + the pinned-offer case.
 
+## 7c · Layout switch clears added shapes (RATIFIED 2026-07-27)
+
+Client ruling: *"when there is a shape and user wants to switch layout, you should delete
+the shape and change layout."* **This SUPERSEDES the former pins-survive-layout-swap
+behavior for added shapes** (the `planArchetypeMaterializationWorkflow` retention rule
+that carried user-added shape layers across a swap; DLC §3.4 carries the pointer note).
+
+- **Scope** — any LIVE layout/archetype switch: the "Try another layout" chip, the chat
+  belt, a named layout ask, an AI patch's `archetypeId`, and the `"none"` (free-layout)
+  sentinel. Template apply already re-skins (DOCUMENT_REPLACE — the template's shapes ARE
+  the design) and session restore opens the stored document verbatim; both keep the
+  default `clearAddedShapes:false`.
+- **What clears** — ALL added shape layers (fill / decorative / frame; no `origin:"layout"`,
+  not motifs), removed as part of the SAME atomic step (`clearAddedShapes:true` in
+  `planArchetypeMaterializationWorkflow`). Layout-owned structural shapes follow the
+  existing replace rules: an untouched layout instance is replaced by the incoming frame,
+  a user-touched layout instance stays pinned and suppresses it (§3.4).
+- **Media re-home** — if a removed added frame hosted the photo, the SHAPES_REPLACE
+  reducer re-resolves `composition.mediaHostShapeId` (§3.4 machinery): the new layout's
+  own frame takes the photo, else the host clears to `null` and the photo returns to the
+  layout's rectangular media zone. `media.source` is never touched.
+- **One undo** — the switch and the shape removal ride one patch snapshot: a single undo
+  restores the added shapes AND the prior layout together.
+- **Honesty (law 6)** — the reply narrates the removal deterministically ("Switched to
+  {layout} — removed your added shapes so it reads clean. Tap Undo to bring them back
+  with the old layout."), backed by really-changed document paths.
+- Interaction-time only — the fingerprint fixtures add no shapes, so default renders are
+  pixel-identical (0/144).
+
 ## 8 · Build phases (estimate: the largest single build since the archetype system)
 
 - **P1 — the solver core**: extract the logo's candidate/filter/score loop into a shared `placeElement()`; date + eyebrow + badge adopt it (the three "Not shown" offenders). Archetype priors read from existing `elements{}`.

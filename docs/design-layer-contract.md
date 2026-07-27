@@ -125,6 +125,12 @@ into field silhouettes merely because a newer frame was added.
 - Layout swaps replace untouched layout-owned structural instances.
 - A user-touched structural instance is pinned; the new layout must adapt or present a
   conflict decision. It may not silently create a competing frame.
+- **ADDED shapes on a live layout switch (client ruling 2026-07-27 — supersedes the
+  former added-shapes-survive-the-swap retention):** a live layout/archetype switch
+  removes every added (non-layout-owned) shape layer as part of the same atomic step;
+  a removed media-host frame re-homes the photo per this section's removal machinery,
+  and one undo restores shapes + prior layout together. Owner: the full ruling and its
+  scope live in `docs/element-placement-spec.md` §7c (pointer, not duplication).
 
 ## 4. Layer ownership
 

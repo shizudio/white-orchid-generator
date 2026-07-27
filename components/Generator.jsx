@@ -8857,6 +8857,11 @@ function useDesignPatchPipeline(workspace) {
       typeLayoutDefault:mat
         ? (TYPE_LAYOUT_DEFAULTS[mat.postType] || TYPE_LAYOUT_DEFAULTS.text_post)
         : {},
+      // (client ruling 2026-07-27, §7c) A LIVE layout switch removes the user's
+      // added shapes in the same atomic step — this call site serves exactly the
+      // live switch surfaces (chip / chat belt / named ask / AI patch); template
+      // apply re-skins through planTemplateApplicationWorkflow and keeps false.
+      clearAddedShapes:true,
     });
     executeWorkflowGroups(groups);
   };
@@ -8936,6 +8941,12 @@ function useDesignPatchPipeline(workspace) {
       currentSubtext:subtext,archetypeIds:ARCHETYPE_IDS,
       dimensionIds:PATCH_OPTIONS.dimensionId,postTypes:PATCH_OPTIONS.postType,
     });
+    // (client ruling 2026-07-27, §7c) A layout switch DELETES added shapes as part
+    // of the same atomic step — remember whether this switch will clear any, so the
+    // reply can narrate the removal honestly (law 6; renderTruth-backed: the shapes
+    // really leave the document inside this very patch).
+    const clearedAddedShapes = !!transitions.archetype
+      && overlayLayers.some(l => l && !l.motif && l.origin !== "layout");
     if (transitions.archetype) {
       materializeArchetype(transitions.archetype.id,transitions.archetype.context||{});
       applied.push("archetypeId");
@@ -8996,6 +9007,13 @@ function useDesignPatchPipeline(workspace) {
       chatNoteRef.current?.("Switched to full photo so your shape has room. Tap Undo to keep the split layout.");
     } else if (pendingShapeSwitchOffer) {
       chatNoteRef.current?.("Shapes usually sit best on a full-photo layout — just ask for a full-photo layout if you'd like me to switch.");
+    } else if (clearedAddedShapes && applied.includes("archetypeId")) {
+      // (§7c) The switch really removed the added shapes inside THIS patch — say so
+      // honestly, and point at the one undo that restores shapes + layout together.
+      const switchedName = transitions.archetype.id === "none"
+        ? "the free layout"
+        : (ARCHETYPES_BY_ID[transitions.archetype.id]?.name || transitions.archetype.id);
+      chatNoteRef.current?.(`Switched to ${switchedName} — removed your added shapes so it reads clean. Tap Undo to bring them back with the old layout.`);
     }
 
       applied.changedPaths = [...new Set(commandPaths)];

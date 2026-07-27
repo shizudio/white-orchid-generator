@@ -206,7 +206,11 @@ test("archetype materialization resets system-owned layout state through one com
   assert.deepEqual(groups[0].effects,[{type:"clear-shape-selection"}]);
 });
 
-test("archetype swaps preserve user shapes and a touched layout frame wins over the incoming frame", () => {
+// DEFAULT path (clearAddedShapes false — template/restore materialization): a stored
+// document's own added shapes are the design and survive; the LIVE-switch behavior
+// (added shapes deleted, client ruling 2026-07-27 §7c) is the clearAddedShapes:true
+// suite below.
+test("template-path archetype swaps preserve user shapes and a touched layout frame wins over the incoming frame", () => {
   const currentShapes=[
     {uid:"old-motif",assetId:"shape-1",mode:"overlay",motif:true,master:{},byDim:{}},
     {uid:"old-free-layout",assetId:"shape-1",mode:"frame",origin:"layout",master:{},byDim:{}},
@@ -237,6 +241,93 @@ test("an untouched layout frame is replaced by the incoming archetype frame", ()
     }));
 
   assert.deepEqual(after.shapes.map(shape=>shape.uid),["user-shape","incoming-frame","incoming-motif"]);
+});
+
+// ── (client ruling 2026-07-27, element-placement-spec §7c) LIVE layout switch ──
+// "when there is a shape and user wants to switch layout, you should delete the
+// shape and change layout." clearAddedShapes:true is every live switch surface
+// (Try-another-layout chip, chat belt, named ask, AI patch — Generator's
+// materializeArchetype). This deliberately supersedes pins-survive-layout-swap
+// for ADDED shapes; layout-owned structural shapes keep the existing replace
+// rules (untouched → replaced, user-touched → pinned).
+test("a live layout switch deletes added shapes while layout-owned shapes follow the replace rules", () => {
+  const currentShapes=[
+    {uid:"old-motif",assetId:"shape-1",mode:"overlay",motif:true,master:{},byDim:{}},
+    {uid:"old-free-layout",assetId:"shape-1",mode:"frame",origin:"layout",master:{},byDim:{}},
+    {uid:"pinned-frame",assetId:"shape-3",mode:"frame",origin:"layout",userTouched:true,master:{},byDim:{}},
+    {uid:"user-shape",assetId:"shape-2",mode:"overlay",master:{},byDim:{}},
+    {uid:"user-frame",assetId:"petal-brand",mode:"frame",master:{},byDim:{}},
+  ];
+  const after=applyGroups(createDesignDocumentV1({overlayLayers:currentShapes}),
+    planArchetypeMaterializationWorkflow({
+      archetypeId:"arch-cutout",
+      materialized:archetypeMaterialized(),
+      currentShapes,
+      clearAddedShapes:true,
+    }));
+  // Added shapes gone; the user-touched layout pin survives and still suppresses
+  // the incoming frame; the new archetype's motifs land.
+  assert.deepEqual(after.shapes.map(shape=>shape.uid),["pinned-frame","incoming-motif"]);
+});
+
+test("a live switch that removes the photo-hosting added frame re-homes the media to the new layout", () => {
+  const currentShapes=[
+    {uid:"user-frame",assetId:"petal-brand",mode:"frame",master:{x:0.5,y:0.5,scale:0.5},byDim:{}},
+  ];
+  const before=createDesignDocumentV1({
+    overlayLayers:currentShapes,
+    image:"data:image/png;base64,live-photo",
+  });
+  const seeded={...before,composition:{...before.composition,mediaHostShapeId:"user-frame"}};
+  assert.equal(seeded.composition.mediaHostShapeId,"user-frame");
+  const after=applyGroups(seeded,
+    planArchetypeMaterializationWorkflow({
+      archetypeId:"arch-cutout",
+      materialized:archetypeMaterialized(),
+      currentShapes,
+      clearAddedShapes:true,
+    }));
+  // The added host frame is gone; the reducer re-resolves the host to the NEW
+  // layout's own frame (§3.4 machinery) and the photo itself is untouched.
+  assert.equal(after.shapes.some(shape=>shape.uid==="user-frame"),false);
+  assert.equal(after.composition.mediaHostShapeId,"incoming-frame");
+  assert.equal(after.media.source,"data:image/png;base64,live-photo");
+});
+
+test("a live switch to a frameless layout returns the media host to the layout media zone (null)", () => {
+  const currentShapes=[
+    {uid:"user-frame",assetId:"petal-brand",mode:"frame",master:{x:0.5,y:0.5,scale:0.5},byDim:{}},
+  ];
+  const before=createDesignDocumentV1({
+    overlayLayers:currentShapes,
+    image:"data:image/png;base64,live-photo",
+  });
+  const seeded={...before,composition:{...before.composition,mediaHostShapeId:"user-frame"}};
+  const after=applyGroups(seeded,
+    planArchetypeMaterializationWorkflow({
+      archetypeId:"arch-documentary",
+      materialized:archetypeMaterialized({layoutShapeLayer:null,motifLayers:null}),
+      currentShapes,
+      clearAddedShapes:true,
+    }));
+  assert.deepEqual(after.shapes,[]);
+  assert.equal(after.composition.mediaHostShapeId,null);
+  assert.equal(after.media.source,"data:image/png;base64,live-photo");
+});
+
+test("a live switch to the free layout clears added shapes but keeps the old layout's own shapes", () => {
+  const currentShapes=[
+    {uid:"old-motif",assetId:"shape-1",mode:"overlay",motif:true,master:{},byDim:{}},
+    {uid:"layout-frame",assetId:"shape-2",mode:"frame",origin:"layout",master:{},byDim:{}},
+    {uid:"user-shape",assetId:"shape-3",mode:"overlay",master:{},byDim:{}},
+  ];
+  const groups=planArchetypeMaterializationWorkflow({archetypeId:"none",currentShapes,clearAddedShapes:true});
+  const after=applyGroups(createDesignDocumentV1({archetypeId:"arch-cutout",overlayLayers:currentShapes}),groups);
+  assert.equal(after.composition.archetypeId,null);
+  assert.deepEqual(after.shapes.map(shape=>shape.uid),["old-motif","layout-frame"]);
+  // Atomic: the provenance clear and the shape removal ride ONE group (one undo).
+  assert.equal(groups.length,1);
+  assert.deepEqual(groups[0].effects,[{type:"clear-shape-selection"}]);
 });
 
 test("the none sentinel only clears archetype provenance and its variant", () => {
