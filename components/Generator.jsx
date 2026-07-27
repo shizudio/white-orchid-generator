@@ -2645,6 +2645,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     readableLogoForField,
     brandLogoForContext,
     selectedLogoVariant,
+    editingRoleRef,
   } = runtime;
     if(!ctx) return;
     const model=opts.renderModel||renderModel;
@@ -2721,6 +2722,14 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     // Content degradation tracking (spec §6). fitText already shrinks type to a
     // floor; here we DROP tertiary/secondary copy that still won't fit rather than
     // overflow the safe zone, and record which fields were dropped for a UI hint.
+    // ── (Client ruling 2026-07-26 — EDITING GRACE) ────────────────────────────────────
+    // The role being typed into right now. Mid-word is not a verdict: while a role is
+    // focused it paints live at least at its floor and is never dropped, so the canvas
+    // never blanks under the cursor. LIVE renders only — calibration/legacy-guard/export
+    // sweeps must stay deterministic and never see an editor cursor (born-clean, the
+    // fingerprint baseline and every offscreen audit are unaffected by editor focus).
+    const editingRole=(live && !opts.calibrationContent && !opts.legacyForce && !opts.captureAudit)
+      ? (editingRoleRef?.current || null) : null;
     const dropped=[];
     // (Client ruling 2026-07-26 — the title always paints) Roles the painter kept VISIBLE
     // past the layout's honest capacity (required content: painted, not dropped). They are
@@ -4207,6 +4216,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         ctx.save(); ctx.fillStyle=heroInk;
         const lblSize=Math.min(reflow.labelSize, labelBox.h);
         eyebrowDrawnW=drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,lblSize,{align:mat.roles?.microLabel?.align||"left",tracking:0.08,maxW:labelBox.w,minSize:Math.max(12*S,lblSize*0.55)});
+        // (EDITING GRACE 2026-07-26) While the eyebrow field is focused the fit-or-drop
+        // gate is suspended: draw it unbounded at the floor so the label stays visible
+        // through the whole typing session. The solver rescue + honest drop run on blur.
+        if(eyebrowDrawnW==null && editingRole==="eyebrow"){
+          eyebrowDrawnW=drawMicroLabel(ctx,eyebrow,labelBox.x,labelBox.y,Math.max(12*S,lblSize*0.55),{align:mat.roles?.microLabel?.align||"left",tracking:0.08});
+        }
         ctx.restore();
         if(eyebrowDrawnW==null){ dropped.push("Eyebrow"); labelBox=null; }
         else if(_roleB) _roleB.eyebrow={x:labelBox.x,y:labelBox.y-lblSize*0.5,w:Math.max(eyebrowDrawnW||0,labelBox.w*0.4),h:lblSize*1.8};
@@ -4776,7 +4791,17 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           });
           // (Crops ext) COMPLETE-OR-ABSENT: the caption renders ALL its wrapped
           // lines or not at all — a mid-sentence cut never ships (client rule).
-          if(!supportPlan.willDraw){
+          // (EDITING GRACE 2026-07-26) …EXCEPT while this very role is being typed into.
+          // A caption that will fit two words from now must not vanish under the cursor,
+          // so the focused role paints its complete wrapped block at the floor size and
+          // records no drop. The settled complete-or-absent verdict runs on blur.
+          const _supGrace=!supportPlan.willDraw && editingRole==="support" && sf.lines.length>0;
+          if(_supGrace){
+            drawTextLines(ctx,sf.lines,supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
+            ctx.letterSpacing="0px";
+            fontMeta.subtext=sf.size;
+            supUsedH=sf.lines.length*sf.lineHeight;
+          }else if(!supportPlan.willDraw){
             dropped.push("Details");
             ctx.letterSpacing="0px";
           }else{
@@ -5836,6 +5861,21 @@ export default function App() {
   const photoWindowRef = useRef(null);
   const deadRolesRef = useRef([]);
   const [deadRoles, setDeadRoles] = useState([]);
+  // ── (Client ruling 2026-07-26 — EDITING GRACE) ────────────────────────────────────
+  // The role whose inspector field (or on-canvas editor) is FOCUSED right now. Half a
+  // typed word is not a layout verdict: while a role is being edited the renderer paints
+  // it live at least at its floor and its drop is never published, so the canvas cannot
+  // blank and the "Not shown in this layout" banner cannot flip between keystrokes. The
+  // settled resolution + findings run on blur. Held BOTH as state (drives the draw effect
+  // so blur republishes immediately) and as a ref (read inside renderScene — M1: deferred
+  // render paths read refs, never a captured closure).
+  const [editingRole, setEditingRole] = useState(null);
+  const editingRoleRef = useRef(null);
+  const beginRoleEdit = useCallback(role => {
+    const next = role || null;
+    editingRoleRef.current = next;
+    setEditingRole(previous => previous === next ? previous : next);
+  }, []);
   // (Slice 3) The added-element placement ledger as REACTIVE state (published by
   // useLiveCanvasRender after each draw): [{uid,class,placed,reason,box}]. Drives the
   // element inspector's honest "placed / no room in this format" note and the rail's
@@ -6729,6 +6769,7 @@ export default function App() {
     readableLogoForField,
     brandLogoForContext,
     selectedLogoVariant,
+    editingRoleRef,
   }), [renderModel, readableLogoForField, brandLogoForContext, selectedLogoVariant]);
 
   const draw = useLiveCanvasRender({
@@ -6752,6 +6793,7 @@ export default function App() {
     setLogoOverlapHint,
     setDeadRoles,
     setContentLedger,
+    editingRole,
     devHooks: DEV_HOOKS,
   });
 
@@ -9069,6 +9111,7 @@ function InspectorWorkspace({ workspace }) {
         pill={{visible:!!(badge||pillText!=null),value:pillText??badge?.text??""}}
         deadRoles={deadRoles.map(role=>deadLabels[role]||role)} switchLayoutId={archetypeId!==target?target:null}
         onField={(field,value)=>applyPatch({[field]:value},{source:"ui"})} onSwitchLayout={id=>applyPatch({archetypeId:id},{source:"ui"})}
+        onEditRole={beginRoleEdit}
         palette={B} fonts={F}/>
       {/* ── (GLOBAL HIERARCHICAL SIZE — client ruling 2026-07-23) The primary eyeline
           "Size" control is now the DOCUMENT-LEVEL S/M/L: it scales EVERY text element at

@@ -22,6 +22,13 @@ export function useLiveCanvasRender({
   setLogoOverlapHint,
   setDeadRoles,
   setContentLedger,
+  // (Client ruling 2026-07-26 — EDITING GRACE) The role whose field/on-canvas editor is
+  // ACTIVE right now ("hero" | "support" | "eyebrow" | "date" | "pill" | null). While a
+  // role is being typed into, its verdict is not final: half a word is not a layout
+  // failure. Its drop is never published, so the "Not shown in this layout" banner cannot
+  // flip between keystrokes. Passed as a VALUE (not a ref) so focus/blur re-runs the draw
+  // effect and the settled truth publishes the moment the field is left.
+  editingRole = null,
   devHooks,
 }) {
   const dropInfoRef = useRef(null);
@@ -59,8 +66,12 @@ export function useLiveCanvasRender({
     // transiently drop a role it will place once fonts/assets land, so the banner must
     // never claim a first-paint drop that a settled render disproves — the settled repaint
     // (fonts ready) publishes the truth.
+    // (EDITING GRACE) The role under the cursor is withheld from the published set: the
+    // renderer keeps painting it (required roles always, optional roles at their floor
+    // while focused), and the banner never claims a loss the next keystroke disproves.
+    // On blur editingRole becomes null, this effect re-runs, and the honest verdict lands.
     if (fontsLoaded) {
-      const droppedRoles = result.droppedRoles || [];
+      const droppedRoles = (result.droppedRoles || []).filter(role => role !== editingRole);
       setDeadRoles(previous => previous.join(",") === droppedRoles.join(",") ? previous : droppedRoles);
     }
     return result;
@@ -70,6 +81,7 @@ export function useLiveCanvasRender({
     deadRolesRef,
     dimensionId,
     drawSequenceRef,
+    editingRole,
     fontMetaRef,
     fontsLoaded,
     height,
