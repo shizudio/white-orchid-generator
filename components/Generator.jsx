@@ -9159,6 +9159,59 @@ function InspectorWorkspace({ workspace }) {
         onField={(field,value)=>applyPatch({[field]:value},{source:"ui"})} onSwitchLayout={id=>applyPatch({archetypeId:id},{source:"ui"})}
         onEditRole={beginRoleEdit}
         palette={B} fonts={F}/>
+      {/* ── (TEXT UNIFICATION Phase A — ONE TEXT HOME, docs/text-unification-spec.md) ──
+          The ADDED text elements are rows in the SAME list as the legacy role fields
+          above: class label + text field, and the SELECTED row expands to that
+          element's own controls (size/pin/Auto, style/register, type, priority,
+          remove). There is no separate per-element pill and no separate panel — a
+          canvas tap on any text routes here (selectionInspectorKey → "text") and
+          focusTextField focuses the row's field by its data-wo-role. Editing grace
+          (client ruling 2026-07-26) rides the same beginRoleEdit wiring the legacy
+          fields use, keyed by the element's `el:<uid>` render role. */}
+      {addedElementModels.map(model=>{
+        const el=(designDocument.content.elements||[]).find(item=>item.uid===model.uid);
+        if(!el) return null;
+        const roleKey=`el:${model.uid}`;
+        const on=textRole===roleKey;
+        const label=ELEMENT_CLASS_LABELS[el.class]||"Text";
+        return <div key={model.uid} className="wo-textrow" data-wo-textrow={roleKey}
+          style={{marginTop:10,padding:on?"10px 11px 12px":"8px 0 0",borderRadius:10,
+            border:on?`1.5px solid ${B.burnham}44`:"none",background:on?`${B.burnham}08`:"transparent"}}>
+          <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
+            <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>{label}</span>
+            {model.placed===false&&<span title="No room in this format" style={{fontSize:10,color:B.tangerine,fontFamily:F.subtitle,fontWeight:700}}>∅</span>}
+            {!on&&<button type="button" className="wo-ins-pill" onClick={()=>{setChangeTypeOpen(false);selectElement("text",null,roleKey);}}
+              style={{marginLeft:"auto",padding:"4px 10px",minHeight:28,borderRadius:999,border:`1px solid ${B.ash}44`,background:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.4,cursor:"pointer"}}>Options</button>}
+          </div>
+          <textarea className="wo-mfield" data-wo-role={roleKey} aria-label={`${label} text`} value={el.text||""} maxLength={el.class==="cta"?30:220}
+            onFocus={()=>{beginRoleEdit(roleKey);if(!on){setChangeTypeOpen(false);selectElement("text",null,roleKey);}}}
+            onBlur={()=>beginRoleEdit(null)}
+            onChange={event=>dispatchElementCommand({ type:"content/set-element-text", uid:model.uid, value:event.target.value })}
+            style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:16,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:F.body,height:el.class==="cta"?46:64,resize:"vertical"}}/>
+          {on&&renderElementRowControls(model.uid)}
+        </div>;
+      })}
+      {/* ── + ADD TEXT — the five-class picker (text-elements-spec §3) ──────────────
+          (Phase A) It sits at the BOTTOM OF THE SAME LIST as the rows above: one
+          text home, one way to grow it. Plain labels a preschool teacher reads at a
+          glance ("Button", not "CTA"). Choosing a class adds it with a short starter
+          and selects it, so its row expands in place. An element the solver can't
+          seat surfaces an honest note in that row (never a silent no-op). */}
+      <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
+        <button type="button" onClick={()=>setAddTextOpen(open=>!open)} aria-expanded={addTextOpen}
+          style={{display:"flex",alignItems:"center",gap:8,width:"100%",minHeight:44,padding:"10px 12px",borderRadius:10,border:`1.5px dashed ${B.burnham}55`,background:addTextOpen?`${B.burnham}0c`:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:0.3,cursor:"pointer"}}>
+          <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>＋</span> Add text
+        </button>
+        {addTextOpen&&<div role="group" aria-label="Choose a text type to add" style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
+          {ELEMENT_ADD_CHOICES.map(choice=>(
+            <button key={choice.cls} type="button" onClick={()=>addTextElement(choice.cls,choice.starter)}
+              style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",minHeight:44,padding:"10px 13px",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"left"}}>
+              <span>{choice.label}</span>
+              <span aria-hidden="true" style={{fontSize:11,color:B.ash}}>＋</span>
+            </button>
+          ))}
+        </div>}
+      </div>
       {/* ── (GLOBAL HIERARCHICAL SIZE — client ruling 2026-07-23) The primary eyeline
           "Size" control is now the DOCUMENT-LEVEL S/M/L: it scales EVERY text element at
           once, by information hierarchy (title moves most, the rest restrained; S
@@ -9279,37 +9332,18 @@ function InspectorWorkspace({ workspace }) {
           </>
         )}
       </MoreFold>
-      {/* ── (Slice 3) + ADD TEXT — the five-class picker (text-elements-spec §3) ──
-          Plain labels a preschool teacher reads at a glance ("Button", not "CTA").
-          Choosing a class adds it with a short starter, then selects it so its own
-          inspector opens immediately. Elements the solver can't seat surface an honest
-          note in that inspector (never a silent no-op). */}
-      <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
-        <button type="button" onClick={()=>setAddTextOpen(open=>!open)} aria-expanded={addTextOpen}
-          style={{display:"flex",alignItems:"center",gap:8,width:"100%",minHeight:44,padding:"10px 12px",borderRadius:10,border:`1.5px dashed ${B.burnham}55`,background:addTextOpen?`${B.burnham}0c`:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:0.3,cursor:"pointer"}}>
-          <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>＋</span> Add text
-        </button>
-        {addTextOpen&&<div role="group" aria-label="Choose a text type to add" style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
-          {ELEMENT_ADD_CHOICES.map(choice=>(
-            <button key={choice.cls} type="button" onClick={()=>addTextElement(choice.cls,choice.starter)}
-              style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",minHeight:44,padding:"10px 13px",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"left"}}>
-              <span>{choice.label}</span>
-              <span aria-hidden="true" style={{fontSize:11,color:B.ash}}>＋</span>
-            </button>
-          ))}
-        </div>}
-      </div>
     </>;
   };
 
-  /* ── (Slice 3) ELEMENT INSPECTOR — one added content.element ────────────────────
-     A real panel for a user-added text element (docs/text-elements-spec.md §2): its
-     text (16px+ so mobile never zooms), the sanctioned S/M/L size step, its class
-     (read-only, with a governed "change type" affordance that lists ONLY canTransition
-     targets), a priority up/down, and an honest "no room in this format" note when the
-     solver could not seat it. Every mutation is a typed command → one action, one undo.
-     Remove rides the standard header remove pattern (useInspectorModel). */
-  const renderElementInspector = (uid) => {
+  /* ── (Phase A) ELEMENT ROW CONTROLS — the expanded body of one text row ─────────
+     Rendered INSIDE the one Text panel, under the selected row's text field (the row
+     owns the field itself — 16px+ so mobile never zooms). Here live the sanctioned
+     S/M/L size step (with Auto = follow the global step), the sanctioned register
+     switch, the governed change-type affordance (canTransition targets only), a
+     priority up/down, an honest "no room in this format" note when the solver could
+     not seat it, and Remove with the ratified undo reassurance. Every mutation is a
+     typed command → one action, one undo. */
+  const renderElementRowControls = (uid) => {
     const el = (designDocument.content.elements || []).find(item => item.uid === uid);
     if (!el) return null;
     const model = addedElementModels.find(m => m.uid === uid) || null;
@@ -9326,11 +9360,6 @@ function InspectorWorkspace({ workspace }) {
     const registerChoices = sanctionedRegistersForClass(RESOLVED_TYPOGRAPHY, el.class);
     const activeRegister = el.register || registerChoices[0];
     return <>
-      {/* Text — 16px min font keeps iOS from zooming on focus (mobile input rule). */}
-      <label style={{display:"block",fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Text</label>
-      <textarea className="wo-mfield" aria-label={`${classLabel} text`} value={el.text||""} maxLength={el.class==="cta"?30:220}
-        onChange={event=>dispatchElementCommand({ type:"content/set-element-text", uid, value:event.target.value })}
-        style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:16,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:F.body,height:el.class==="cta"?46:80,resize:"vertical"}}/>
       {unplaced&&<div role="note" style={{margin:"9px 0 2px",padding:"9px 11px",borderRadius:9,border:`1px solid ${B.tangerine}55`,background:`${B.tangerine}10`,fontSize:11,fontFamily:F.body,color:B.burnham,lineHeight:1.5}}>
         <strong style={{fontFamily:F.subtitle,letterSpacing:0.3}}>No room in this format.</strong> There isn't a clean spot for this {classLabel.toLowerCase()} here — try a shorter line, a smaller size, or remove another element. It's safely kept for your other formats.
       </div>}
@@ -9383,12 +9412,12 @@ function InspectorWorkspace({ workspace }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
         <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Type</span>
         <span style={{fontSize:12,fontFamily:F.subtitle,fontWeight:700,color:B.jet}}>{classLabel}</span>
-        {targets.length>0&&<button type="button" onClick={()=>setChangeTypeOpen(open=>!open)} aria-expanded={changeTypeOpen}
+        {targets.length>0&&<button type="button" className="wo-ins-pill" onClick={()=>setChangeTypeOpen(open=>!open)} aria-expanded={changeTypeOpen}
           style={{marginLeft:"auto",padding:"6px 11px",borderRadius:999,border:`1px solid ${B.ash}44`,background:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.4,cursor:"pointer"}}>Change type</button>}
       </div>
       {changeTypeOpen&&targets.length>0&&<div role="group" aria-label="Change text type" style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
         {targets.map(target=>(
-          <button key={target} type="button" onClick={()=>{dispatchElementCommand({ type:"content/set-element-class", uid, value:target });setChangeTypeOpen(false);}}
+          <button key={target} type="button" className="wo-ins-pill" onClick={()=>{dispatchElementCommand({ type:"content/set-element-class", uid, value:target });setChangeTypeOpen(false);}}
             style={{padding:"7px 12px",minHeight:36,borderRadius:999,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:600,cursor:"pointer"}}>{ELEMENT_CLASS_LABELS[target]||target}</button>
         ))}
       </div>}
@@ -9397,14 +9426,23 @@ function InspectorWorkspace({ workspace }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
         <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Priority</span>
         <span style={{fontSize:11,fontFamily:F.body,color:B.ash,flex:"1 1 auto"}}>Keeps its place when space is tight</span>
-        <button type="button" aria-label="Lower priority" title="Lower priority"
+        <button type="button" className="wo-ins-pill" aria-label="Lower priority" title="Lower priority"
           onClick={()=>dispatchElementCommand({ type:"content/set-element-priority", uid, value:Math.max(0,(el.priority||0)-10) })}
           style={{width:36,height:36,borderRadius:8,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontSize:15,fontWeight:700,cursor:"pointer"}}>−</button>
-        <button type="button" aria-label="Raise priority" title="Raise priority"
+        <button type="button" className="wo-ins-pill" aria-label="Raise priority" title="Raise priority"
           onClick={()=>dispatchElementCommand({ type:"content/set-element-priority", uid, value:(el.priority||0)+10 })}
           style={{width:36,height:36,borderRadius:8,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontSize:15,fontWeight:700,cursor:"pointer"}}>＋</button>
       </div>
       <div style={{fontSize:10,color:B.ash,marginTop:10,fontFamily:F.body,lineHeight:1.45}}>Drag it on the preview to place it exactly; your spot is kept per format.</div>
+
+      {/* Remove — the sanctioned delete for an added element, with the ratified
+          reassurance line (same words the inspector pill delete carries). One typed
+          command = one undo step. */}
+      <div style={{display:"flex",alignItems:"center",gap:9,marginTop:14,paddingTop:12,borderTop:`1px solid ${B.ash}22`}}>
+        <button type="button" className="wo-ins-pill" onClick={()=>{dispatchElementCommand({ type:"content/remove-element", uid });setChangeTypeOpen(false);}}
+          style={{padding:"7px 14px",minHeight:36,borderRadius:999,border:`1px solid ${B.tangerine}66`,background:"transparent",color:B.tangerine,fontFamily:F.subtitle,fontSize:11,fontWeight:700,letterSpacing:0.4,cursor:"pointer"}}>Remove</button>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4}}>Deleting is undoable — ⌘Z brings it back.</span>
+      </div>
     </>;
   };
 
@@ -9534,13 +9572,11 @@ function InspectorWorkspace({ workspace }) {
     hasRenderedLogo: !!(selectedLogoVariant && logoObj),
     archetypeId,
     shapeLayers: overlayLayers,
-    textRole,
     selectionFlags: { photo:photoSel, text:textSelected, logo:logoSel, background:bgSel },
     renderResultRef,
     furnitureMetaFor,
     furnitureLabels: FURN_LABELS,
     shapeAssets: overlays,
-    contentElements: addedElementModels,
     closeInspector,
     applyPatch,
     deleteShape: deleteLayer,
@@ -9551,13 +9587,11 @@ function InspectorWorkspace({ workspace }) {
     renderLogo: renderInspectorLogo,
     renderFurniture: renderFurniturePanel,
     renderShape: renderOverlayPanel,
-    renderElement: renderElementInspector,
-    removeElement: (uid) => dispatchElementCommand({ type:"content/remove-element", uid }),
   });
 
   const renderInspectorPanel = () => <ContextualInspector info={inspectorInfo} removeAction={inspectorRemove}
     onClose={closeInspector} elements={activeElements} activeKey={activeElKey} onDeleteElement={inspectorRemoveByKey}
-    onSelect={el=>el.element?(setChangeTypeOpen(false),selectElement("text",null,`el:${el.uid}`)):el.overlay?selectElement("overlay",el.key):selectElement(el.key)} palette={B} fonts={FU}/>;
+    onSelect={el=>el.overlay?selectElement("overlay",el.key):selectElement(el.key)} palette={B} fonts={FU}/>;
   return inspectorInfo ? renderInspectorPanel() : null;
 }
 
