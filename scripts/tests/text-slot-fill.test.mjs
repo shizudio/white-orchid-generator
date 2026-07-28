@@ -37,13 +37,16 @@ test("a quote's support line IS its attribution (ContentFieldsPanel parity)", ()
 test("slot-fill mapping per class × archetype-declared roles", () => {
   const empty = doc();
   assert.deepEqual(slotFillTargetForClass(empty, "heading"), { role:"hero", field:"headline" });
-  assert.deepEqual(slotFillTargetForClass(empty, "subheading"), { role:"support", field:"subtext" });
+  // (Amendment 2026-07-27 ruling 1 — DEFAULT FILLS ARE HEADING + BODY) The secondary
+  // declared slot belongs to BODY now; subheading is always a genuine free element.
+  assert.deepEqual(slotFillTargetForClass(empty, "body"), { role:"support", field:"subtext" });
+  assert.equal(slotFillTargetForClass(empty, "subheading"), null);
+  // (ruling 1) …but never on a quote, whose support line IS its attribution credit.
+  assert.equal(slotFillTargetForClass(doc({ postType:"quote" }), "body"), null);
   // caption prefers the eyebrow micro-label, but only where the layout declares one.
   assert.deepEqual(slotFillTargetForClass(empty, "caption"), { role:"date", field:"dateText" });
   const withEyebrow = doc({ typography:{ masterLayouts:{ photo_logo:{ roles:{ microLabel:{ x:0.1,y:0.1,w:0.3,h:0.05 } } } } } });
   assert.deepEqual(slotFillTargetForClass(withEyebrow, "caption"), { role:"eyebrow", field:"microLabel" });
-  // `body` is a free reading block — never a slot fill.
-  assert.equal(slotFillTargetForClass(empty, "body"), null);
   // `cta` fills the pill only where the design declares one (pillText present).
   assert.equal(slotFillTargetForClass(empty, "cta"), null);
   assert.deepEqual(slotFillTargetForClass(doc({ pillText:"" }), "cta"), { role:"pill", field:"pillText" });

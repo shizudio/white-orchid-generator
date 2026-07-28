@@ -723,8 +723,12 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       // (WP-W0) capture render truth BEFORE applying, for claim-vs-result below.
       const truthBefore = typeof truthRef.current === 'function' ? truthRef.current() : null;
       let changeKeys = [];
+      // (Amendment 2026-07-27 ruling 2) Reducer refusals this patch surfaced — e.g.
+      // addTextElement for a class the design already carries (class-exclusive adds).
+      let patchRefusals = [];
       if (patchHasChanges(patch)) {
         const applyResult = onApplyPatch(patch) || [];
+        if (Array.isArray(applyResult.refusals)) patchRefusals = applyResult.refusals;
         const resultPaths = Array.isArray(applyResult.changedPaths) ? applyResult.changedPaths : [];
         changeKeys = resultPaths.length
           ? [...new Set([...resultPaths.map(commandPathToPatchKey).filter(Boolean), ...applyResult.filter(key => key === 'dimensionId')])]
@@ -809,6 +813,30 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       });
       verdict.didChange = didChange;
       verdict.archetypeBefore = truthBefore?.archetypeId ?? null;
+
+      // ── (Amendment 2026-07-27 ruling 2) REFUSED ADD — HONEST SURFACE (M2) ────
+      // The reducer refused an addTextElement because that class is already on the
+      // design (one of each, maximum). The deterministic belt already refuses this
+      // up front with no patch; this catches the live-model path, where the model
+      // may still have narrated an add that never landed. Name the ratified reason
+      // (Body's encourages another paragraph inside the one Body) — never a
+      // generic "nothing changed". When the refusal was the turn's only intent,
+      // stop here; if other fields landed, the note rides along and verification
+      // continues.
+      {
+        const addRefusal = patchRefusals.find(r => r && r.command === 'content/add-element');
+        if (addRefusal) {
+          verdict.honesty = 'corrected';
+          verdict.corrected = true;
+          verdict.contradictions = verdict.contradictions || [];
+          verdict.contradictions.push('add-element-refused-class-exclusive');
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `One honest note — that text didn't get added. ${addRefusal.reason || 'This design already has one of that text type.'}`,
+          }]);
+          if (!didChange) { setLoading(false); return; }
+        }
+      }
 
       // ── (WP-W0) CLAIM-VS-RESULT VERIFICATION (render truth) ──────────────────
       if (truthBefore && typeof truthRef.current === 'function') {

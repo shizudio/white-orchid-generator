@@ -369,16 +369,17 @@ test("one format reset clears every local design override and ownership marker",
 });
 
 test("add-element generates a unique uid and reports one changed path (one undo)", () => {
-  // `body` maps to NO declared legacy slot, so it is always a genuine added element
+  // (Amendment 2026-07-27 ruling 1) `subheading` now maps to NO declared legacy slot
+  // (the secondary slot belongs to body), so it is always a genuine added element
   // (the slot-fill merge is exercised by its own tests below).
   const before = createDesignDocumentV1();
   const result = applyDesignCommand(before, {
     type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
-    element:{ class:"body", text:"Doors open 9am" },
+    element:{ class:"subheading", text:"Doors open 9am" },
   });
   assert.equal(result.document.content.elements.length, 1);
   const added = result.document.content.elements[0];
-  assert.equal(added.class, "body");
+  assert.equal(added.class, "subheading");
   assert.equal(added.text, "Doors open 9am");
   assert.equal(added.authorship, "owner");
   assert.equal(added.required, false);
@@ -403,34 +404,45 @@ test("(merge) adding a heading into an EMPTY declared title slot BECOMES the rol
   assert.equal(result.document.content.elements[0].class, "heading");
 });
 
-test("(merge) a FILLED slot is not re-filled — the add stays a genuine element", () => {
+test("(merge → amendment 2026-07-27) a FILLED slot's class is REFUSED with the ratified reason", () => {
+  // Class-exclusive adds: one Heading maximum. The filled headline projects as the
+  // one heading, so a second heading add is refused in the reducer — with the
+  // tap-reason the UI and chat surface, never a silent no-op (M2).
   const seeded = createDesignDocumentV1({ headline:"Already here" });
   const result = applyDesignCommand(seeded, {
     type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT,
     element:{ class:"heading", text:"Second heading" },
   });
   assert.equal(result.document.content.headline, "Already here");
-  assert.equal(result.document.content.elements.filter(e => !e.sourceRole).length, 1);
-  assert.match(result.changedPaths[0], /^content\.elements\.el_heading_/);
+  assert.deepEqual(result.changedPaths, []);
+  assert.deepEqual(result.document, seeded);
+  assert.equal(result.refusal.class, "heading");
+  assert.match(result.refusal.reason, /already has a Heading/);
 });
 
 test("(merge) slot-fill maps each class to its declared role family", () => {
   const fill = (cls, seed = {}) => {
     const doc = createDesignDocumentV1(seed);
     const out = applyDesignCommand(doc, { type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:cls, text:"X" } });
-    return out.changedPaths[0];
+    return out.refusal ? "refused" : out.changedPaths[0];
   };
   assert.equal(fill("heading"), "content.headline");
-  assert.equal(fill("subheading"), "content.subtext");
+  // (Amendment 2026-07-27 ruling 1) DEFAULT FILLS ARE HEADING + BODY: the secondary
+  // declared slot now belongs to BODY; subheading is always a genuine free element.
+  assert.equal(fill("body"), "content.subtext");
+  assert.match(fill("subheading"), /^content\.elements\./);
   assert.equal(fill("caption"), "content.dateText");                        // date is the declared caption slot
-  assert.match(fill("caption", { dateText:"18 Sep" }), /^content\.elements\./);   // filled slot → element
-  assert.match(fill("body"), /^content\.elements\./);                      // body has no legacy slot
+  // (ruling 2) a filled caption-family slot means the class is IN USE → refused.
+  assert.equal(fill("caption", { dateText:"18 Sep" }), "refused");
   assert.match(fill("cta"), /^content\.elements\./);                       // no badge declared → element
-  // A quote's support line IS its attribution.
+  // (ruling 1) A quote's support line IS its attribution — a caption-class credit,
+  // never a reading block: a body add on a quote stays a genuine element.
   const quote = createDesignDocumentV1({ postType:"quote" });
-  const out = applyDesignCommand(quote, { type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:"subheading", text:"— Aisha" } });
-  assert.equal(out.changedPaths[0], "content.attribution");
+  const out = applyDesignCommand(quote, { type:DESIGN_COMMAND_TYPES.CONTENT_ADD_ELEMENT, element:{ class:"body", text:"— Aisha" } });
+  assert.match(out.changedPaths[0], /^content\.elements\./);
+  assert.equal(quoteDocAttribution(out.document), "");
 });
+const quoteDocAttribution = document => document.content.attribution;
 
 test("(merge) editing / removing a MIGRATED element writes the role's own field", () => {
   const doc = createDesignDocumentV1({ headline:"First" });

@@ -4,7 +4,7 @@ import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
-import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest } from '@/lib/assistant-intents';
+import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal } from '@/lib/assistant-intents';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -1013,6 +1013,13 @@ function compactDesignState(raw) {
     // archetype × format, so the copy-writing prompts below can inject it and generated
     // copy fits the slot by construction. Absent on the landing flow (no design yet).
     copyBudget: (raw.copyBudget && typeof raw.copyBudget === 'object') ? raw.copyBudget : null,
+    // (Amendment 2026-07-27 ruling 2 — class-exclusive adds) The element classes already
+    // IN USE on the design (filled legacy-role projections + added elements — one system),
+    // so the add-element belt and the model prompt can refuse a duplicate class honestly
+    // instead of silently no-oping in the reducer (M2). Sanitized to the closed enum.
+    elementClasses: Array.isArray(raw.elementClasses)
+      ? raw.elementClasses.filter(c => ELEMENT_CLASSES.includes(c))
+      : [],
   };
 }
 
@@ -1214,7 +1221,7 @@ VOCABULARY-FREE ADDING (WP-V §3.3): the user is not a designer — they describ
 - "the date / when it is" → dateText (only a date the user actually supplied)
 - "the big text / the title / the main words" → headline
 TEACH THE TERM BACK: when you add or change a mapped element, your reply gently names it once so the user learns the word — e.g. "Added that as a caption — the small text under your headline. Tap it anytime to edit." or "That's the eyebrow — the little label up top. Done." Keep it warm, one sentence, never lecture.
-ADDING A NEW, EXTRA ELEMENT (spec §5): when the user wants an ADDITIONAL piece of text beyond the built-in roles — "add a caption saying …", "add a heading/subheading/body line saying …", "add a button/CTA saying …", "put another line that says …" — use patch.addTextElement { class, text }. Choose the class by what they describe: a headline-style line → heading; a supporting line → subheading; a paragraph/details → body; a small edge/eyebrow/date-like line → caption; a button/tag/CTA/pill → cta. An ask with no dedicated brand class ("add a quote") maps to the CLOSEST class, body, and you say so honestly. NEVER refuse an add. The layout engine places it; if a format has no room it is kept and named in that format's readiness — so describe the add in present tense and don't claim an exact position you can't see.
+ADDING A NEW, EXTRA ELEMENT (spec §5): when the user wants an ADDITIONAL piece of text beyond the built-in roles — "add a caption saying …", "add a heading/subheading/body line saying …", "add a button/CTA saying …", "put another line that says …" — use patch.addTextElement { class, text }. Choose the class by what they describe: a headline-style line → heading; a supporting line → subheading; a paragraph/details → body; a small edge/eyebrow/date-like line → caption; a button/tag/CTA/pill → cta. An ask with no dedicated brand class ("add a quote") maps to the CLOSEST class, body, and you say so honestly. ONE OF EACH CLASS, MAXIMUM (client ruling 2026-07-27): a design carries at most one heading, one subheading, one body, one caption and one button — the design state's elementClasses lists the classes already in use. When the asked class is already in use, do NOT set addTextElement (the editor refuses it); instead reply honestly and redirect: for body, encourage another PARAGRAPH inside the one Body ("Your design already has a Body — add another paragraph inside it instead, in the Text panel"); for other classes, point at editing the existing one. Space is never the reason to refuse — class uniqueness is the only bound. The layout engine places an allowed add; if a format has no room it is kept and named in that format's readiness — so describe the add in present tense and don't claim an exact position you can't see.
 REMOVING: "get rid of the small text / label / button" → set that field to "" (empty string removes it explicitly).`;
 
   const systemPrompt = `You are the Art Director for ${brandContext.name}, a Singaporean education brand for students aged 10 and above. You help a non-designer build on-brand social posts by editing their design directly through a structured patch.
@@ -1651,11 +1658,26 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     if (!beltReply) {
       const ae = detectAddElement(lastUserText);
       if (ae && ELEMENT_CLASSES.includes(ae.class)) {
-        patch.addTextElement = { class: ae.class, text: ae.text };
-        const label = ELEMENT_CLASS_LABEL[ae.class] || 'text element';
-        beltReply = ae.substituted
-          ? `Added that as a ${label} element — the closest brand text style — saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`
-          : `Added a ${label} saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`;
+        // (Amendment 2026-07-27 ruling 2 — CLASS-EXCLUSIVE ADDS) One of each class,
+        // maximum. When the class is already in use (designState.elementClasses —
+        // filled role projections + added elements, one system) the belt REFUSES
+        // honestly and redirects, mirroring the reducer's own bound — never a
+        // narrated add the reducer would silently refuse (M2). Ruling 3 makes the
+        // Body refusal encourage another paragraph INSIDE the one Body instead.
+        const refusal = addElementClassRefusal(designState, ae.class);
+        if (refusal) {
+          beltReply = refusal;
+          // The live model may have authored its own addTextElement for the same ask —
+          // strip it so the refused turn cannot half-apply (the reducer would refuse it
+          // anyway; stripping keeps the reply and the patch telling one story).
+          if ('addTextElement' in patch) patch.addTextElement = null;
+        } else {
+          patch.addTextElement = { class: ae.class, text: ae.text };
+          const label = ELEMENT_CLASS_LABEL[ae.class] || 'text element';
+          beltReply = ae.substituted
+            ? `Added that as a ${label} element — the closest brand text style — saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`
+            : `Added a ${label} saying “${ae.text}”. It'll appear on the canvas; tap it to move or edit. If a format has no room I'll keep it and flag it.`;
+        }
       }
     }
 

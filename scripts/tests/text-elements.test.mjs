@@ -87,7 +87,9 @@ test("migration derives elements from the legacy fixed roles per the spec mappin
   assert.equal(byRole.headline.required, true);
   assert.equal(byRole.headline.authorship, "owner");
   assert.equal(byRole.headline.uid, "legacy:headline");
-  assert.equal(byRole.subtext.class, "subheading");
+  // (Amendment 2026-07-27 ruling 1 — DEFAULT FILLS ARE HEADING + BODY) The secondary
+  // slot's field migrates as BODY, not subheading.
+  assert.equal(byRole.subtext.class, "body");
   assert.equal(byRole.subtext.authorship, "ai");
   assert.equal(byRole.attribution.class, "caption");
   assert.equal(byRole.dateText.class, "caption");

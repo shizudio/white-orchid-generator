@@ -42,7 +42,10 @@ test("the pre-fix shape is the canary: a re-skin restore leaves nothing to click
     "this is the state the client was in; if this stops being empty the canary needs rewriting");
 });
 
-test("every add class lands on a restored document — no silent no-op (M2)", () => {
+test("every add class lands OR refuses with a reason on a restored document — no silent no-op (M2)", () => {
+  // (Amendment 2026-07-27 ruling 2 — CLASS-EXCLUSIVE ADDS) The restored document
+  // already carries a heading (headline) and a body (subtext), so those two adds are
+  // now REFUSED — with the ratified reason, never silently. The unused classes land.
   let document = restore(storedDesign(), "restore");
   const outcomes = {};
   for (const cls of ELEMENT_CLASSES) {
@@ -51,6 +54,12 @@ test("every add class lands on a restored document — no silent no-op (M2)", ()
       type: "content/add-element", element: { class: cls, text: `New ${cls}` },
     });
     document = result.document;
+    if (cls === "heading" || cls === "body") {
+      assert.equal(result.changedPaths.length, 0, `a duplicate ${cls} must be refused`);
+      assert.ok(result.refusal && result.refusal.reason, `a refused ${cls} must carry its reason (M2)`);
+      outcomes[cls] = "refused";
+      continue;
+    }
     assert.ok(result.changedPaths.length > 0, `adding a ${cls} changed nothing`);
     assert.notEqual(document, before, `adding a ${cls} produced the same document`);
     // Either a genuine new element, or the ratified slot fill into a declared role.
@@ -65,4 +74,6 @@ test("every add class lands on a restored document — no silent no-op (M2)", ()
   assert.equal(document.content.headline, "Autumn open day");
   assert.equal(document.content.subtext, "Saturday at ten");
   assert.equal(Object.keys(outcomes).length, 5);
+  assert.equal(outcomes.heading, "refused");
+  assert.equal(outcomes.body, "refused");
 });

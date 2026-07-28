@@ -43,8 +43,9 @@ import { LOGO_PAD, LOGO_POSITIONS, LOGO_SIZES, logoCenter } from "@/lib/logo-pla
 import { placeTextElement, classifyPlacementObstacles, resolveTextTreatmentAt, makeDateClass, makeEyebrowClass, makeBadgeClass, dateFurnitureObstacles, mergeSafeMargins, buildDateAnchors, buildEyebrowAnchors, resolveElementClassConfig, buildElementAnchors, elementStepPx } from "@/lib/element-placement-solver.mjs";
 import { resolveTypographyConfig, sanctionedRegistersForClass } from "@/lib/typography-config.mjs";
 import { formatFamilyOf, legacyStepMult, resolveEffectiveStep, globalStepMult, normalizeGlobalSizeStep } from "@/lib/type-scale.mjs";
-import { canTransitionClass, ALLOWED_CLASS_TRANSITIONS, LEGACY_ROLE_ORDER } from "@/lib/text-elements.mjs";
+import { canTransitionClass, classExclusiveReason, ALLOWED_CLASS_TRANSITIONS, LEGACY_ROLE_ORDER } from "@/lib/text-elements.mjs";
 import { LEGACY_FIELD_TO_ROLE } from "@/lib/text-slot-fill.mjs";
+import { splitParagraphs, layoutParagraphFlow } from "@/lib/body-paragraphs.mjs";
 import { contrastAtExtremes, contrastRemedy, evaluateInkLegibility, hexLuminance, luminanceContrast as contrastRatio, rgbLuminance as getLuminance, summarizeLuminanceSamples } from "@/lib/surface-contrast-policy.mjs";
 import { attachRenderContractAudit, evaluateRenderContracts } from "@/lib/render-contract-evaluation.mjs";
 import { coverClampT, coversFrameBox } from "@/lib/photo-cover.mjs";
@@ -3794,10 +3795,26 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // Empty declared slots lead the candidate order; the ratified relational ladder
         // follows unchanged, so an element with no free slot places exactly as before.
         const cands=[...slotAnchorsFor(el.class), ...buildElementAnchors(el.class, geom)];
+        /* (Amendment 2026-07-27 ruling 3 — BODY SECTIONS INTERNALLY) The single Body
+           element holds PARAGRAPHS: line breaks split it (never collapsed), rendered
+           with proper paragraph spacing in the chosen flow — stacked (default) or
+           side-by-side columns (el.master.flow / byDim[dim].flow). Other classes keep
+           the single-block wrap exactly as before (byte-identical), as does a body
+           without a line break (splitParagraphs → 1 block → the legacy path). The
+           solver and resolveTextTreatmentAt see the whole sectioned box through the
+           same measure adapter, so placement + contrast govern it unchanged. */
+        const _elParas=el.class==="body"?splitParagraphs(el.text):[];
+        const _elFlow=(el.byDim?.[dimId]?.flow)||(el.master?.flow)||"stacked";
+        const _elParaLayout=(mpx)=>layoutParagraphFlow({
+          paragraphs:_elParas, flow:_elFlow, maxWidth:colW, fontSize:mpx, lineHeight:mpx*1.28,
+          wrap:(t,wd)=>textLines(ctx,t,wd), measureLine:l=>ctx.measureText(l).width,
+        });
         // measure adapter — CTA measures its own pill box; text classes wrap at the column width.
         const measure=isCta
           ? (mpx,face)=>{ const bs=mpx,padX=bs*0.9,padY=bs*0.55; ctx.font=`600 ${bs}px ${face}`; ctx.letterSpacing=`${0.10*bs}px`; const t=txt.toUpperCase(); const tw=ctx.measureText(t).width+0.10*bs*Math.max(0,t.length-1); ctx.letterSpacing="0px"; return { w:tw+padX*2, h:bs+padY*2 }; }
-          : (mpx,face,weight)=>{ ctx.font=`${weight} ${mpx}px ${face}`; const lines=textLines(ctx,txt,colW); const lw=Math.min(colW,Math.max(0,...lines.map(l=>ctx.measureText(l).width))); return { w:lw, h:mpx*1.28*Math.max(1,lines.length) }; };
+          : (mpx,face,weight)=>{ ctx.font=`${weight} ${mpx}px ${face}`;
+              if(_elParas.length>1){ const plan=_elParaLayout(mpx); return { w:plan.width, h:plan.height }; }
+              const lines=textLines(ctx,txt,colW); const lw=Math.min(colW,Math.max(0,...lines.map(l=>ctx.measureText(l).width))); return { w:lw, h:mpx*1.28*Math.max(1,lines.length) }; };
         /* (DLC §15) Contrast is measured ON THE FINAL SURFACE beneath the role. `null`
            means "flat brand field": the zone-resolved baseInk already contrasts it, so no
            flip is forced — that shortcut is what keeps a field-only design byte-identical.
@@ -3854,8 +3871,18 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         }else{
           if(_treat.band){ const bc=hexLuminance(_treat.ink)>0.5?B.burnham:B.whiteSmoke; _paintBand({x:ex,y:ey,w:_treat.w,h:_treat.h},bc,0.92,false); }
           ctx.fillStyle=_treat.ink; ctx.font=`${_treat.weight} ${_treat.px}px ${_treat.face}`;
-          const lines=textLines(ctx,txt,colW);
-          drawTextLines(ctx,lines,ex,ey+_treat.px,_treat.w,_treat.px*1.28,align);
+          if(_elParas.length>1){
+            // (ruling 3) Paint the sectioned Body: each paragraph block at its flow
+            // offset within the treated box (same ink/weight/band — one element).
+            const plan=_elParaLayout(_treat.px);
+            for(const block of plan.blocks){
+              const lines=block.lines;
+              drawTextLines(ctx,lines,ex+block.x,ey+block.y+_treat.px,block.width,_treat.px*1.28,align);
+            }
+          }else{
+            const lines=textLines(ctx,txt,colW);
+            drawTextLines(ctx,lines,ex,ey+_treat.px,_treat.w,_treat.px*1.28,align);
+          }
         }
         endText();
         const box={x:ex,y:ey,w:_treat.w,h:_treat.h};
@@ -4974,6 +5001,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           if(_zc && Math.sqrt(_zc.maxV||0)>0.14){ _supWeight=(_zc.min<4.5)?700:600; }
         }
         fontMeta.subtextWeight=_supWeight;   // (Item D) render-truth for the ladder verification
+        /* (Amendment 2026-07-27 ruling 3 — BODY SECTIONS INTERNALLY, migrated body)
+           The default secondary slot IS the one Body (legacy:subtext). When the owner
+           has EXPLICITLY chosen a paragraph flow on it (the Paragraphs toggle →
+           content/set-element-flow), its line-broken text renders as wrapped paragraph
+           blocks in that flow — stacked with a paragraph gap, or side-by-side columns —
+           fitted to the support box. Gated on the EXPLICIT choice (master/byDim flow)
+           so a stored document that never touched the toggle renders byte-identically
+           through the branches below (fingerprint discipline: activation is a user
+           action, never retroactive). Only a subtext-fed support can be a Body — an
+           attribution-fed support line (a caption-class credit) never takes a flow. */
+        const _supFlowChoice=(()=>{
+          if(!/\n/.test(supportText)||!String(ccSubtext||"").trim())return null;
+          const _supEl=(Array.isArray(documentElements)?documentElements:[]).find(e=>e&&e.uid==="legacy:subtext");
+          if(!_supEl)return null;
+          return (_supEl.byDim?.[dimId]?.flow)||(_supEl.master?.flow)||null;
+        })();
         if(mat.supportRegister==="serifItalic"){
           // (P2) BRAND/CLOSING TAGLINE — light italic serif ("a school led by children"),
           // matching the reference lockup taglines. Same ink as hero (§7 ink discipline).
@@ -4981,6 +5024,22 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
           ctx.font=`italic 400 ${sf.size}px ${F.title}`;
           drawTextLines(ctx,sf.lines.slice(0,3),supBox.x,supBox.y+sf.size,supBox.w,sf.lineHeight,supAlign);
           fontMeta.subtext=sf.size;
+        }else if(_supFlowChoice){
+          const _paras=splitParagraphs(supportText);
+          let _psz=reflowSupStart||supBox.h*0.3; const _pmin=reflowSupMin||supBox.h*0.12;
+          const _planAt=(size)=>{ ctx.font=`${_supWeight} ${size}px ${F.body}`; return layoutParagraphFlow({
+            paragraphs:_paras, flow:_supFlowChoice, maxWidth:supBox.w, fontSize:size,
+            lineHeight:size*(mat.leadingBody||1.32), wrap:(t,wd)=>textLines(ctx,t,wd),
+          }); };
+          let _pplan=_planAt(_psz);
+          while(_pplan.height>supBox.h&&_psz>_pmin){ _psz=Math.max(_pmin,_psz*0.92); _pplan=_planAt(_psz); }
+          ctx.letterSpacing=`${0.01*_psz}px`;
+          for(const _blk of _pplan.blocks){
+            drawTextLines(ctx,_blk.lines,supBox.x+_blk.x,supBox.y+_blk.y+_psz,_blk.width,_psz*(mat.leadingBody||1.32),supAlign);
+          }
+          ctx.letterSpacing="0px";
+          fontMeta.subtext=_psz;
+          supUsedH=_pplan.height;
         }else if(/\n/.test(supportText)){
           // (r3 fix #4) STACKED DETAIL LINES — the enrolment CTA details ("Term 3, 2026 /
           // Ages four to twelve / Afterschool care") are authored with newlines and render
@@ -6760,6 +6819,10 @@ export default function App() {
     // (copy-fit Tier 1) The active slot's measured character budget, so every server
     // copy-writer (editor prompt, caption writer) writes copy that fits by construction.
     copyBudget: computeCopyBudgets(archetypeId, dimensionId, postType),
+    // (Amendment 2026-07-27 ruling 2 — class-exclusive adds) The classes already in
+    // use — filled legacy-role projections + added elements, one system — so the
+    // add-element belt / model can refuse a duplicate class honestly up front.
+    elementClasses: [...new Set((designDocument.content.elements||[]).map(el=>el&&el.class).filter(Boolean))],
   });
 
 
@@ -9061,6 +9124,10 @@ function useDesignPatchPipeline(workspace) {
         }
       }
       const applied = [];
+      // (Amendment 2026-07-27 ruling 2) Reducer REFUSALS surfaced by this patch —
+      // e.g. addTextElement for a class already in use. Collected so the chat can
+      // name the refusal honestly instead of a generic no-op correction (M2).
+      const refusals = [];
       // A bgColor change on a materialized design must ALSO land on the visible field
       // (the variant palette shadows background there) — but not during a genuine
       // layout switch, where the incoming archetype's authored palette must win.
@@ -9069,7 +9136,11 @@ function useDesignPatchPipeline(workspace) {
           && !(typeof patch.archetypeId === "string" && patch.archetypeId !== archetypeId),
       });
       const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
-        dispatchCommand:dispatchDesignCommand,
+        dispatchCommand:command => {
+          const result = dispatchDesignCommand(command);
+          if (result?.refusal) refusals.push(result.refusal);
+          return result;
+        },
       }));
       const applyWorkflowGroups = groups => {
         applied.push(...executeWorkflowGroups(groups));
@@ -9178,6 +9249,7 @@ function useDesignPatchPipeline(workspace) {
     }
 
       applied.changedPaths = [...new Set(commandPaths)];
+      if (refusals.length) applied.refusals = refusals;
       if (pendingUndoSnapshot && completion.commitHistory) {
         setAiUndoStack(prev => [pendingUndoSnapshot, ...prev].slice(0, AI_UNDO_DEPTH));
         setRedoStack([]);
@@ -9344,11 +9416,19 @@ function InspectorWorkspace({ workspace }) {
         reason: led ? led.reason : null,
       };
     });
+  // (Amendment 2026-07-27 ruling 2 — CLASS-EXCLUSIVE ADDS) The last-tapped greyed
+  // class's reason, shown under the picker (the ratified disabled-affordance pattern:
+  // visibly inert + tap explains why — LogoInspectorPanel precedent). {cls, reason}.
+  const [addTextInertNote, setAddTextInertNote] = useState(null);
   // Add a new element of `cls` with a short brand starter, then select it so its
   // inspector opens immediately (an honest "no room in this format" note appears there
   // reactively if the solver could not seat it — never a silent no-op, M2).
   const addTextElement = (cls, starter) => {
     const result = dispatchElementCommand({ type:"content/add-element", element:{ class:cls, text:starter } });
+    // (ruling 2) Belt-and-braces: the reducer is the bound's one home — if it refused
+    // (class already in use), surface its reason as the inert note, never a silent no-op.
+    if (result.refusal) { setAddTextInertNote({ cls, reason:result.refusal.reason }); return null; }
+    setAddTextInertNote(null);
     const path = (result.changedPaths || []).find(p => p.startsWith("content.elements."));
     const uid = path ? path.split(".")[2] : null;
     setAddTextOpen(false); setChangeTypeOpen(false);
@@ -9505,8 +9585,12 @@ function InspectorWorkspace({ workspace }) {
     const archIdx=furniture.find(item=>item?.type==="index");
     const badge=furniture.find(item=>item?.type==="badge");
     const idxCarrier=!!archIdx&&!!heroRegister&&!typeLayouts[postType]?.roles?.microLabel;
-    const deadLabels={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button",subtext:"the caption",attribution:"the small credit line",headline:"the headline"};
+    const deadLabels={hero:"the title",support:"the small text under the title",eyebrow:"the little label",date:"the date",pill:"the button",subtext:"the body text",attribution:"the small credit line",headline:"the headline"};
     const target=mediaObj?"editorial_split":"label_headline";
+    // (Amendment 2026-07-27 ruling 3) The migrated Body (legacy:subtext) exists in the
+    // projection whenever subtext has words; its Paragraphs toggle (stacked / side by
+    // side) dispatches the same content/set-element-flow command an added body uses.
+    const bodyFlowEl=(designDocument.content.elements||[]).find(el=>el&&el.uid==="legacy:subtext")||null;
     return <>
       <ContentFieldsPanel idPrefix={idPrefix} postType={postType} heroRegister={heroRegister}
         content={{headline,subtext,attribution,dateText,microLabel,pillText}}
@@ -9515,6 +9599,11 @@ function InspectorWorkspace({ workspace }) {
         deadRoles={deadRoles.map(role=>deadLabels[role]||role)} switchLayoutId={archetypeId!==target?target:null}
         onField={(field,value)=>applyPatch({[field]:value},{source:"ui"})} onSwitchLayout={id=>applyPatch({archetypeId:id},{source:"ui"})}
         onEditRole={beginRoleEdit}
+        bodyFlow={{
+          visible:!!bodyFlowEl&&["photo_logo","texture_text"].includes(postType)&&!!heroRegister,
+          value:(bodyFlowEl&&((bodyFlowEl.byDim?.[dimensionId]?.flow)||(bodyFlowEl.master?.flow)))||"stacked",
+          onChange:mode=>dispatchElementCommand({ type:"content/set-element-flow", uid:"legacy:subtext", value:mode }),
+        }}
         palette={B} fonts={F}/>
       {/* ── (TEXT UNIFICATION Phase A — ONE TEXT HOME, docs/text-unification-spec.md) ──
           The ADDED text elements are rows in the SAME list as the legacy role fields
@@ -9553,21 +9642,39 @@ function InspectorWorkspace({ workspace }) {
           text home, one way to grow it. Plain labels a preschool teacher reads at a
           glance ("Button", not "CTA"). Choosing a class adds it with a short starter
           and selects it, so its row expands in place. An element the solver can't
-          seat surfaces an honest note in that row (never a silent no-op). */}
+          seat surfaces an honest note in that row (never a silent no-op).
+          (Amendment 2026-07-27 ruling 2 — CLASS-EXCLUSIVE ADDS) A class already IN
+          USE on the design — a filled legacy-role projection or an added element,
+          one system — is GREYED, per the ratified disabled-affordance pattern:
+          visibly inert, and a tap explains why (Body's reason encourages another
+          paragraph inside the one Body — ruling 3). Class uniqueness is the ONLY
+          bound here; density stays the crowding advisory's voice. */}
       <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.ash}22`}}>
         <button type="button" onClick={()=>setAddTextOpen(open=>!open)} aria-expanded={addTextOpen}
           style={{display:"flex",alignItems:"center",gap:8,width:"100%",minHeight:44,padding:"10px 12px",borderRadius:10,border:`1.5px dashed ${B.burnham}55`,background:addTextOpen?`${B.burnham}0c`:"transparent",color:B.burnham,fontFamily:F.subtitle,fontSize:12,fontWeight:700,letterSpacing:0.3,cursor:"pointer"}}>
           <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>＋</span> Add text
         </button>
-        {addTextOpen&&<div role="group" aria-label="Choose a text type to add" style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
-          {ELEMENT_ADD_CHOICES.map(choice=>(
-            <button key={choice.cls} type="button" onClick={()=>addTextElement(choice.cls,choice.starter)}
-              style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",minHeight:44,padding:"10px 13px",borderRadius:9,border:`1.5px solid ${B.ash}44`,background:"#fff",color:B.jet,fontFamily:F.subtitle,fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"left"}}>
-              <span>{choice.label}</span>
-              <span aria-hidden="true" style={{fontSize:11,color:B.ash}}>＋</span>
-            </button>
-          ))}
-        </div>}
+        {addTextOpen&&(()=>{
+          const classesInUse=new Set((designDocument.content.elements||[]).map(el=>el&&el.class).filter(Boolean));
+          return <div role="group" aria-label="Choose a text type to add" style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
+            {ELEMENT_ADD_CHOICES.map(choice=>{
+              const inert=classesInUse.has(choice.cls);
+              const tapped=addTextInertNote&&addTextInertNote.cls===choice.cls;
+              return <button key={choice.cls} type="button" aria-disabled={inert||undefined}
+                title={inert?`${choice.label} — already on this design`:choice.label}
+                onClick={()=>{ if(inert){ setAddTextInertNote({ cls:choice.cls, reason:classExclusiveReason(choice.cls) }); } else { addTextElement(choice.cls,choice.starter); } }}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",minHeight:44,padding:"10px 13px",borderRadius:9,
+                  border:`1.5px solid ${inert?(tapped?B.tangerine:B.ash+"33"):B.ash+"44"}`,
+                  background:inert?`${B.ash}18`:"#fff",color:inert?B.ash:B.jet,
+                  fontFamily:F.subtitle,fontSize:12,fontWeight:600,cursor:inert?"not-allowed":"pointer",textAlign:"left",
+                  opacity:inert?0.55:1,filter:inert?"saturate(0.4)":"none",transition:"all 0.12s"}}>
+                <span>{choice.label}</span>
+                <span aria-hidden="true" style={{fontSize:11,color:B.ash}}>{inert?"·":"＋"}</span>
+              </button>;
+            })}
+            {addTextInertNote&&<div role="status" style={{fontSize:11,fontFamily:F.body,color:B.jet,background:`${B.tangerine}14`,border:`1px solid ${B.tangerine}55`,borderRadius:9,padding:"8px 11px",lineHeight:1.45}}>{addTextInertNote.reason}</div>}
+          </div>;
+        })()}
       </div>
       {/* ── (GLOBAL HIERARCHICAL SIZE — client ruling 2026-07-23) The primary eyeline
           "Size" control is now the DOCUMENT-LEVEL S/M/L: it scales EVERY text element at
@@ -9764,6 +9871,22 @@ function InspectorWorkspace({ workspace }) {
           );})}
         </div>
       </div>}
+
+      {/* (Amendment 2026-07-27 ruling 3) Paragraphs — the single Body sections
+          INTERNALLY: line breaks are paragraphs, flowed stacked (default) or side by
+          side within the one element. A per-element property (master.flow) that
+          survives re-solves; the same command the default Body row's toggle uses. */}
+      {el.class==="body"&&<div style={{display:"flex",alignItems:"center",gap:8,marginTop:14,marginBottom:2}}>
+        <span style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",flex:"0 0 auto"}}>Paragraphs</span>
+        <div role="group" aria-label="Body paragraph flow" style={{display:"flex",gap:5,flex:1}}>
+          {[{id:"stacked",label:"Stacked"},{id:"columns",label:"Side by side"}].map(mode=>{const on=((el.master&&el.master.flow)||"stacked")===mode.id;return (
+            <button key={mode.id} type="button" className="wo-ins-pill" aria-pressed={on} title={mode.id==="stacked"?"Paragraphs run down the page":"Paragraphs sit side by side"}
+              onClick={()=>dispatchElementCommand({ type:"content/set-element-flow", uid, value:mode.id })}
+              style={{flex:1,padding:"8px 0",borderRadius:7,border:`1.5px solid ${on?B.burnham:B.ash+"44"}`,background:on?B.burnham:"#fff",color:on?"#fff":B.jet,fontFamily:F.subtitle,fontSize:11,fontWeight:700,cursor:"pointer"}}>{mode.label}</button>
+          );})}
+        </div>
+      </div>}
+      {el.class==="body"&&<div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.4,margin:"5px 0 0"}}>Press Enter in the text box to start a new paragraph.</div>}
 
       {/* Type — read-only label + governed change-type (allowed transitions only). */}
       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:14}}>
