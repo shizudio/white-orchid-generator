@@ -80,6 +80,7 @@ import { useAuditCaptureImage } from "@/hooks/useAuditCaptureImage";
 import { useAiAuditLedger } from "@/hooks/useAiAuditLedger";
 import { useMoodboardOrchestration } from "@/hooks/useMoodboardOrchestration";
 import { useFirstShotGate } from "@/hooks/useFirstShotGate";
+import { useLayoutSwitchVerification } from "@/hooks/useLayoutSwitchVerification";
 import { useTemplateProposalReview } from "@/hooks/useTemplateProposalReview";
 import { useNewPostAction } from "@/hooks/useNewPostAction";
 import { useSessionProductActions } from "@/hooks/useSessionProductActions";
@@ -2651,6 +2652,7 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
     brandLogoForContext,
     selectedLogoVariant,
     editingRoleRef,
+    roomierAuditRef,
   } = runtime;
     if(!ctx) return;
     const model=opts.renderModel||renderModel;
@@ -3121,9 +3123,17 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             pinned:!!(_src&&_src.pins&&_src.pins.sizeStep) });
         }
         renderTruth.audit.textHierarchy=_hier;
-        // (spec §4 remedy c) A roomier-layout candidate is offered ONLY when solver-verified.
-        // No alternative-layout solve runs in this audit pass, so it stays unset here (never
-        // offered blind); a future pass that verifies one sets renderTruth.audit.roomierLayout.
+        // (spec §4 remedy c — task #59) A roomier-layout candidate is offered ONLY when
+        // solver-verified. The verification is the DEFERRED offscreen pass in
+        // useLayoutSwitchVerification (a render must never render recursively): it
+        // evaluates ring candidates against THIS design's content and stores the verdict
+        // on roomierAuditRef, cleared on every design-state change. roomierChecked=false
+        // (pass not run / no roomier-class finding) keeps every remedy absent — never
+        // offered blind; roomierLayout carries {archetypeId,gains} only when a candidate
+        // qualified (differs + places all content + answers the need).
+        const _roomier=(roomierAuditRef&&roomierAuditRef.current)||null;
+        renderTruth.audit.roomierChecked=!!_roomier;
+        renderTruth.audit.roomierLayout=_roomier?_roomier.value:null;
       }
       const resolvedLogoBox=renderTruth.logoBox||auditLogo.box;
       const shapeImageMap=new Map();
@@ -3668,7 +3678,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
        Called from finishRender (the single result builder) so it covers editorial + legacy
        paths uniformly; z-order is content-band 40 (painted last within the render). */
     const paintContentElements=()=>{
-      if(_isOverrideRender) return [];                               // guard/calibration output stays pristine
+      // (task #59 — solver-verified layout switch) opts.elementProbe lets the layout-
+      // candidate verifier's offscreen override render paint added elements so its
+      // placement ledger is REAL. The guard batteries never pass it (their fixtures
+      // carry no content.elements anyway), so guard/calibration output stays pristine.
+      if(_isOverrideRender && !opts.elementProbe) return [];         // guard/calibration output stays pristine
       const _els=Array.isArray(documentElements)?documentElements:[];
       const added=_els.filter(el=>el && !el.sourceRole && typeof el.text==="string" && el.text.trim());
       if(!added.length) return [];                                   // THE GATE — no elements → no paint, no scene change
@@ -7087,6 +7101,10 @@ export default function App() {
   // Render the whole composition into any ctx at any dimension. opts.dimensionId
   // selects which format's overlay cascade to resolve; opts.live=true means this
   // is the on-screen canvas (only then do we write textBoundsRef for hit-testing).
+  // (task #59) The deferred roomier-layout verdict (useLayoutSwitchVerification writes
+  // it; the live render's audit block reads it via the runtime bag). Declared here so
+  // renderScene can close over it before the hook — which needs renderScene — runs.
+  const roomierAuditRef = useRef(null);
   const renderScene = useCallback((ctx, w, h, opts={}) => renderLegacyScene(ctx, w, h, opts, {
     renderModel,
     canvasRef,
@@ -7094,6 +7112,7 @@ export default function App() {
     brandLogoForContext,
     selectedLogoVariant,
     editingRoleRef,
+    roomierAuditRef,
   }), [renderModel, readableLogoForField, brandLogoForContext, selectedLogoVariant]);
 
   const draw = useLiveCanvasRender({
@@ -7119,6 +7138,25 @@ export default function App() {
     setContentLedger,
     editingRole,
     devHooks: DEV_HOOKS,
+  });
+
+  // (task #59 — solver-verified layout switch) Every layout-switch OFFER (the "Try
+  // another layout" chip belt, the chat dead-role/logo pendingOffers, the crowding
+  // advisory's roomier remedy) verifies its candidate against THIS design's content
+  // through this one gate before it is offered — never a blind pick (M2). Lives in
+  // App (not the workspace hooks): it closes over renderScene + the render refs.
+  const layoutSwitchVerifier = useLayoutSwitchVerification({
+    renderScene,
+    dimensions: DIMENSIONS,
+    dimensionId,
+    archetypeId,
+    archetypesById: ARCHETYPES_BY_ID,
+    hasImage: !!(imageObj || videoObj),
+    copy: { headline, subtext, attribution, dateText },
+    designDocument,
+    renderResultRef,
+    drawRef,
+    roomierAuditRef,
   });
 
   /* ── LOCAL DESIGN AUDIT (Commit 1) ──────────────────────────────────────────
@@ -7646,7 +7684,7 @@ export default function App() {
     dismissProposalLater, downloadAll, dragLift, dragRef, editingTemplate,
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
     findingAckPinned, findingActions, focusTextField, formatThumbs, genBrief,
-    ghostSlots, imgRef, inspectorOpen:!!inspectorEl, inspectorWorkspace, issueBoxOf, ledgerCheck, loadFile,
+    ghostSlots, imgRef, inspectorOpen:!!inspectorEl, inspectorWorkspace, issueBoxOf, layoutSwitchVerifier, ledgerCheck, loadFile,
     mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
@@ -8201,7 +8239,7 @@ function EditorShell({ workspace }) {
     dismissProposalLater, downloadAll, dragLift, dragRef, editingTemplate,
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
     findingAckPinned, findingActions, focusTextField, formatThumbs, genBrief,
-    ghostSlots, imgRef, inspectorOpen, inspectorWorkspace, issueBoxOf, ledgerCheck, loadFile,
+    ghostSlots, imgRef, inspectorOpen, inspectorWorkspace, issueBoxOf, layoutSwitchVerifier, ledgerCheck, loadFile,
     mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
@@ -8356,6 +8394,7 @@ function EditorShell({ workspace }) {
             sendRef={chatSendRef}
             noteRef={chatNoteRef}
             designState={chatDesignState}
+            verifyLayoutSwitch={layoutSwitchVerifier}
             onApplyPatch={(patch) => applyPatch(patch, { harmonize: true })}
             onGenerateImage={(dataUrl) => applyGeneratedImage(dataUrl, { harmonize: true })}
             onUndo={undoLastAiChange}

@@ -106,6 +106,16 @@ export function useAdvisorFindingActions({
       kind: "ack",
       run: () => onAck ? onAck(issue) : acknowledgeIssue(issue, dimensionId),
     });
+    // (task #59 — spec §4 remedy 3) The roomier-layout remedy exists ONLY when the
+    // deferred layout-switch verification attached a solver-verified candidate to the
+    // finding (issue.roomier.archetypeId) — never a blind switch, never a dead label.
+    // One undoable patch through the same applyReadyFix pipeline as every fix.
+    const roomierAction = issue.roomier && issue.roomier.archetypeId ? {
+      label: "Try a roomier layout",
+      kind: "patch",
+      hint: "Solver-verified — your content fits the new layout",
+      run: () => applyReadyFix({ archetypeId: issue.roomier.archetypeId }),
+    } : null;
 
     const remedyCommands=Array.isArray(issue.remedyCommands)
       ? issue.remedyCommands.filter(isConstraintRemedyCommand)
@@ -267,16 +277,20 @@ export function useAdvisorFindingActions({
       return actions;
     }
 
-    // Size findings whose ONLY real remedy is shorter copy (the render fit-shrank the
-    // role, so a bigger font step can't grow it). The honest, one-tap primary is
-    // "Shorten it for me" — an ai-fix that reduces the copy so the fitter renders it
-    // larger — plus a deep-link to edit by hand. (advice-ledger one-tap-fix law.)
-    if ((issue.id === "thumb-legibility" || issue.id === "type-size-floor") && issue.field && COPY_FIELDS.includes(issue.field)) {
+    // Size/capacity findings whose primary remedy is shorter copy (the render
+    // fit-shrank the role, so a bigger font step can't grow it). The honest, one-tap
+    // primary is "Shorten it for me" — an ai-fix that reduces the copy so the fitter
+    // renders it larger — plus a deep-link to edit by hand, plus (task #59, copy-fit
+    // Tier 0b) the SOLVER-VERIFIED roomier-layout switch when the deferred pass
+    // attached one. copy-over-capacity carries the same ratified action row
+    // (Tighten / roomier layout / Edit it myself). (advice-ledger one-tap-fix law.)
+    if ((issue.id === "thumb-legibility" || issue.id === "type-size-floor" || issue.id === "copy-over-capacity") && issue.field && COPY_FIELDS.includes(issue.field)) {
       actions.push({
-        label: "Shorten it for me",
+        label: issue.id === "copy-over-capacity" ? "Tighten it for me" : "Shorten it for me",
         kind: "ai-fix",
         run: () => { tightenCopyForFinding(issue); },
       });
+      if (roomierAction) actions.push(roomierAction);
       const role = FIELD_TO_ROLE[issue.field];
       if (role) {
         actions.push({
@@ -286,6 +300,15 @@ export function useAdvisorFindingActions({
           run: () => { setAdvisorDot(null); focusTextField(role); },
         });
       }
+      actions.push(acknowledge("Keep it this way"));
+      return actions;
+    }
+
+    // (task #59) The crowding advisory + unplaced-element findings: the roomier
+    // remedy appears only solver-verified (issue.roomier); everything else on these
+    // findings keeps its existing voice (ack; the chat owns simplify/remove).
+    if (roomierAction && (issue.id === "crowding-advisory" || String(issue.id).startsWith("element-unplaced:"))) {
+      actions.push(roomierAction);
       actions.push(acknowledge("Keep it this way"));
       return actions;
     }

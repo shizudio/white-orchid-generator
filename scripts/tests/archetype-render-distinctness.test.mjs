@@ -23,21 +23,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 const baseline = JSON.parse(readFileSync(join(here, "..", "guards", "render-fingerprint-baseline.json"), "utf8"));
 
 const FORMATS = ["ig_portrait", "ig_square", "story", "twitter", "facebook", "banner"];
-// The chat belt's authoritative variety rings, parsed FROM the route source
-// (workspace-prop-parity precedent: text-parse the real surface, fail closed) so a
-// ring edit can never drift past this guard. Every ring stop must exist as a
-// materializable, distinct render — a ring naming an id the engine can't paint is
-// exactly the silent-fallback class this guards.
+// The chat belt's authoritative variety rings. (task #59) They moved from the route
+// source into lib/layout-switch-verification.mjs — ONE exported constant the route
+// belt, the client verifier AND this guard all import, so a ring edit lands
+// everywhere or nowhere. The route must still consume that constant: text-assert the
+// import (fail closed, the workspace-prop-parity precedent) so the belt can never
+// quietly fork its own ring again. Every ring stop must exist as a materializable,
+// distinct render — a ring naming an id the engine can't paint is exactly the
+// silent-fallback class this guards.
+import { LAYOUT_VARIETY_RINGS } from "../../lib/layout-switch-verification.mjs";
 const routeSrc = readFileSync(join(here, "..", "..", "app", "api", "assistant", "route.js"), "utf8");
-function parseRing(name) {
-  const m = routeSrc.match(new RegExp(`const ${name}\\s*=\\s*\\[([^\\]]+)\\]`));
-  assert.ok(m, `${name} not found in app/api/assistant/route.js — the variety belt moved; update this guard`);
-  const ids = [...m[1].matchAll(/'([a-z_]+)'/g)].map(x => x[1]);
-  assert.ok(ids.length >= 5, `${name} parsed to ${ids.length} ids — extraction broke (fail closed)`);
-  return ids;
-}
-const PHOTO_RING = parseRing("PHOTO_RING");
-const TEXT_RING = parseRing("TEXT_RING");
+assert.ok(/LAYOUT_VARIETY_RINGS/.test(routeSrc) && /layout-switch-verification/.test(routeSrc),
+  "app/api/assistant/route.js no longer imports LAYOUT_VARIETY_RINGS from lib/layout-switch-verification.mjs — the variety belt forked its ring; update this guard");
+const PHOTO_RING = [...LAYOUT_VARIETY_RINGS.photo];
+const TEXT_RING = [...LAYOUT_VARIETY_RINGS.text];
+assert.ok(PHOTO_RING.length >= 5 && TEXT_RING.length >= 5, "variety rings shrank below 5 — extraction broke (fail closed)");
 
 function archHashesFor(fmt) {
   const out = {};

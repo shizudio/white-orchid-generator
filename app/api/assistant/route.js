@@ -4,7 +4,8 @@ import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
-import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal } from '@/lib/assistant-intents';
+import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal, detectLayoutVariety } from '@/lib/assistant-intents';
+import { LAYOUT_VARIETY_RINGS, NO_LAYOUT_SWITCH_REPLY } from '@/lib/layout-switch-verification.mjs';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -1020,6 +1021,13 @@ function compactDesignState(raw) {
     elementClasses: Array.isArray(raw.elementClasses)
       ? raw.elementClasses.filter(c => ELEMENT_CLASSES.includes(c))
       : [],
+    // (task #59 — solver-verified layout switch) The client's pre-verified rotation
+    // verdict for a variety ask. PRESENCE carries meaning (id = verified pick; null =
+    // "checked, none fits" → the belt answers honestly; absent = legacy client → the
+    // blind-ring fallback), so the key is forwarded only when the client sent it.
+    ...(Object.prototype.hasOwnProperty.call(raw, 'verifiedLayoutCandidate')
+      ? { verifiedLayoutCandidate: typeof raw.verifiedLayoutCandidate === 'string' ? raw.verifiedLayoutCandidate : null }
+      : {}),
   };
 }
 
@@ -1865,38 +1873,51 @@ Current design state (compact): ${JSON.stringify(designState)}`;
         reply = 'The photo is already filling the whole frame on this layout. To make it larger or reposition it, tap the photo on the canvas to pan and zoom.';
       }
     }
-    // ── DETERMINISTIC LAYOUT VARIETY (client feedback 2026-07-10) ─────────────
+    // ── DETERMINISTIC LAYOUT VARIETY (client feedback 2026-07-10; task #59) ────
     // "Try another layout" kept returning the SAME archetype: the prose rule
     // ("pick a DIFFERENT suited archetype") left the pick to the model, which
     // favoured documentary and repeated its own narration verbatim. Belt: when
-    // the ask is a variety ask and the model's pick is missing, invalid, or
-    // equal to the CURRENT archetype, advance to the NEXT entry in a suited
-    // ring. Because each accepted switch changes "current", repeated asks cycle
-    // through genuinely different compositions instead of re-serving one.
-    const LAYOUT_VARIETY_INTENT = /\b(another|different|next|new|again|fresh)\b[^.!?]{0,28}\b(layout|look|style|composition|template)\b|\b(layout|look|style)\b[^.!?]{0,20}\b(another|different|again)\b/i;
-    if (LAYOUT_VARIETY_INTENT.test(lastUserText) && !wantsFullImage(lastUserText)) {
-      const PHOTO_RING = ['documentary', 'editorial_split', 'shape_cutout', 'message_pill', 'full_bleed_duotone', 'floated_card', 'portrait_credential'];
-      const TEXT_RING = ['manifesto', 'quote_margin', 'label_headline', 'serif_word', 'big_number', 'motif_field'];
-      const ring = designState.hasImage ? PHOTO_RING : TEXT_RING;
+    // the ask is a variety ask, advance through a suited ring — but the pick is
+    // SOLVER-VERIFIED first wherever the client could verify it (task #59, M2):
+    // ArtDirectorChat evaluates ring candidates offscreen against the design's
+    // ACTUAL content and sends designState.verifiedLayoutCandidate — an id (the
+    // first candidate that visibly differs AND places every required role and
+    // element), or null ("checked, none fits" → answer honestly, switch nothing).
+    // Key ABSENT = an older/unverifying client → the legacy blind-ring fallback.
+    if (detectLayoutVariety(lastUserText) && !wantsFullImage(lastUserText)) {
+      const ring = designState.hasImage ? [...LAYOUT_VARIETY_RINGS.photo] : [...LAYOUT_VARIETY_RINGS.text];
       const cur = designState.archetypeId;
-      // The ring is AUTHORITATIVE on a pure variety ask: the model's own pick
-      // tends to bounce between the same two favourites (documentary ↔ split),
-      // which reads as "keeps showing the same ones". Next-after-current
-      // guarantees the full cycle visits every suited composition.
-      patch.archetypeId = ring[(ring.indexOf(cur) + 1) % ring.length]; // indexOf −1 + 1 → ring[0]
-      const LAYOUT_NICE = {
-        documentary: 'a full-photo documentary layout', editorial_split: 'a photo-and-text split',
-        shape_cutout: 'a shape-cutout layout — the photo shows through a brand shape',
-        message_pill: 'a message-pill layout — your words on a rounded card over the photo',
-        full_bleed_duotone: 'a full-bleed duotone', floated_card: 'a floated card over the photo',
-        portrait_credential: 'a portrait layout with your words beside the photo',
-        manifesto: 'a manifesto layout', quote_margin: 'a quote-in-the-margin layout',
-        label_headline: 'a label-and-headline layout', serif_word: 'an oversized serif layout',
-        big_number: 'a big-number layout', motif_field: 'a motif-field layout',
-      };
-      // A real, applied change → narrate THIS switch (honesty law), and make the
-      // repeat affordance explicit so the next ask reads as expected behaviour.
-      reply = `Switched to ${LAYOUT_NICE[patch.archetypeId] || 'a different layout'} — your words are unchanged. Ask again and I'll show you the next one.`;
+      const hasVerdict = Object.prototype.hasOwnProperty.call(designState, 'verifiedLayoutCandidate');
+      const verified = hasVerdict ? designState.verifiedLayoutCandidate : undefined;
+      if (hasVerdict && verified === null) {
+        // Solver-verified: NO candidate fits this content. Complete-or-absent for
+        // offers — an honest refusal, never a blind switch that would no-op or shed
+        // content (M2). No archetype patch leaves this belt.
+        if ('archetypeId' in patch) delete patch.archetypeId;
+        reply = NO_LAYOUT_SWITCH_REPLY;
+      } else {
+        // The ring is AUTHORITATIVE on a pure variety ask: the model's own pick
+        // tends to bounce between the same two favourites (documentary ↔ split),
+        // which reads as "keeps showing the same ones". A verified client pick wins;
+        // otherwise next-after-current guarantees the full cycle visits every
+        // suited composition.
+        patch.archetypeId = (typeof verified === 'string' && verified !== cur && ring.includes(verified))
+          ? verified
+          : ring[(ring.indexOf(cur) + 1) % ring.length]; // indexOf −1 + 1 → ring[0]
+        const LAYOUT_NICE = {
+          documentary: 'a full-photo documentary layout', editorial_split: 'a photo-and-text split',
+          shape_cutout: 'a shape-cutout layout — the photo shows through a brand shape',
+          message_pill: 'a message-pill layout — your words on a rounded card over the photo',
+          full_bleed_duotone: 'a full-bleed duotone', floated_card: 'a floated card over the photo',
+          portrait_credential: 'a portrait layout with your words beside the photo',
+          manifesto: 'a manifesto layout', quote_margin: 'a quote-in-the-margin layout',
+          label_headline: 'a label-and-headline layout', serif_word: 'an oversized serif layout',
+          big_number: 'a big-number layout', motif_field: 'a motif-field layout',
+        };
+        // A real, applied change → narrate THIS switch (honesty law), and make the
+        // repeat affordance explicit so the next ask reads as expected behaviour.
+        reply = `Switched to ${LAYOUT_NICE[patch.archetypeId] || 'a different layout'} — your words are unchanged. Ask again and I'll show you the next one.`;
+      }
     }
 
     // ── (Honesty coordination) REPLY↔PATCH LAYOUT-CLAIM RECONCILE ──────────────

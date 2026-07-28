@@ -181,15 +181,20 @@ test("remedy: ranking names the lowest-priority element and gates roomier on a v
     { uid: "b", class: "cta", priority: 50 },
     { uid: "c", class: "caption", priority: 30 },   // lowest → drops first
   ];
-  const noRoomier = crowdingRemedies(placed, false);
+  const noRoomier = crowdingRemedies(placed, null);
   assert.equal(noRoomier.lowest.uid, "c");
   assert.equal(noRoomier.remedies[0].id, "simplify-copy");
   assert.equal(noRoomier.remedies[1].id, "remove-optional-element");
   assert.equal(noRoomier.remedies[1].uid, "c");                  // names the actual element
   assert.equal(noRoomier.remedies.some(r => r.id === "switch-layout"), false); // never blind
   assert.deepEqual(noRoomier.simplifyUids, ["c", "b"]);          // two lowest-priority, adjacent
-  const withRoomier = crowdingRemedies(placed, true);
+  // (task #59) A bare truthy flag is no longer a verified candidate — the remedy
+  // requires the solver's {archetypeId} verdict and carries it for one-tap apply.
+  const legacyFlag = crowdingRemedies(placed, true);
+  assert.equal(legacyFlag.remedies.some(r => r.id === "switch-layout"), false);
+  const withRoomier = crowdingRemedies(placed, { archetypeId: "documentary", gains: { budgetGrows: true } });
   assert.equal(withRoomier.remedies[2].id, "switch-layout");
+  assert.equal(withRoomier.remedies[2].archetypeId, "documentary");
 });
 
 // ── CROWDING ADVISORY + UNPLACED FINDINGS (via runLocalAudit) ────────────────
@@ -229,9 +234,35 @@ test("advisory: each unplaced element gets a named complete-or-absent finding", 
 });
 
 test("advisory: roomier remedy appears only when the render verified a candidate", () => {
-  const signal = { ...overBudgetSignal(), roomierLayout: true };
+  // (task #59) The verified verdict is {archetypeId, gains}; the gains must answer the
+  // crowding need (a higher budget or a newly-placed element) for the remedy to appear.
+  const signal = { ...overBudgetSignal(), roomierChecked: true, roomierLayout: { archetypeId: "documentary", gains: { budgetGrows: true, placesElements: [] } } };
   const crowd = runLocalAudit(signal).find(f => f.id === "crowding-advisory");
   assert.deepEqual(crowd.crowding.remedies.map(r => r.id), ["simplify-copy", "remove-optional-element", "switch-layout"]);
+  assert.equal(crowd.crowding.remedies[2].archetypeId, "documentary");
+  assert.deepEqual(crowd.roomier, { archetypeId: "documentary" });
+  // A legacy bare-boolean signal (pre-verification) never raises the remedy.
+  const legacy = { ...overBudgetSignal(), roomierLayout: true };
+  const legacyCrowd = runLocalAudit(legacy).find(f => f.id === "crowding-advisory");
+  assert.equal(legacyCrowd.crowding.remedies.some(r => r.id === "switch-layout"), false);
+  // A verified candidate whose gains DON'T answer crowding (only a size gain) is not
+  // sold as a crowding remedy.
+  const wrongGain = { ...overBudgetSignal(), roomierChecked: true, roomierLayout: { archetypeId: "documentary", gains: { growsRoles: ["hero"] } } };
+  const wrongCrowd = runLocalAudit(wrongGain).find(f => f.id === "crowding-advisory");
+  assert.equal(wrongCrowd.crowding.remedies.some(r => r.id === "switch-layout"), false);
+  assert.match(wrongCrowd.message, /none is roomier/);   // checked-and-none → honest tail
+});
+
+test("advisory: unplaced-element roomier remedy attaches per element, only when the switch places IT", () => {
+  const signal = { ...overBudgetSignal(), roomierChecked: true, roomierLayout: { archetypeId: "documentary", gains: { placesElements: ["e"], budgetGrows: false } } };
+  const unplaced = runLocalAudit(signal).find(f => f.id === "element-unplaced:e");
+  assert.deepEqual(unplaced.roomier, { archetypeId: "documentary" });
+  // A verdict that places a DIFFERENT element attaches nothing here — and, checked-
+  // and-none for THIS element, the message stops offering the roomier layout.
+  const other = { ...overBudgetSignal(), roomierChecked: true, roomierLayout: { archetypeId: "documentary", gains: { placesElements: ["zz"] } } };
+  const notMine = runLocalAudit(other).find(f => f.id === "element-unplaced:e");
+  assert.equal(notMine.roomier, null);
+  assert.match(notMine.message, /none can place it/);
 });
 
 test("born-clean: no elements → no crowding/unplaced dots; within budget → no advisory", () => {

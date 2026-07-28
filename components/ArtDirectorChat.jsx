@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { patchHasChanges, PATCH_KEY_LABELS } from '@/lib/design-patch';
 import { logFeedback, enrichVerdict, newTurnId } from '@/lib/sessions';
+import { detectLayoutVariety } from '@/lib/assistant-intents';
 import { DEFAULT_ASSISTANT_NAME } from '@/lib/brand-defaults';
 
 // Build the "changed: …" line from the keys the editor ACTUALLY changed
@@ -326,7 +327,7 @@ function compactDiff(before, after) {
   return Object.keys(diff).length ? diff : null;
 }
 
-export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onPolish, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, noteRef, liked, onMoreLikeThis }) {
+export default function ArtDirectorChat({ designState, verifyLayoutSwitch, onApplyPatch, onGenerateImage, onUndo, seed, chipCtx, onChangePhoto, onPolish, onNewPost, renderTruth, sessionId, initialMessages, restoreKey, onConversationChange, sessionTitle, posts, onOpenSession, onRefreshPosts, sendRef, noteRef, liked, onMoreLikeThis }) {
   const [messages, setMessages] = useState([]); // {role, content, patch?, changeKeys?, undoIndex?, turnId?, feedback?}
   // (D1 item 7) Rotating empty-state examples. Stable default for SSR + first
   // paint; reshuffled to a fresh mix after mount (see effect below).
@@ -658,6 +659,19 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       });
     };
     try {
+      // (task #59 — M2) A layout-variety ask ("Try another layout" chip or typed) is
+      // SOLVER-VERIFIED before it reaches the route's belt: evaluate ring candidates
+      // offscreen against this design's actual content and send the verdict along.
+      // An id = the first candidate that visibly differs AND places every required
+      // role/element; null = "checked, none fits" (the belt answers honestly, no
+      // blind switch); key absent = verification unavailable (legacy belt pick).
+      let stateForServer = designState();
+      if (verifyLayoutSwitch && detectLayoutVariety(content)) {
+        const rotation = verifyLayoutSwitch.pickLayoutRotation?.();
+        if (rotation !== undefined) {
+          stateForServer = { ...stateForServer, verifiedLayoutCandidate: rotation ? rotation.archetypeId : null };
+        }
+      }
       const response = await fetch('/api/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -665,7 +679,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           context: 'editor',
           stream: true,
           messages: nextHistory.slice(-10).map(m => ({ role: m.role, content: m.content })),
-          designState: designState(),
+          designState: stateForServer,
         }),
       });
       if (!response.ok || !response.body) {
@@ -978,9 +992,23 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           verdict.contradictions.push('field-filled-role-not-drawn');
           verdict.deadRoles = deadHits;
           const onLegacy = !truthAfter.archetypeId;
-          const promoteTarget = designState?.hasImage ? 'editorial_split' : 'manifesto';
+          const hasImageNow = !!(stateBefore && stateBefore.hasImage);
+          // (task #59 — M2) The promote/offer target is SOLVER-VERIFIED against this
+          // design's content before it is applied or offered: the candidate must
+          // visibly differ, place every required role/element, AND paint the dead
+          // fields it claims to reveal. The historic art-directed targets ride as
+          // preferred seeds; verifiedReveal === null means "checked, nothing reveals
+          // it" (honest, no offer); undefined = verifier unavailable (legacy targets).
+          const revealFieldsWanted = deadFields.map(([field]) => field);
+          const verifiedReveal = verifyLayoutSwitch?.pickLayoutReveal?.({
+            fields: revealFieldsWanted,
+            preferred: hasImageNow ? ['editorial_split'] : ['manifesto', 'label_headline'],
+          });
+          const promoteTarget = verifiedReveal !== undefined
+            ? (verifiedReveal ? verifiedReveal.archetypeId : null)
+            : (hasImageNow ? 'editorial_split' : 'manifesto');
           let promoted = false, promoteSeq = truthAfter.drawSeq ?? -1;
-          if (onLegacy && truthAfter.archetypeId !== promoteTarget) {
+          if (onLegacy && promoteTarget && truthAfter.archetypeId !== promoteTarget) {
             promoteSeq = (truthRef.current().drawSeq ?? -1);
             const retryKeys = applyRef.current({ archetypeId: promoteTarget }) || [];
             promoted = retryKeys.includes('archetypeId');
@@ -1002,12 +1030,15 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
           }
           // (WP-W1) The offer is NO LONGER bare words. It carries a concrete,
           // serializable pendingOffer payload — the SAME deterministic layout-switch
-          // the inspector's one-tap "switch to a layout that shows it" applies
-          // (mediaObj ? editorial_split : label_headline). Typing "yes" or tapping
-          // the chip executes THIS patch directly (no model round-trip); the
-          // executor re-verifies render truth before confirming.
-          const hasImage = !!(stateBefore && stateBefore.hasImage);
-          const offerTarget = hasImage ? 'editorial_split' : 'label_headline';
+          // the inspector's one-tap "switch to a layout that shows it" applies.
+          // (task #59) The target is the SOLVER-VERIFIED reveal candidate computed
+          // above — when none qualified the offer is withheld and the honest line
+          // below runs instead (complete-or-absent for offers; the executor still
+          // re-verifies render truth before confirming). Typing "yes" or tapping the
+          // chip executes THIS patch directly (no model round-trip).
+          const offerTarget = verifiedReveal !== undefined
+            ? (verifiedReveal ? verifiedReveal.archetypeId : null)
+            : (hasImageNow ? 'editorial_split' : 'label_headline');
           const revealRoles = deadFields.map(([, role]) => role);
           // COPY TRAVELS: carry the just-filled copy fields into the switch patch so
           // materialization writes them into the NEW layout's roles deterministically
@@ -1021,7 +1052,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
               : (typeof curDesign[field] === 'string' ? curDesign[field] : undefined);
             if (typeof v === 'string' && v.trim()) carryCopy[field] = v;
           }
-          const offer = offerTarget !== truthAfter.archetypeId
+          const offer = offerTarget && offerTarget !== truthAfter.archetypeId
             ? { id: newTurnId(), kind: 'patch', patch: { archetypeId: offerTarget, ...carryCopy }, revealRoles,
                 label: 'Yes — switch layout',
                 confirm: `Done — I moved you to a layout that shows ${deadHits.join(' or ')}. It's on the canvas now; tap Undo to keep the old one.`,
@@ -1040,7 +1071,12 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
             // No executable switch (already on the target) — the offer PHRASING is
             // banned; state the honest alternative instead.
             role: 'assistant',
-            content: `One honest note — this layout doesn't show ${deadHits.join(' or ')}. Tap the “Try another layout” chip, or tap the element to edit it directly.`,
+            // (task #59) verifiedReveal === null means the solver checked every suited
+            // layout and NONE reveals it without losing other content — say that,
+            // never point at a switch that doesn't exist (complete-or-absent).
+            content: verifiedReveal === null
+              ? `One honest note — this layout doesn't show ${deadHits.join(' or ')}, and I checked the other layouts: none can show it without losing something else. Shortening the copy would open more layouts, or tap the element to edit it directly.`
+              : `One honest note — this layout doesn't show ${deadHits.join(' or ')}. Tap the “Try another layout” chip, or tap the element to edit it directly.`,
           }]);
           setLoading(false);
           return;
@@ -1073,21 +1109,40 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
               // (WP-W1) The "switch to one that shows your mark, then put it there"
               // offer now carries a real payload: a layout that draws the logo PLUS
               // the requested placement, executed as one patch on accept.
+              // (task #59 — M2) The target is SOLVER-VERIFIED first: it must draw a
+              // logo AND keep every currently-painted role/element. null = "checked,
+              // none qualifies" → the honest no-offer line; undefined = verifier
+              // unavailable → the legacy art-directed targets.
               const hasImage = !!(stateBefore && stateBefore.hasImage);
-              const logoTarget = hasImage ? 'editorial_split' : 'label_headline';
-              const offer = { id: newTurnId(), kind: 'patch',
-                patch: { archetypeId: logoTarget, ...(requested ? { logoPosition: requested } : {}) },
-                label: 'Yes — switch and place it',
-                confirm: "Done — switched to a layout that carries your mark, and placed it where you asked. Tap Undo to go back.",
-                event: 'logo-no-layout' };
-              verdict.offerMade = true;
-              logFeedback({ turn_id: turnId, session_id: sessionIdRef.current || null,
-                verdict: { event: 'offer-made', offerKind: 'patch', offerEvent: 'logo-no-layout', target: logoTarget } });
-              setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: "This layout doesn't place a logo on its own — want me to switch to one that shows your mark, then put it there?",
-                pendingOffer: offer,
-              }]);
+              const verifiedLogo = verifyLayoutSwitch?.pickLayoutReveal?.({
+                needsLogo: true,
+                preferred: hasImage ? ['editorial_split'] : ['label_headline'],
+              });
+              const logoTarget = verifiedLogo !== undefined
+                ? (verifiedLogo ? verifiedLogo.archetypeId : null)
+                : (hasImage ? 'editorial_split' : 'label_headline');
+              if (logoTarget) {
+                const offer = { id: newTurnId(), kind: 'patch',
+                  patch: { archetypeId: logoTarget, ...(requested ? { logoPosition: requested } : {}) },
+                  label: 'Yes — switch and place it',
+                  confirm: "Done — switched to a layout that carries your mark, and placed it where you asked. Tap Undo to go back.",
+                  event: 'logo-no-layout' };
+                verdict.offerMade = true;
+                logFeedback({ turn_id: turnId, session_id: sessionIdRef.current || null,
+                  verdict: { event: 'offer-made', offerKind: 'patch', offerEvent: 'logo-no-layout', target: logoTarget } });
+                setMessages(prev => [...prev, {
+                  role: 'assistant',
+                  content: "This layout doesn't place a logo on its own — want me to switch to one that shows your mark, then put it there?",
+                  pendingOffer: offer,
+                }]);
+              } else {
+                // Honest no-offer: no verified layout can carry the mark without
+                // losing part of the content (complete-or-absent for offers).
+                setMessages(prev => [...prev, {
+                  role: 'assistant',
+                  content: "This layout doesn't place a logo on its own, and I checked the others — none can carry your mark without losing part of your content. Shortening the copy would open up layouts that show it.",
+                }]);
+              }
             } else {
               setMessages(prev => [...prev, {
                 role: 'assistant',
@@ -1118,7 +1173,7 @@ export default function ArtDirectorChat({ designState, onApplyPatch, onGenerateI
       commitLog();
       setLoading(false);
     }
-  }, [input, loading, messages, designState, onApplyPatch, onGenerateImage, onChangePhoto, onPolish, renderTruth, fileFeedback, fileFeedbackAddendum]);
+  }, [input, loading, messages, designState, verifyLayoutSwitch, onApplyPatch, onGenerateImage, onChangePhoto, onPolish, renderTruth, fileFeedback, fileFeedbackAddendum]);
 
   // (findings actions-model law) Expose an imperative send so a finding's "Shorten it
   // for me" ai-fix action can route a targeted prompt through the SAME assistant +
