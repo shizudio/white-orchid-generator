@@ -104,6 +104,16 @@ alter table brand_kit add column if not exists typography_config jsonb not null 
     "cta":        ["badge"]
   }
 }'::jsonb;
+-- (Brand Style DNA — docs/brand-style-dna-spec.md, ratified 2026-08-03) The
+-- brand's photographic style block, distilled from owner-chosen anchor photos
+-- or hand-written: { text, distilledFrom:[image ids], updatedAt, authorship:
+-- "owner"|"ai" }. DATA, never code (zero-brand-facts). Nullable, default NULL
+-- = "no style DNA yet": every read path (design-generate prompt assembly, the
+-- QC criterion, the admin Photo-style section) treats an absent value as the
+-- pre-feature product — byte-identical prompts, unchanged QC. An un-migrated
+-- DB degrades via the photo_brief.styleDna write fallback (lib/style-dna.mjs
+-- writeStyleDna; promoted by lib/migrations/2026-08-03-style-dna.sql).
+alter table brand_kit add column if not exists style_dna jsonb;
 
 -- Logo variants (admin-managed, replaces hardcoded LOGO_VARIANTS)
 create table if not exists logo_variants (
@@ -221,8 +231,11 @@ create table if not exists images (
   thumb_path      text,                          -- compressed thumbnail path
   filename        text not null,
   source_type     text not null check (source_type in ('generated','uploaded')),
+  -- DORMANT (client ruling 2026-08-03: "remove the consent category"): the app
+  -- no longer reads, requires, or surfaces consent_status anywhere — new rows
+  -- always write the default 'na'. The column is retained (no destructive
+  -- schema change); old rows keep whatever value they had.
   consent_status  text not null default 'na' check (consent_status in ('na','cleared','pending','blocked')),
-  -- na = not applicable (no identifiable people), cleared/pending/blocked = real photos of people
   metadata        jsonb not null default '{}'::jsonb  -- width, height, scene prompt, etc.
 );
 

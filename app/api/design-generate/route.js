@@ -21,11 +21,30 @@
    Vercel-stateless-safe).
    ───────────────────────────────────────────────────────────────────────── */
 
-import { startPhotoJob, pollPhotoJob, higgsfieldConfigured, qcPhoto } from '@/lib/higgsfield';
+import { startPhotoJob, pollPhotoJob, higgsfieldConfigured, qcPhoto, previewPhotoPrompt } from '@/lib/higgsfield';
 import { PATCH_OPTIONS } from '@/lib/design-patch';
+import { getAdminClient } from '@/lib/supabase';
+import { normalizeStyleDna, composeSceneWithStyle } from '@/lib/style-dna.mjs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+// (Brand Style DNA — docs/brand-style-dna-spec.md §4) This route is the single
+// choke point every generated-photo path passes through (landing, refresh,
+// chat generate), so the style block joins the pipeline HERE and only here.
+// Null-safe by contract: ANY Supabase problem (no env, no table, un-migrated
+// column) reads as "no style DNA" and the pipeline proceeds byte-identical to
+// the pre-feature behavior — this lookup can never fail a generation.
+const BRAND_ID = '00000000-0000-0000-0000-000000000001';
+async function currentStyleDna() {
+  try {
+    const supabase = getAdminClient();
+    const { data } = await supabase.from('brand_kit').select('*').eq('id', BRAND_ID).single();
+    return normalizeStyleDna(data); // reads style_dna, then the photo_brief.styleDna fallback
+  } catch {
+    return null;
+  }
+}
 
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 40; // polling is chatty — allow several polls/min per client
@@ -60,7 +79,22 @@ export async function POST(request) {
   const dimensionId = safeDimension(body.dimensionId);
   const negativeSpace = typeof body.negativeSpace === 'string' ? body.negativeSpace.slice(0, 200) : '';
 
-  const { jobId, unconfigured } = await startPhotoJob({ scene, dimensionId, negativeSpace });
+  // (Style DNA) Compose the brand's style block under its delimiter — with no
+  // block, composeSceneWithStyle returns `scene` itself (byte-identical path).
+  const outgoingScene = composeSceneWithStyle(scene, await currentStyleDna());
+
+  // (Style DNA spec §4 — verification) Dev-only dry-run: return the assembled
+  // scene + final photographer-brief prompt WITHOUT submitting a Higgsfield
+  // job (money law — proves prompt assembly live at $0). Never in production.
+  if (body.__woDryRun === true && process.env.NODE_ENV !== 'production') {
+    return Response.json({
+      dryRun: true,
+      scene: outgoingScene,
+      prompt: previewPhotoPrompt({ scene: outgoingScene, negativeSpace }),
+    });
+  }
+
+  const { jobId, unconfigured } = await startPhotoJob({ scene: outgoingScene, dimensionId, negativeSpace });
   if (unconfigured) return Response.json({ unconfigured: true }, { status: 200 });
   if (!jobId) return Response.json({ failed: true }, { status: 200 }); // out of credits / upstream error → fall back
   return Response.json({ jobId, dimensionId });
@@ -85,11 +119,22 @@ export async function GET(request) {
   // layout makes the background unusable → tell the client so it can re-roll
   // once with a fresh seed (max 2 attempts), then fall back to Library/samples.
   // qc=0 skips (e.g. the final attempt keeps whatever it got). Degrades open.
+  // (Style DNA) When the brand carries a style block, the SAME QC call gains
+  // ONE extra criterion (broad lighting/palette/texture match). An off-brand
+  // verdict re-rolls through the EXISTING machinery — attempt caps unchanged,
+  // and qc=0 (the final attempt) still skips QC so the user gets a photo over
+  // nothing. Without a block the QC prompt is byte-identical to before.
   const skipQc = searchParams.get('qc') === '0';
   if (!skipQc) {
-    const qc = await qcPhoto(poll.imageB64);
+    const styleDna = await currentStyleDna();
+    const qc = await qcPhoto(poll.imageB64, { styleText: styleDna?.text || null });
     if (!qc.pass) {
-      return Response.json({ status: 'qc_failed', textOrLetters: !!qc.textOrLetters, posterOrLayout: !!qc.posterOrLayout });
+      return Response.json({
+        status: 'qc_failed',
+        textOrLetters: !!qc.textOrLetters,
+        posterOrLayout: !!qc.posterOrLayout,
+        offBrandStyle: !!qc.offBrandStyle,
+      });
     }
   }
   return Response.json({ status: 'done', imageDataUrl: `data:image/png;base64,${poll.imageB64}` });

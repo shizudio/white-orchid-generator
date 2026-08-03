@@ -1,8 +1,10 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import Nav from '@/components/Nav';
+import StyleAnchorPicker from '@/components/StyleAnchorPicker';
 import { resolveTypographyConfig, SANCTIONED_REGISTERS } from '@/lib/typography-config.mjs';
 import { ELEMENT_CLASSES } from '@/lib/text-elements.mjs';
+import { normalizeStyleDna } from '@/lib/style-dna.mjs';
 
 // (Font Ruling B) The admin Typography-registers surface. Roles are the closed set the F map
 // hydrates; the dropdown shows each role with the ACTUAL font from the kit so the owner sees
@@ -72,6 +74,23 @@ export default function BrandKitPage() {
   const [assetBusy, setAssetBusy] = useState(false);
   const assetInputRef = useRef(null);
 
+  // (Brand Style DNA — docs/brand-style-dna-spec.md §2) The Photo style section.
+  // styleText is the editable block; styleMeta the last-SAVED block (authorship/
+  // anchors/date); adoptedDraft tracks a distill draft the owner pulled into the
+  // textarea, so an UNEDITED save honestly keeps authorship "ai" + its anchors,
+  // while any hand-edit saves as "owner". Nothing auto-applies: the Distill tap
+  // spends, only Save adopts.
+  const [styleText, setStyleText] = useState('');
+  const [styleMeta, setStyleMeta] = useState(null);
+  const [adoptedDraft, setAdoptedDraft] = useState(null);
+  const [draftResult, setDraftResult] = useState(null);
+  const [showAnchorPicker, setShowAnchorPicker] = useState(false);
+  const [distilling, setDistilling] = useState(false);
+  const [distillNote, setDistillNote] = useState('');
+  const [styleSaving, setStyleSaving] = useState(false);
+  const [styleSaved, setStyleSaved] = useState(false);
+  const [styleError, setStyleError] = useState(null);
+
   useEffect(() => {
     fetch('/api/brand').then(r => r.json()).then(d => {
       // Tolerate the graceful-degradation shape: a missing Supabase env answers
@@ -80,7 +99,14 @@ export default function BrandKitPage() {
       if (d?.configured === false || !Array.isArray(d?.colors)) { setUnconfigured(true); return; }
       // (Font Ruling B) Resolve typography_config so the registers UI always has a complete
       // config to edit (a null/partial column degrades to the White Orchid default).
-      if (d.error) setError(d.error); else setKit({ ...d, typography_config: resolveTypographyConfig(d.typography_config) });
+      if (d.error) setError(d.error); else {
+        setKit({ ...d, typography_config: resolveTypographyConfig(d.typography_config) });
+        // (Style DNA) normalizeStyleDna reads the column OR the pre-migration
+        // photo_brief.styleDna fallback; null = "no style DNA yet" (empty box).
+        const block = normalizeStyleDna(d);
+        setStyleMeta(block);
+        setStyleText(block?.text || '');
+      }
     }).catch(() => setUnconfigured(true));
     fetch('/api/brand-assets').then(r => r.json()).then(d => {
       setAssetsConfigured(d?.configured !== false);
@@ -130,6 +156,58 @@ export default function BrandKitPage() {
     if (res.status === 503 || d?.configured === false) { setError('Cloud storage isn’t configured on the server — the brand kit can’t be saved yet.'); return; }
     // Re-resolve the returned config so the editor state stays complete after a round-trip.
     if (d.error) setError(d.error); else { setKit({ ...d, typography_config: resolveTypographyConfig(d.typography_config) }); setSaved(true); setTimeout(() => setSaved(false), 3000); }
+  };
+
+  // (Style DNA) Save ONLY the style block through the same gated PATCH.
+  // An unedited adopted draft saves as authorship "ai" with its anchor ids
+  // (honesty: the record says who wrote it); any other text saves as "owner".
+  // Empty text clears (style_dna: null). The server stamps updatedAt.
+  const saveStyle = async () => {
+    setStyleSaving(true); setStyleSaved(false); setStyleError(null);
+    const text = styleText.trim();
+    const isUneditedDraft = !!(adoptedDraft && text === adoptedDraft.text.trim());
+    const block = text ? {
+      text,
+      distilledFrom: isUneditedDraft ? adoptedDraft.anchors : (styleMeta?.distilledFrom || []),
+      authorship: isUneditedDraft ? 'ai' : 'owner',
+    } : null;
+    const res = await fetch('/api/brand', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-wo-admin-key': adminKey },
+      body: JSON.stringify({ style_dna: block }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setStyleSaving(false);
+    if (res.status === 403) { setStyleError(adminKey ? 'That admin key is wrong — the photo style was not saved.' : 'An admin key is required to save. Enter it below.'); return; }
+    if (res.status === 503 || d?.configured === false) { setStyleError('Cloud storage isn’t configured on the server — the photo style can’t be saved yet.'); return; }
+    if (d.error) { setStyleError(d.error); return; }
+    setStyleMeta(normalizeStyleDna(d));
+    setStyleSaved(true); setTimeout(() => setStyleSaved(false), 3000);
+  };
+
+  // (Style DNA) Run the distill pass on the chosen anchors. This SPENDS AI
+  // credits (honest copy in the section); the result is only a DRAFT shown
+  // below — it touches nothing until the owner adopts and saves it.
+  const runDistill = async (anchors) => {
+    setShowAnchorPicker(false);
+    setDistilling(true); setDistillNote(''); setDraftResult(null);
+    try {
+      const res = await fetch('/api/brand/style-distill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-wo-admin-key': adminKey },
+        body: JSON.stringify({ imageIds: anchors.map(a => a.id) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.status === 403) { setDistillNote(adminKey ? 'That admin key is wrong — distilling needs a valid admin key.' : 'An admin key is required to distill. Enter it below, then try again.'); return; }
+      if (res.status === 503 || d?.configured === false) { setDistillNote('AI distilling isn’t configured on this server yet.'); return; }
+      if (res.status === 429) { setDistillNote('One moment — please wait a minute and try again.'); return; }
+      if (d?.failed || !d?.draft) { setDistillNote(d?.reason || 'Distilling didn’t produce a draft — please try again.'); return; }
+      setDraftResult({ draft: d.draft, perImageNotes: Array.isArray(d.perImageNotes) ? d.perImageNotes : [], anchors });
+    } catch {
+      setDistillNote('Distilling hit a snag — please try again.');
+    } finally {
+      setDistilling(false);
+    }
   };
 
   const updateColor = (i, field, val) => {
@@ -327,6 +405,67 @@ export default function BrandKitPage() {
 
         <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
 
+        {/* Photo style (Brand Style DNA — docs/brand-style-dna-spec.md §2).
+            The block is DATA on the brand row; distilling SPENDS AI credits
+            (stated honestly below) but adopts nothing — only Save adopts. */}
+        <section style={{ marginBottom: 48 }}>
+          <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Photo style</div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 16, maxWidth: 520 }}>
+            How every AI-generated photo should look — lighting, palette, composition, texture. It describes the look, never the subject, so it works with any scene. It joins every photo prompt, and photos that clearly miss it are re-rolled automatically. Write it yourself, or distill it from photos you already love.
+          </p>
+          <textarea aria-label="Photo style" value={styleText} onChange={e => setStyleText(e.target.value)}
+            placeholder="e.g. Bright, evenly lit natural daylight. Warm, muted palette with soft earthy tones. Generous negative space, shallow depth of field, minimal grain, calm documentary mood."
+            style={{ width: '100%', padding: '12px 16px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', fontSize: 14, fontFamily: 'var(--font-body)', color: 'var(--fg-strong)', background: 'var(--bg)', outline: 'none', resize: 'vertical', minHeight: 110, lineHeight: 1.6 }} />
+          {styleMeta && (
+            <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--fg-subtle)', marginTop: 8 }}>
+              Saved {styleMeta.updatedAt ? new Date(styleMeta.updatedAt).toLocaleString() : ''} · written by {styleMeta.authorship === 'ai' ? 'AI (distilled' + (styleMeta.distilledFrom.length ? ` from ${styleMeta.distilledFrom.length} photos` : '') + ', approved by you)' : 'you'}
+            </p>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+            <button onClick={saveStyle} disabled={styleSaving}
+              style={{ padding: '10px 26px', background: styleSaving ? 'var(--tw-ash)' : 'var(--tw-burnham)', color: styleSaving ? 'var(--fg-muted)' : '#fff', border: 'none', borderRadius: 'var(--radius-2xl)', fontFamily: 'var(--font-syne)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: styleSaving ? 'not-allowed' : 'pointer' }}>
+              {styleSaving ? 'Saving…' : 'Save photo style'}
+            </button>
+            <button onClick={() => { setDistillNote(''); setShowAnchorPicker(true); }} disabled={distilling}
+              style={{ padding: '10px 22px', background: 'var(--bg-raised)', color: 'var(--fg-strong)', border: '1px solid var(--line)', borderRadius: 'var(--radius-2xl)', fontFamily: 'var(--font-syne)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: distilling ? 'wait' : 'pointer' }}>
+              {distilling ? 'Distilling…' : 'Distill from my photos'}
+            </button>
+            {styleSaved && <span style={{ fontFamily: 'var(--font-syne)', fontSize: 12, fontWeight: 600, color: 'var(--tw-celadon-deep)', letterSpacing: '0.06em' }}>✓ Saved</span>}
+            {styleError && <span role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--tw-tangerine)' }}>{styleError}</span>}
+          </div>
+          <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--fg-muted)', marginTop: 10, lineHeight: 1.5, maxWidth: 520 }}>
+            Distilling reads each chosen photo with AI, so it uses paid AI credits (roughly a cent per photo). It only writes a draft below — nothing changes until you save.
+          </p>
+          {distilling && (
+            <p role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--fg-muted)', marginTop: 10 }}>Reading your photos and writing a draft — this takes a few seconds…</p>
+          )}
+          {distillNote && !distilling && (
+            <p role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--tw-tangerine)', marginTop: 10 }}>{distillNote}</p>
+          )}
+          {draftResult && (
+            <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--bg-raised)', padding: '16px 18px' }}>
+              <div style={{ fontFamily: 'var(--font-syne)', fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 10 }}>Draft — from {draftResult.anchors.length} photos</div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                {draftResult.anchors.map(a => (
+                  <div key={a.id} title={a.filename} style={{ width: 44, height: 44, borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--bg-soft)' }}>
+                    {a.url && <img src={a.url} alt={a.filename} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontFamily: 'var(--font-body)', fontSize: 13.5, color: 'var(--fg-strong)', lineHeight: 1.65, marginBottom: 12 }}>{draftResult.draft}</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button onClick={() => { setStyleText(draftResult.draft); setAdoptedDraft({ text: draftResult.draft, anchors: draftResult.anchors.map(a => a.id) }); }}
+                  style={{ padding: '8px 20px', background: 'var(--tw-burnham)', color: '#fff', border: 'none', borderRadius: 'var(--radius-2xl)', fontFamily: 'var(--font-syne)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' }}>
+                  Use this draft
+                </button>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--fg-subtle)' }}>Edit it above if you like, then Save to apply.</span>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <hr style={{ border: 'none', borderTop: '1px solid var(--line)', marginBottom: 48 }} />
+
         {/* Guardrails */}
         <section style={{ marginBottom: 48 }}>
           <div style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-subtle)', marginBottom: 8 }}>Content guardrails</div>
@@ -358,6 +497,9 @@ export default function BrandKitPage() {
           {error && <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--tw-tangerine)' }}>{error}</span>}
         </div>
       </div>
+
+      {/* (Style DNA) Anchor picker modal — multi-select 3–8, then distill. */}
+      {showAnchorPicker && <StyleAnchorPicker onConfirm={runDistill} onClose={() => setShowAnchorPicker(false)} />}
     </div>
   );
 }
