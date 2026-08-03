@@ -5,6 +5,7 @@ import {
   isCheckViolation,
   presentImageRow,
 } from '@/lib/media-taxonomy.mjs';
+import { normalizeActivityLabel } from '@/lib/activity-labels.mjs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -85,7 +86,6 @@ export async function POST(request) {
 
   const file = formData.get('file');
   const rawSourceType = formData.get('source_type');   // generated | uploaded (legacy midjourney_render/real_photo mapped)
-  const consentStatus = formData.get('consent_status') || 'na'; // na | cleared | pending | blocked
   // (Activity lineage) The design session this image entered the library from.
   const sessionId = String(formData.get('session_id') || '').slice(0, 80) || null;
   // (Generated images) the scene prompt that produced the photo, when available.
@@ -96,12 +96,11 @@ export async function POST(request) {
     return Response.json({ error: 'file and source_type (generated | uploaded) are required' }, { status: 400 });
   }
 
-  // Consent stays orthogonal to the taxonomy. The one legacy contract kept: a
-  // stale client explicitly tagging 'real_photo' must still supply a consent
-  // status (that was the old gate and silently dropping it would weaken it).
-  if (rawSourceType === 'real_photo' && consentStatus === 'na') {
-    return Response.json({ error: 'Real photos require a consent status' }, { status: 400 });
-  }
+  // (Consent removed — client ruling 2026-08-03: "remove the consent category")
+  // consent_status is no longer read, required, or validated for ANY source_type.
+  // The column stays in the DB (no destructive schema change) and every new row
+  // writes its default 'na', keeping the column valid but dormant. A stale
+  // client still sending consent_status is silently ignored.
 
   const bytes = await file.arrayBuffer();
   const buffer = Buffer.from(bytes);
@@ -128,7 +127,7 @@ export async function POST(request) {
       thumb_path: null, // Phase 3: add sharp for server-side thumb generation
       filename: file.name,
       source_type: sourceType,
-      consent_status: consentStatus,
+      consent_status: 'na', // dormant column (consent category removed 2026-08-03)
       metadata: {
         size: buffer.length,
         type: file.type,
@@ -174,6 +173,62 @@ export async function POST(request) {
 
     // Even the legacy-fallback write answers in the new vocabulary.
     return Response.json({ ...presentImageRow(data), url: urlData?.signedUrl }, { status: 201 });
+  } catch (err) {
+    if (isMissingConfig(err)) return unconfigured();
+    return Response.json({ error: String(err?.message || err) }, { status: 500 });
+  }
+}
+
+// PATCH /api/images?id=… body { activityLabel } — the owner moves an image to a
+// different activity group ("Change group", client ruling 2026-08-03). Writes
+// metadata.activity = { label, authorship:'owner', … }; owner labels are PINNED
+// — the categorize run never overwrites them (pins law, manual §3.5). Free
+// (no AI call), so it is ungated like DELETE. Same graceful-degradation shape.
+export async function PATCH(request) {
+  let supabase;
+  try { supabase = getAdminClient(); } catch { return unconfigured(); }
+  const id = new URL(request.url).searchParams.get('id');
+  if (!id) return Response.json({ error: 'id is required' }, { status: 400 });
+
+  let body;
+  try { body = await request.json(); } catch { return Response.json({ error: 'Invalid request.' }, { status: 400 }); }
+  const label = normalizeActivityLabel(body?.activityLabel);
+  if (!label) {
+    return Response.json({ error: 'activityLabel (1-3 words) is required' }, { status: 400 });
+  }
+
+  try {
+    const { data: row, error: readError } = await supabase
+      .from('images')
+      .select('id, metadata')
+      .eq('id', id)
+      .maybeSingle();
+    if (readError) {
+      if (isMissingConfig(readError)) return unconfigured();
+      return Response.json({ error: readError.message }, { status: 500 });
+    }
+    if (!row) return Response.json({ error: 'Image not found.' }, { status: 404 });
+
+    const metadata = {
+      ...(row.metadata || {}),
+      activity: {
+        label,
+        raw: String(body?.activityLabel ?? '').slice(0, 120),
+        authorship: 'owner',
+        labeledAt: new Date().toISOString(),
+      },
+    };
+    const { data: updated, error: upErr } = await supabase
+      .from('images')
+      .update({ metadata })
+      .eq('id', id)
+      .select()
+      .single();
+    if (upErr) {
+      if (isMissingConfig(upErr)) return unconfigured();
+      return Response.json({ error: upErr.message }, { status: 500 });
+    }
+    return Response.json({ configured: true, image: presentImageRow(updated) });
   } catch (err) {
     if (isMissingConfig(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });

@@ -1,20 +1,18 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import Nav from '@/components/Nav';
-import { groupImagesBySession } from '@/lib/media-taxonomy.mjs';
+import { groupImagesByActivity, imageActivityLabel, NOT_CATEGORIZED_KEY } from '@/lib/activity-labels.mjs';
 
 // (Media organization — client ruling 2026-07-29) The taxonomy is activity-based:
 // generated | uploaded ("the midjourney tag is outdated"). /api/images maps any
 // legacy stored value to this vocabulary, so this page never sees the old tags.
-// Consent stays an orthogonal dimension: 'na' (no identifiable people) carries NO
-// badge — the old source-implying "Midjourney" label is gone.
-const CONSENT_BADGE = {
-  cleared: { label: 'Consent ✓', color: '#2B5040', bg: 'rgba(43,80,64,0.12)' },
-  pending: { label: 'Consent pending', color: '#C9A030', bg: 'rgba(201,160,48,0.12)' },
-  blocked: { label: 'No consent', color: '#CC3333', bg: 'rgba(204,51,51,0.1)' },
-};
-
+// (Consent removed — client ruling 2026-08-03: "remove the consent category")
+// consent_status still arrives on rows (dormant DB column) and is IGNORED here:
+// no filter, no badges, no blocked gating.
+// (By activity — client ruling 2026-08-03) the view groups by DETECTED activity
+// (metadata.activity, written by the vision categorizer or the owner), not by
+// session lineage; lineage stays recorded on rows.
 const SOURCE_LABEL = {
   generated: 'Generated',
   uploaded: 'Uploaded',
@@ -23,20 +21,23 @@ const SOURCE_LABEL = {
 export default function LibraryPage() {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({ sourceType: 'all', consent: 'all', search: '' });
+  const [filter, setFilter] = useState({ sourceType: 'all', search: '' });
   const [signedUrls, setSignedUrls] = useState({});
-  // (By activity — "the system can auto group them base on the activity")
   const [view, setView] = useState('all'); // 'all' | 'activity'
-  const [sessionsById, setSessionsById] = useState({});
   // (Delete — "i should also be able to easily delete them")
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [confirmIds, setConfirmIds] = useState(null); // array of ids awaiting the confirm dialog
   const [deleting, setDeleting] = useState(false);
   const [deleteNotice, setDeleteNotice] = useState('');
+  // (Categorize — a user-invoked PAID action; never runs on its own)
+  const [catRun, setCatRun] = useState(null); // { done, total } while running
+  const [catNotice, setCatNotice] = useState('');
+  // (Change group — owner relabel; pinned against future categorize runs)
+  const [regroupImg, setRegroupImg] = useState(null);
 
-  useEffect(() => {
-    fetch('/api/images')
+  const loadImages = useCallback(() => {
+    return fetch('/api/images')
       .then(r => r.json())
       .then(data => {
         // Tolerate the graceful-degradation shape ({ configured:false }): treat a
@@ -48,33 +49,99 @@ export default function LibraryPage() {
         const map = {};
         list.forEach(img => { if (img.url) map[img.storage_path] = img.url; });
         setSignedUrls(map);
+        return list;
       })
-      .catch(() => setLoading(false));
-    // Session titles for the "By activity" headers — one fetch, joined client-side.
-    // Both the visible list and the archived tail, so older lineage still names itself.
-    Promise.all([
-      fetch('/api/sessions').then(r => r.json()).catch(() => ({})),
-      fetch('/api/sessions?archived=1').then(r => r.json()).catch(() => ({})),
-    ]).then(([recent, archived]) => {
-      const map = {};
-      for (const s of [...(recent?.sessions || []), ...(archived?.sessions || [])]) {
-        if (s?.id) map[s.id] = { title: s.title, updated_at: s.updated_at };
-      }
-      setSessionsById(map);
-    }).catch(() => {});
+      .catch(() => { setLoading(false); return []; });
   }, []);
+
+  useEffect(() => { loadImages(); }, [loadImages]);
 
   const filtered = images.filter(img => {
     if (filter.sourceType !== 'all' && img.source_type !== filter.sourceType) return false;
-    if (filter.consent !== 'all' && img.consent_status !== filter.consent) return false;
     if (filter.search && !img.filename.toLowerCase().includes(filter.search.toLowerCase())) return false;
     return true;
   });
 
   const activityGroups = useMemo(
-    () => (view === 'activity' ? groupImagesBySession(filtered, sessionsById) : []),
-    [view, filtered, sessionsById],
+    () => (view === 'activity' ? groupImagesByActivity(filtered) : []),
+    [view, filtered],
   );
+  // Honest count for the button: the WHOLE library's unlabeled rows (the run
+  // processes everything unlabeled, not just what the current filters show).
+  const unlabeledCount = useMemo(
+    () => images.filter(img => !imageActivityLabel(img)).length,
+    [images],
+  );
+  const existingLabels = useMemo(
+    () => groupImagesByActivity(images).filter(g => g.categorized).map(g => g.label),
+    [images],
+  );
+
+  // Batch loop: POST /api/images/categorize until remaining === 0. Spends AI
+  // credits, so it only ever runs from the button tap; the admin key travels the
+  // same way as the brand-library flow (localStorage 'wo-admin-key' →
+  // x-wo-admin-key header).
+  const runCategorize = async () => {
+    setCatNotice('');
+    let adminKey = '';
+    try { adminKey = localStorage.getItem('wo-admin-key') || ''; } catch {}
+    if (!adminKey) {
+      setCatNotice("Categorizing needs the owner admin key on this device. In the browser console, run: localStorage.setItem('wo-admin-key', '<your key>') — then try again.");
+      return;
+    }
+    const total = unlabeledCount;
+    setCatRun({ done: 0, total });
+    let done = 0;
+    const skippedAll = [];
+    try {
+      for (;;) {
+        const res = await fetch('/api/images/categorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-wo-admin-key': adminKey },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 429) { await new Promise(r => setTimeout(r, 5000)); continue; } // rate-limited → wait and retry
+        if (res.status === 403) { setCatNotice('That admin key is wrong — nothing was categorized.'); break; }
+        if (data?.configured === false) { setCatNotice('Categorizing isn’t available on this server yet (AI key or storage not configured). Nothing was spent.'); break; }
+        if (!res.ok) { setCatNotice(`Categorizing stopped: ${data?.error || res.statusText}. Already-labeled photos are saved.`); break; }
+        done += (data.labeled?.length || 0) + (data.skipped?.length || 0);
+        skippedAll.push(...(data.skipped || []));
+        setCatRun({ done: Math.min(done, total), total });
+        if (!data.remaining) {
+          setCatNotice(skippedAll.length
+            ? `Done — ${done - skippedAll.length} photo${done - skippedAll.length === 1 ? '' : 's'} categorized. ${skippedAll.length} couldn’t be read and stayed uncategorized: ${skippedAll.map(s => s.filename || s.id).slice(0, 3).join(', ')}${skippedAll.length > 3 ? '…' : ''}`
+            : `Done — ${done} photo${done === 1 ? '' : 's'} categorized.`);
+          break;
+        }
+      }
+    } catch (err) {
+      setCatNotice(`Categorizing stopped: ${err?.message || 'network error'}. Already-labeled photos are saved.`);
+    }
+    await loadImages(); // regroup live with whatever got labeled
+    setCatRun(null);
+  };
+
+  // Owner relabel — writes metadata.activity with authorship 'owner' (pinned).
+  const applyRegroup = async (img, label) => {
+    try {
+      const res = await fetch(`/api/images?id=${encodeURIComponent(img.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activityLabel: label }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.image) {
+        setImages(prev => prev.map(i => (i.id === img.id ? { ...i, metadata: data.image.metadata } : i)));
+        setRegroupImg(null);
+        return;
+      }
+      setCatNotice(`Couldn’t move that photo: ${data?.error || res.statusText}`);
+    } catch (err) {
+      setCatNotice(`Couldn’t move that photo: ${err?.message || 'network error'}`);
+    }
+    setRegroupImg(null);
+  };
 
   const toggleSelected = id => setSelected(prev => {
     const next = new Set(prev);
@@ -110,6 +177,8 @@ export default function LibraryPage() {
     isSelected: selected.has(img.id),
     onToggleSelect: () => toggleSelected(img.id),
     onDelete: () => setConfirmIds([img.id]),
+    // "Change group" only in the By-activity view, only on labeled cards.
+    onChangeGroup: view === 'activity' && imageActivityLabel(img) ? () => setRegroupImg(img) : null,
   });
 
   const renderGrid = list => (
@@ -172,12 +241,6 @@ export default function LibraryPage() {
             onChange={v => setFilter(f => ({ ...f, sourceType: v }))}
           />
           <FilterChips
-            label="Consent"
-            value={filter.consent}
-            options={[{ value: 'all', label: 'All' }, { value: 'na', label: 'N/A' }, { value: 'cleared', label: 'Cleared' }, { value: 'pending', label: 'Pending' }, { value: 'blocked', label: 'Blocked' }]}
-            onChange={v => setFilter(f => ({ ...f, consent: v }))}
-          />
-          <FilterChips
             label="View"
             value={view}
             options={[{ value: 'all', label: 'All' }, { value: 'activity', label: 'By activity' }]}
@@ -189,6 +252,35 @@ export default function LibraryPage() {
           <p role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#CC3333', marginBottom: 16 }}>{deleteNotice}</p>
         )}
 
+        {/* Categorize control — an honest, user-invoked PAID action. */}
+        {view === 'activity' && !loading && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 24, background: '#fff', border: '1.5px solid rgba(184,176,168,0.4)', borderRadius: 12, padding: '14px 18px' }}>
+            {catRun ? (
+              <span role="status" style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, letterSpacing: 1, color: 'var(--tw-burnham)' }}>
+                Categorizing… {catRun.done} of {catRun.total}
+              </span>
+            ) : unlabeledCount > 0 ? (
+              <>
+                <button
+                  onClick={runCategorize}
+                  style={{ padding: '10px 22px', background: 'var(--tw-burnham)', color: '#fff', border: 'none', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', cursor: 'pointer' }}>
+                  Categorize {unlabeledCount} image{unlabeledCount !== 1 ? 's' : ''}
+                </button>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#6B6560', lineHeight: 1.5 }}>
+                  Uses AI credits to look at each photo and name its activity. New photos aren’t labeled automatically — they’re categorized next time you run it.
+                </span>
+              </>
+            ) : (
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#6B6560' }}>
+                Every photo is categorized. New photos are categorized next time you run it.
+              </span>
+            )}
+            {catNotice && (
+              <span role="status" style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--tw-burnham)', flexBasis: '100%' }}>{catNotice}</span>
+            )}
+          </div>
+        )}
+
         {/* Grid / activity groups */}
         {loading ? (
           <div style={{ textAlign: 'center', padding: '80px 0', fontFamily: 'var(--font-ui)', color: 'var(--tw-burnham)', fontSize: 13, letterSpacing: 2 }}>Loading…</div>
@@ -197,9 +289,9 @@ export default function LibraryPage() {
         ) : view === 'activity' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             {activityGroups.map(group => (
-              <section key={group.sessionId || 'unlinked'}>
+              <section key={group.key}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-                  <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: 19, fontWeight: 400, color: 'var(--fg-strong)' }}>{group.title}</h2>
+                  <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: 19, fontWeight: 400, color: 'var(--fg-strong)', textTransform: group.categorized ? 'capitalize' : 'none' }}>{group.label}</h2>
                   {group.newestAt > 0 && (
                     <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#6B6560' }}>
                       {new Date(group.newestAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
@@ -209,9 +301,9 @@ export default function LibraryPage() {
                     {group.items.length} image{group.items.length !== 1 ? 's' : ''}
                   </span>
                 </div>
-                {group.sessionId === null && (
+                {group.key === NOT_CATEGORIZED_KEY && (
                   <p style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#6B6560', margin: '0 0 12px' }}>
-                    These images were added before activity tracking, so they aren't linked to a post.
+                    These photos haven’t been looked at yet — the Categorize button above sorts them into activity groups.
                   </p>
                 )}
                 {renderGrid(group.items)}
@@ -222,6 +314,20 @@ export default function LibraryPage() {
           renderGrid(filtered)
         )}
       </div>
+
+      {/* Change-group dialog — pick an existing group or type a new label. */}
+      {regroupImg && (
+        <div role="dialog" aria-modal="true" aria-label="Change activity group"
+          onClick={() => setRegroupImg(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(37,45,40,0.55)', display: 'grid', placeItems: 'center', padding: 24 }}>
+          <RegroupDialog
+            img={regroupImg}
+            labels={existingLabels}
+            onPick={label => applyRegroup(regroupImg, label)}
+            onClose={() => setRegroupImg(null)}
+          />
+        </div>
+      )}
 
       {/* Delete confirm dialog — deletion is permanent, so this is required. */}
       {confirmIds && (
@@ -253,12 +359,56 @@ export default function LibraryPage() {
   );
 }
 
-function ImageCard({ img, url, selectMode, isSelected, onToggleSelect, onDelete }) {
-  const badge = CONSENT_BADGE[img.consent_status] || null;   // 'na' carries no badge (source-neutral)
-  const isBlocked = img.consent_status === 'blocked';
+function RegroupDialog({ img, labels, onPick, onClose }) {
+  const [custom, setCustom] = useState('');
+  const current = imageActivityLabel(img);
+  const others = labels.filter(l => l !== current);
+  return (
+    <div onClick={e => e.stopPropagation()}
+      style={{ background: '#fff', borderRadius: 14, padding: '24px 26px', maxWidth: 420, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--tw-jet)', marginBottom: 4 }}>
+        Move to a different group
+      </div>
+      <p style={{ fontFamily: 'var(--font-body)', fontSize: 12.5, color: '#6B6560', lineHeight: 1.5, marginBottom: 14 }}>
+        {img.filename} is in <strong style={{ textTransform: 'capitalize' }}>{current}</strong>. Your choice sticks — automatic categorizing never changes it back.
+      </p>
+      {others.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+          {others.map(label => (
+            <button key={label} onClick={() => onPick(label)}
+              style={{ padding: '7px 13px', borderRadius: 40, border: '1.5px solid rgba(184,176,168,0.5)', background: 'transparent', color: 'var(--tw-jet)', fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: 0.3, textTransform: 'capitalize' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      <form onSubmit={e => { e.preventDefault(); if (custom.trim()) onPick(custom); }}
+        style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <input
+          aria-label="New group name"
+          placeholder="Or type a new group…"
+          value={custom}
+          onChange={e => setCustom(e.target.value)}
+          style={{ flex: 1, padding: '9px 14px', border: '1.5px solid rgba(184,176,168,0.5)', borderRadius: 10, fontSize: 13, fontFamily: 'var(--font-body)', background: '#fff', outline: 'none' }}
+        />
+        <button type="submit" disabled={!custom.trim()}
+          style={{ padding: '9px 18px', background: custom.trim() ? 'var(--tw-burnham)' : '#ccc', color: '#fff', border: 'none', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', cursor: custom.trim() ? 'pointer' : 'not-allowed' }}>
+          Move
+        </button>
+      </form>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={onClose}
+          style={{ padding: '9px 18px', background: 'transparent', color: 'var(--tw-burnham)', border: '1.5px solid rgba(184,176,168,0.6)', borderRadius: 40, fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', cursor: 'pointer' }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
+function ImageCard({ img, url, selectMode, isSelected, onToggleSelect, onDelete, onChangeGroup }) {
   const card = (
-    <div className="library-card" style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', border: `1.5px solid ${isSelected ? 'var(--tw-burnham)' : isBlocked ? 'rgba(204,51,51,0.3)' : 'rgba(184,176,168,0.3)'}`, position: 'relative', boxShadow: isSelected ? '0 0 0 2px rgba(43,80,64,0.25)' : 'none' }}>
+    <div className="library-card" style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', border: `1.5px solid ${isSelected ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.3)'}`, position: 'relative', boxShadow: isSelected ? '0 0 0 2px rgba(43,80,64,0.25)' : 'none' }}>
       {!selectMode && (
         <button type="button" className="library-card-del" aria-label={`Delete ${img.filename}`} title="Delete this image (permanent)"
           onClick={e => { e.stopPropagation(); onDelete(); }}>✕</button>
@@ -271,14 +421,9 @@ function ImageCard({ img, url, selectMode, isSelected, onToggleSelect, onDelete 
       {/* Image */}
       <div style={{ aspectRatio: '1/1', background: '#f5f5f0', position: 'relative', overflow: 'hidden' }}>
         {url ? (
-          <img src={url} alt={img.filename} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', filter: isBlocked ? 'grayscale(0.5) opacity(0.6)' : 'none' }} />
+          <img src={url} alt={img.filename} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 32 }}>🖼</div>
-        )}
-        {isBlocked && (
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(204,51,51,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ background: 'rgba(204,51,51,0.9)', color: '#fff', padding: '6px 12px', borderRadius: 6, fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>Consent required</div>
-          </div>
         )}
       </div>
 
@@ -287,13 +432,19 @@ function ImageCard({ img, url, selectMode, isSelected, onToggleSelect, onDelete 
         <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--tw-jet)', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{img.filename}</div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 600, letterSpacing: 1, color: '#6B6560', textTransform: 'uppercase' }}>{SOURCE_LABEL[img.source_type] || '—'}</span>
-          {badge && <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 700, color: badge.color, background: badge.bg, padding: '2px 7px', borderRadius: 4 }}>{badge.label}</span>}
+          {!selectMode && onChangeGroup && (
+            <button type="button" onClick={e => { e.stopPropagation(); onChangeGroup(); }}
+              aria-label={`Change group for ${img.filename}`}
+              style={{ fontFamily: 'var(--font-syne)', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--tw-burnham)', background: 'transparent', border: '1px solid rgba(43,80,64,0.35)', padding: '3px 9px', borderRadius: 'var(--radius-pill)', cursor: 'pointer' }}>
+              Change group
+            </button>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#aaa' }}>
             {new Date(img.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
           </div>
-          {!selectMode && url && !isBlocked && (
+          {!selectMode && url && (
             <a className="library-save-action" aria-label={`Save ${img.filename}`} href={url} download={img.filename} target="_blank" rel="noreferrer"
               style={{ fontFamily: 'var(--font-syne)', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--tw-burnham)', background: 'var(--tw-celadon-soft)', padding: '4px 10px', borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer', textDecoration: 'none' }}>
               ↓ Save

@@ -3,20 +3,15 @@ import { useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import Nav from '@/components/Nav';
 
-const CONSENT_OPTIONS = [
-  { value: 'cleared', label: 'Cleared for public posting', desc: 'Written consent obtained from all identifiable individuals', color: '#2B5040' },
-  { value: 'pending', label: 'Consent pending', desc: 'Consent process started but not yet confirmed — cannot export until cleared', color: '#C9A030' },
-  { value: 'blocked', label: 'Do not post', desc: 'No consent — this image cannot be exported under any circumstances', color: '#CC3333' },
-];
-
 // (Media organization — client ruling 2026-07-29) Everything brought in through
 // this page is source_type 'uploaded' ("its either generated or uploaded" —
-// 'generated' is reserved for the studio's own AI pipeline). The per-file choice
-// here is therefore about CONSENT, the orthogonal dimension: does the photo show
-// real, identifiable people? peopleTag: 'none' → consent n/a; 'people' → a
-// consent status is required before upload.
+// 'generated' is reserved for the studio's own AI pipeline).
+// (Consent removed — client ruling 2026-08-03: "remove the consent category")
+// The real-people question and per-file consent selector are gone: files upload
+// straight in with no gating. The DB's consent_status column stays dormant at
+// its default; the API no longer reads it.
 export default function UploadPage() {
-  const [files, setFiles] = useState([]); // [{file, preview, peopleTag, consentStatus, status, error, result}]
+  const [files, setFiles] = useState([]); // [{file, preview, status, error, result}]
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef();
 
@@ -25,8 +20,6 @@ export default function UploadPage() {
       id: Math.random().toString(36).slice(2),
       file,
       preview: URL.createObjectURL(file),
-      peopleTag: null,       // 'none' | 'people'
-      consentStatus: null,
       status: 'pending', // pending | uploading | done | error
       error: null,
       result: null,
@@ -47,22 +40,11 @@ export default function UploadPage() {
   const remove = (id) => setFiles(prev => prev.filter(f => f.id !== id));
 
   const uploadOne = async (entry) => {
-    if (!entry.peopleTag) {
-      update(entry.id, { error: 'Tell us whether this photo shows real people before uploading', status: 'error' });
-      return;
-    }
-    if (entry.peopleTag === 'people' && !entry.consentStatus) {
-      update(entry.id, { error: 'Choose a consent status before uploading this photo of real people', status: 'error' });
-      return;
-    }
     update(entry.id, { status: 'uploading', error: null });
 
     const fd = new FormData();
     fd.append('file', entry.file);
     fd.append('source_type', 'uploaded');   // taxonomy 2026-07-29: a person brought it in
-    if (entry.peopleTag === 'people') {
-      fd.append('consent_status', entry.consentStatus);
-    }
 
     const res = await fetch('/api/images', { method: 'POST', body: fd });
     const data = await res.json();
@@ -75,13 +57,10 @@ export default function UploadPage() {
   };
 
   const uploadAll = () => {
-    files.filter(f => f.status === 'pending').forEach(uploadOne);
+    files.filter(f => f.status === 'pending' || f.status === 'error').forEach(uploadOne);
   };
 
-  const allReady = files.length > 0 && files.every(f =>
-    f.peopleTag && (f.peopleTag !== 'people' || f.consentStatus)
-  );
-  const anyPending = files.some(f => f.status === 'pending');
+  const anyPending = files.some(f => f.status === 'pending' || f.status === 'error');
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--fg-on-deep)' }}>
@@ -90,7 +69,7 @@ export default function UploadPage() {
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '40px 24px' }}>
         <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 400, color: 'var(--fg-strong)', letterSpacing: '-0.01em', marginBottom: 6 }}>Upload Images</h1>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: '#6B6560', marginBottom: 32, lineHeight: 1.6 }}>
-          Photos of real, identifiable people need a consent status before they can be exported. Everything else uploads straight in.
+          Everything you add lands in your library, ready to use in designs.
         </p>
 
         {/* Drop zone */}
@@ -136,37 +115,29 @@ export default function UploadPage() {
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 32 }}>
               {files.map(entry => (
-                <FileCard key={entry.id} entry={entry} onUpdate={update} onRemove={remove} onUpload={uploadOne} />
+                <FileCard key={entry.id} entry={entry} onRemove={remove} onUpload={uploadOne} />
               ))}
             </div>
 
             {anyPending && (
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <button
-                  onClick={uploadAll}
-                  disabled={!allReady}
-                  style={{
-                    padding: '14px 40px',
-                    background: allReady ? 'var(--tw-burnham)' : '#ccc',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 40,
-                    fontFamily: 'var(--font-ui)',
-                    fontSize: 13,
-                    fontWeight: 700,
-                    letterSpacing: 2,
-                    textTransform: 'uppercase',
-                    cursor: allReady ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Upload All
-                </button>
-                {!allReady && (
-                  <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#CC3333' }}>
-                    Answer the real-people question (and consent, where needed) for every photo
-                  </span>
-                )}
-              </div>
+              <button
+                onClick={uploadAll}
+                style={{
+                  padding: '14px 40px',
+                  background: 'var(--tw-burnham)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 40,
+                  fontFamily: 'var(--font-ui)',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  letterSpacing: 2,
+                  textTransform: 'uppercase',
+                  cursor: 'pointer',
+                }}
+              >
+                Upload All
+              </button>
             )}
 
             {files.every(f => f.status === 'done') && (
@@ -187,7 +158,7 @@ export default function UploadPage() {
   );
 }
 
-function FileCard({ entry, onUpdate, onRemove, onUpload }) {
+function FileCard({ entry, onRemove, onUpload }) {
   const isDone = entry.status === 'done';
   const isUploading = entry.status === 'uploading';
   const isError = entry.status === 'error';
@@ -200,7 +171,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
       padding: 16,
       display: 'flex',
       gap: 16,
-      alignItems: 'flex-start',
+      alignItems: 'center',
       opacity: isDone ? 0.85 : 1,
     }}>
       {/* Thumbnail */}
@@ -214,80 +185,19 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
         )}
       </div>
 
-      {/* Controls */}
+      {/* Name + state */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--tw-jet)', marginBottom: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--tw-jet)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.file.name}
         </div>
-
-        {!isDone && (
-          <>
-            {/* Consent dimension: does the photo show real, identifiable people? */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={sectionLabel}>Real people in this photo?</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {[
-                  { value: 'none', label: 'No identifiable people' },
-                  { value: 'people', label: 'Real, identifiable people' },
-                ].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => onUpdate(entry.id, { peopleTag: opt.value, consentStatus: opt.value === 'people' ? null : 'na', error: null, status: entry.status === 'error' ? 'pending' : entry.status })}
-                    style={{
-                      padding: '7px 14px',
-                      borderRadius: 40,
-                      border: `1.5px solid ${entry.peopleTag === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`,
-                      background: entry.peopleTag === opt.value ? 'var(--tw-burnham)' : 'transparent',
-                      color: entry.peopleTag === opt.value ? '#fff' : 'var(--tw-jet)',
-                      fontFamily: 'var(--font-ui)',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      letterSpacing: 0.3,
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Consent gate — only for photos of real people */}
-            {entry.peopleTag === 'people' && (
-              <div style={{ marginBottom: 12, background: 'rgba(43,80,64,0.04)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(43,80,64,0.12)' }}>
-                <div style={{ ...sectionLabel, marginBottom: 8 }}>Consent status <span style={{ color: '#CC3333' }}>*</span></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {CONSENT_OPTIONS.map(opt => (
-                    <label key={opt.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        name={`consent-${entry.id}`}
-                        value={opt.value}
-                        checked={entry.consentStatus === opt.value}
-                        onChange={() => onUpdate(entry.id, { consentStatus: opt.value })}
-                        style={{ marginTop: 3, accentColor: opt.color }}
-                      />
-                      <div>
-                        <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: opt.color }}>{opt.label}</div>
-                        <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: '#6B6560', lineHeight: 1.4 }}>{opt.desc}</div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {isError && (
-              <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#CC3333', marginBottom: 8 }}>
-                {entry.error}
-              </div>
-            )}
-          </>
+        {isError && (
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: '#CC3333' }}>
+            {entry.error}
+          </div>
         )}
-
         {isDone && (
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--tw-burnham)' }}>
-            Uploaded · {entry.result?.consent_status && entry.result.consent_status !== 'na' ? `Consent: ${entry.result.consent_status}` : 'No consent needed'} · Ready to use
+            Uploaded · Ready to use
           </div>
         )}
       </div>
@@ -298,10 +208,9 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
           <>
             <button
               onClick={() => onUpload(entry)}
-              disabled={!entry.peopleTag}
               style={{
                 padding: '8px 18px',
-                background: entry.peopleTag ? 'var(--tw-tangerine)' : '#ddd',
+                background: 'var(--tw-tangerine)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 20,
@@ -310,10 +219,10 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
                 fontWeight: 700,
                 letterSpacing: 1.5,
                 textTransform: 'uppercase',
-                cursor: entry.peopleTag ? 'pointer' : 'not-allowed',
+                cursor: 'pointer',
               }}
             >
-              Upload
+              {isError ? 'Retry' : 'Upload'}
             </button>
             <button onClick={() => onRemove(entry.id)} style={{ background: 'none', border: 'none', color: '#aaa', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
           </>
@@ -325,4 +234,3 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
 }
 
 const navLink = { fontFamily: 'var(--font-ui)', fontSize: 11, letterSpacing: 2, color: 'var(--tw-celadon)', textTransform: 'uppercase' };
-const sectionLabel = { fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: '#6B6560', marginBottom: 6, display: 'block' };
