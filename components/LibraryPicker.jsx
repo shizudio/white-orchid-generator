@@ -1,8 +1,9 @@
 'use client';
 import { useState, useEffect } from 'react';
 
+// (Taxonomy 2026-07-29) consent is orthogonal to generated|uploaded — 'na'
+// (no identifiable people) carries no badge; the old "Midjourney" label is gone.
 const CONSENT_BADGE = {
-  na:      { label: 'Midjourney', color: 'var(--tw-celadon-deep)', bg: 'var(--tw-celadon-soft)' },
   cleared: { label: 'Cleared', color: 'var(--tw-celadon-deep)', bg: 'var(--tw-celadon-soft)' },
   pending: { label: 'Pending', color: '#C9A030', bg: 'rgba(201,160,48,0.12)' },
   blocked: { label: 'Blocked', color: '#CC3333', bg: 'rgba(204,51,51,0.1)' },
@@ -76,9 +77,11 @@ export default function LibraryPicker({ onSelect, onClose }) {
                   </div>
                   <div style={{ padding: '8px 10px' }}>
                     <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--fg-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4 }}>{img.filename}</div>
-                    <span style={{ fontFamily: 'var(--font-syne)', fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: CONSENT_BADGE[img.consent_status]?.color, background: CONSENT_BADGE[img.consent_status]?.bg, padding: '2px 6px', borderRadius: 'var(--radius-xs)' }}>
-                      {CONSENT_BADGE[img.consent_status]?.label}
-                    </span>
+                    {CONSENT_BADGE[img.consent_status] && (
+                      <span style={{ fontFamily: 'var(--font-syne)', fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: CONSENT_BADGE[img.consent_status].color, background: CONSENT_BADGE[img.consent_status].bg, padding: '2px 6px', borderRadius: 'var(--radius-xs)' }}>
+                        {CONSENT_BADGE[img.consent_status].label}
+                      </span>
+                    )}
                   </div>
                 </button>
               ))}

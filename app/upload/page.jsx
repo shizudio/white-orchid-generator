@@ -9,8 +9,14 @@ const CONSENT_OPTIONS = [
   { value: 'blocked', label: 'Do not post', desc: 'No consent — this image cannot be exported under any circumstances', color: '#CC3333' },
 ];
 
+// (Media organization — client ruling 2026-07-29) Everything brought in through
+// this page is source_type 'uploaded' ("its either generated or uploaded" —
+// 'generated' is reserved for the studio's own AI pipeline). The per-file choice
+// here is therefore about CONSENT, the orthogonal dimension: does the photo show
+// real, identifiable people? peopleTag: 'none' → consent n/a; 'people' → a
+// consent status is required before upload.
 export default function UploadPage() {
-  const [files, setFiles] = useState([]); // [{file, preview, sourceType, consentStatus, status, error, result}]
+  const [files, setFiles] = useState([]); // [{file, preview, peopleTag, consentStatus, status, error, result}]
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef();
 
@@ -19,7 +25,7 @@ export default function UploadPage() {
       id: Math.random().toString(36).slice(2),
       file,
       preview: URL.createObjectURL(file),
-      sourceType: null,
+      peopleTag: null,       // 'none' | 'people'
       consentStatus: null,
       status: 'pending', // pending | uploading | done | error
       error: null,
@@ -41,20 +47,20 @@ export default function UploadPage() {
   const remove = (id) => setFiles(prev => prev.filter(f => f.id !== id));
 
   const uploadOne = async (entry) => {
-    if (!entry.sourceType) {
-      update(entry.id, { error: 'Select image type before uploading', status: 'error' });
+    if (!entry.peopleTag) {
+      update(entry.id, { error: 'Tell us whether this photo shows real people before uploading', status: 'error' });
       return;
     }
-    if (entry.sourceType === 'real_photo' && !entry.consentStatus) {
-      update(entry.id, { error: 'Choose a consent status before uploading this real photo', status: 'error' });
+    if (entry.peopleTag === 'people' && !entry.consentStatus) {
+      update(entry.id, { error: 'Choose a consent status before uploading this photo of real people', status: 'error' });
       return;
     }
     update(entry.id, { status: 'uploading', error: null });
 
     const fd = new FormData();
     fd.append('file', entry.file);
-    fd.append('source_type', entry.sourceType);
-    if (entry.sourceType === 'real_photo') {
+    fd.append('source_type', 'uploaded');   // taxonomy 2026-07-29: a person brought it in
+    if (entry.peopleTag === 'people') {
       fd.append('consent_status', entry.consentStatus);
     }
 
@@ -73,7 +79,7 @@ export default function UploadPage() {
   };
 
   const allReady = files.length > 0 && files.every(f =>
-    f.sourceType && (f.sourceType !== 'real_photo' || f.consentStatus)
+    f.peopleTag && (f.peopleTag !== 'people' || f.consentStatus)
   );
   const anyPending = files.some(f => f.status === 'pending');
 
@@ -84,7 +90,7 @@ export default function UploadPage() {
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '40px 24px' }}>
         <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 'clamp(1.8rem, 3vw, 2.5rem)', fontWeight: 400, color: 'var(--fg-strong)', letterSpacing: '-0.01em', marginBottom: 6 }}>Upload Images</h1>
         <p style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: '#6B6560', marginBottom: 32, lineHeight: 1.6 }}>
-          Every image must be tagged as a Midjourney render or real photo. Real photos require a consent status before they can be exported.
+          Photos of real, identifiable people need a consent status before they can be exported. Everything else uploads straight in.
         </p>
 
         {/* Drop zone */}
@@ -157,7 +163,7 @@ export default function UploadPage() {
                 </button>
                 {!allReady && (
                   <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: '#CC3333' }}>
-                    Choose an image type and consent status for every real photo
+                    Answer the real-people question (and consent, where needed) for every photo
                   </span>
                 )}
               </div>
@@ -216,23 +222,23 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
 
         {!isDone && (
           <>
-            {/* Source type */}
+            {/* Consent dimension: does the photo show real, identifiable people? */}
             <div style={{ marginBottom: 12 }}>
-              <div style={sectionLabel}>Image type</div>
+              <div style={sectionLabel}>Real people in this photo?</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 {[
-                  { value: 'midjourney_render', label: 'Midjourney render' },
-                  { value: 'real_photo', label: 'Real photo' },
+                  { value: 'none', label: 'No identifiable people' },
+                  { value: 'people', label: 'Real, identifiable people' },
                 ].map(opt => (
                   <button
                     key={opt.value}
-                    onClick={() => onUpdate(entry.id, { sourceType: opt.value, consentStatus: opt.value === 'real_photo' ? null : 'na', error: null, status: entry.status === 'error' ? 'pending' : entry.status })}
+                    onClick={() => onUpdate(entry.id, { peopleTag: opt.value, consentStatus: opt.value === 'people' ? null : 'na', error: null, status: entry.status === 'error' ? 'pending' : entry.status })}
                     style={{
                       padding: '7px 14px',
                       borderRadius: 40,
-                      border: `1.5px solid ${entry.sourceType === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`,
-                      background: entry.sourceType === opt.value ? 'var(--tw-burnham)' : 'transparent',
-                      color: entry.sourceType === opt.value ? '#fff' : 'var(--tw-jet)',
+                      border: `1.5px solid ${entry.peopleTag === opt.value ? 'var(--tw-burnham)' : 'rgba(184,176,168,0.5)'}`,
+                      background: entry.peopleTag === opt.value ? 'var(--tw-burnham)' : 'transparent',
+                      color: entry.peopleTag === opt.value ? '#fff' : 'var(--tw-jet)',
                       fontFamily: 'var(--font-ui)',
                       fontSize: 12,
                       fontWeight: 600,
@@ -246,8 +252,8 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
               </div>
             </div>
 
-            {/* Consent gate — only for real photos */}
-            {entry.sourceType === 'real_photo' && (
+            {/* Consent gate — only for photos of real people */}
+            {entry.peopleTag === 'people' && (
               <div style={{ marginBottom: 12, background: 'rgba(43,80,64,0.04)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(43,80,64,0.12)' }}>
                 <div style={{ ...sectionLabel, marginBottom: 8 }}>Consent status <span style={{ color: '#CC3333' }}>*</span></div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -281,7 +287,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
 
         {isDone && (
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--tw-burnham)' }}>
-            Uploaded · {entry.result?.source_type === 'real_photo' ? `Consent: ${entry.result?.consent_status}` : 'Midjourney render'} · Ready to use
+            Uploaded · {entry.result?.consent_status && entry.result.consent_status !== 'na' ? `Consent: ${entry.result.consent_status}` : 'No consent needed'} · Ready to use
           </div>
         )}
       </div>
@@ -292,10 +298,10 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
           <>
             <button
               onClick={() => onUpload(entry)}
-              disabled={!entry.sourceType}
+              disabled={!entry.peopleTag}
               style={{
                 padding: '8px 18px',
-                background: entry.sourceType ? 'var(--tw-tangerine)' : '#ddd',
+                background: entry.peopleTag ? 'var(--tw-tangerine)' : '#ddd',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 20,
@@ -304,7 +310,7 @@ function FileCard({ entry, onUpdate, onRemove, onUpload }) {
                 fontWeight: 700,
                 letterSpacing: 1.5,
                 textTransform: 'uppercase',
-                cursor: entry.sourceType ? 'pointer' : 'not-allowed',
+                cursor: entry.peopleTag ? 'pointer' : 'not-allowed',
               }}
             >
               Upload

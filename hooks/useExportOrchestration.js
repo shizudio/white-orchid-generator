@@ -4,6 +4,22 @@ import {
   logFeedback as logFeedbackClient,
   newTurnId,
 } from "@/lib/sessions";
+import { exportRecordFields } from "@/lib/export-history.mjs";
+
+// (Export history 2026-07-29) After a successful download, the REAL rendered
+// file is also posted to /api/exports so the Exports tab shows the actual
+// artifact, session-linked. Strictly non-blocking: a failed history write NEVER
+// breaks the download the user already has.
+async function recordExportHistory(dataUrl, { sessionId, dimensionId, format, headline }) {
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const fd = new FormData();
+    fd.append("file", blob, `export.${format === "jpeg" ? "jpg" : "png"}`);
+    const fields = exportRecordFields({ sessionId, dimensionId, format, headline });
+    for (const [key, value] of Object.entries(fields)) fd.append(key, value);
+    await fetch("/api/exports", { method: "POST", body: fd });
+  } catch { /* history is a bonus — the download already happened */ }
+}
 
 const slugify = value => value
   .toLowerCase()
@@ -17,6 +33,7 @@ export function useExportOrchestration({
   draw,
   renderScene,
   dimensions,
+  dimensionId,
   exportFormat,
   headline,
   activeTemplateName,
@@ -57,6 +74,13 @@ export function useExportOrchestration({
     anchor.href = dataUrl;
     anchor.click();
     markSessionExported();
+    // Fire-and-forget history record of the real exported file (never blocks).
+    recordExportHistory(dataUrl, {
+      sessionId,
+      dimensionId,
+      format: isJpeg ? "jpeg" : "png",
+      headline,
+    });
     try {
       const lastTurn = [...sessionConversation].reverse().find(message => message.turnId);
       if (lastTurn?.turnId) {
@@ -66,9 +90,11 @@ export function useExportOrchestration({
     if (sessionId && !nudgeDismissedRef.current.has(sessionId)) setExportNudge(true);
   }, [
     canvasRef,
+    dimensionId,
     draw,
     exportFormat,
     exportSlug,
+    headline,
     markSessionExported,
     nudgeDismissedRef,
     sessionConversation,
@@ -105,6 +131,13 @@ export function useExportOrchestration({
         anchor.href = dataUrl;
         await new Promise(resolve => setTimeout(resolve, 300));
         anchor.click();
+        // One history row per exported format (fire-and-forget, never blocks).
+        recordExportHistory(dataUrl, {
+          sessionId,
+          dimensionId: dimension.id,
+          format: isJpeg ? "jpeg" : "png",
+          headline,
+        });
       } catch (error) {
         console.warn("Could not export", dimension.id, error);
         failed.push(dimension.id);
@@ -132,6 +165,7 @@ export function useExportOrchestration({
     dimensions,
     exportFormat,
     exportSlug,
+    headline,
     markSessionExported,
     renderScene,
     sessionId,

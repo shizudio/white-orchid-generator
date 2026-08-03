@@ -21,6 +21,12 @@ export function useMediaGenerationActions({
   compressImage,
   MAX_LIB,
   SAMPLE_IMAGES,
+  // (Media organization 2026-07-29) Activity lineage: the current session id is
+  // threaded in so every generated/uploaded image records which post it belongs
+  // to (images.session_id → the Library's "By activity" grouping). This hook is
+  // deliberately un-memoized (see the Generator call-site note), so the plain
+  // value is always current — no ref needed.
+  sessionId,
 }) {
 const loadImage = async (dataUrl) => {
   applyPatch({ imageSrc: dataUrl }, { source: "ui" });   // WP-V: through THE pipeline
@@ -53,7 +59,9 @@ const applyGeneratedImage = async (dataUrl, opts = {}) => {
     const file = new File([blob], `ai-generated-${Date.now()}.png`, { type: blob.type || 'image/png' });
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('source_type', 'midjourney_render');   // AI render (not a real photo → no consent gate)
+    fd.append('source_type', 'generated');   // (taxonomy 2026-07-29) AI pipeline output → no consent gate
+    if (sessionId) fd.append('session_id', sessionId);          // activity lineage
+    if (genBrief?.scene) fd.append('scene', genBrief.scene);    // the prompt that produced it
     await fetch('/api/images', { method: 'POST', body: fd });
   } catch { /* non-blocking — canvas + local library still work if upload fails */ }
   // Re-arm the harmonizer so the just-applied AI photo gets accessibility passes
@@ -154,11 +162,15 @@ const loadFile = async (file) => {
   const r = new FileReader();
   r.onload = (e) => loadImage(e.target.result);
   r.readAsDataURL(file);
-  // Auto-save to Supabase library in background (default: midjourney_render)
+  // Auto-save to Supabase library in background. (taxonomy 2026-07-29) A file a
+  // person brings in through the generator is 'uploaded' — activity-based, not
+  // provenance-guessing; consent stays an orthogonal dimension (the /upload page
+  // is where a real-people photo gets its consent status).
   try {
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('source_type', 'midjourney_render');
+    fd.append('source_type', 'uploaded');
+    if (sessionId) fd.append('session_id', sessionId);   // activity lineage
     await fetch('/api/images', { method: 'POST', body: fd });
   } catch(e) { /* non-blocking — canvas still works if upload fails */ }
 };

@@ -68,11 +68,14 @@ export function usePostActions({
       tile.id === sessionId ? { ...tile, exportedAt } : tile));
   }, [postActionsRef, sessionId, setPostTiles]);
 
+  // Returns true when the session was restored (or is already open), false when
+  // the id no longer resolves anywhere — so callers (e.g. the Exports tab's
+  // "Open session") can say so honestly instead of presenting a dead click.
   const openSession = useCallback(async id => {
     if (!id || id === sessionId) {
       setTopMenu(null);
       setFeedOpen(false);
-      return;
+      return !!id;
     }
     let record = null;
     const { configured, session } = await cloudGetSession(id);
@@ -107,11 +110,7 @@ export function usePostActions({
         };
       }
     }
-    if (!record) {
-      setTopMenu(null);
-      setFeedOpen(false);
-      return;
-    }
+    if (!record) return false;   // honest: the session no longer resolves (cloud or local)
     localSaveSession({
       id: record.id,
       title: record.title,
@@ -140,6 +139,7 @@ export function usePostActions({
     actions.closeInspector?.();
     setTopMenu(null);
     setFeedOpen(false);
+    return true;
   }, [
     postActionsRef,
     sessionId,

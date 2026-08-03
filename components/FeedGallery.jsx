@@ -1,13 +1,54 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
+import { groupExportsByDay } from "@/lib/export-history.mjs";
 
-/** Full-canvas Posts/Favourites/Moodboard gallery. */
+/** Full-canvas Posts/Favourites/Moodboard/Exports gallery. */
 function FeedGallery({
   postTiles, archivedTiles, sessionId, currentLiked, cloudConfigured,
   folder, setFolder, moodboard, moodboardConfigured, moodboardInputRef,
   enlargedItem, setEnlargedItem, openSession, toggleLike, startNewPost,
-  close, addMoodboardFile, deleteMoodboardItem, assistantName, palette:B, fonts,
+  close, addMoodboardFile, deleteMoodboardItem, assistantName, dimensionLabelOf,
+  palette:B, fonts,
 }) {
   const { brand:F, ui:FU } = fonts;
+
+  /* ── (Export history 2026-07-29) The Exports folder — real exported files,
+     session-linked ("for history, i should be easily going back to the
+     session"). Fetched once per gallery open; {configured:false} degrades to a
+     friendly line (downloads always land in the OS folder regardless). ── */
+  const [exportEntries, setExportEntries] = useState(null);   // null = loading
+  const [exportsConfigured, setExportsConfigured] = useState(true);
+  const [confirmDeleteExport, setConfirmDeleteExport] = useState(null);
+  const [exportNotice, setExportNotice] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/exports")
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        setExportsConfigured(data?.configured !== false);
+        setExportEntries(Array.isArray(data?.exports) ? data.exports : []);
+      })
+      .catch(() => { if (!cancelled) { setExportsConfigured(false); setExportEntries([]); } });
+    return () => { cancelled = true; };
+  }, []);
+  const deleteExportEntry = async (entry) => {
+    setConfirmDeleteExport(null);
+    try {
+      const res = await fetch(`/api/exports?id=${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (data?.deleted) setExportEntries(prev => (prev || []).filter(e => e.id !== entry.id));
+      else setExportNotice("Couldn't delete that export just now — please try again.");
+    } catch {
+      setExportNotice("Couldn't delete that export just now — please try again.");
+    }
+  };
+  // Honest open: openSession reports whether the id still resolves; a dead id
+  // gets a plain sentence, never a silent no-op click.
+  const openLinkedSession = async (id, missingLine) => {
+    setExportNotice("");
+    const ok = await openSession(id);
+    if (!ok) setExportNotice(missingLine);
+  };
   const byId = new Map();
   for (const tile of postTiles) byId.set(tile.id, tile);
   for (const tile of archivedTiles || []) if (!byId.has(tile.id)) byId.set(tile.id, tile);
@@ -18,6 +59,7 @@ function FeedGallery({
     { id:"all", label:"All", n:allTiles.length },
     { id:"favourites", label:"Favourites", n:favouriteTiles.length },
     { id:"moodboard", label:"Moodboard", n:moodboard.length },
+    { id:"exports", label:"Exports", n:exportEntries ? exportEntries.length : null },
   ];
   const tiles = folder === "favourites" ? favouriteTiles : allTiles;
 
@@ -25,7 +67,7 @@ function FeedGallery({
     const current = tile.id === sessionId;
     const liked = isLiked(tile);
     return <div key={tile.id} style={{position:"relative"}}>
-      <button type="button" onClick={()=>openSession(tile.id)} aria-current={current}
+      <button type="button" onClick={()=>openLinkedSession(tile.id, "Couldn't open this post — it may have been removed.")} aria-current={current}
         title={`${tile.title || "Untitled post"}${tile.exportedAt ? " · exported" : ""} — tap to open`}
         style={{width:"100%",aspectRatio:"1/1",borderRadius:8,overflow:"hidden",display:"block",padding:0,cursor:"pointer",border:current?`2px solid ${B.burnham}`:`1px solid ${B.ash}33`,background:"#fff",boxShadow:"0 1px 8px rgba(43,80,64,0.05)"}}>
         {tile.thumb ? <img src={tile.thumb} alt={tile.title || "post"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
@@ -71,6 +113,65 @@ function FeedGallery({
     </div>}
   </>;
 
+  /* ── (Export history 2026-07-29) Exports folder: the REAL downloaded files,
+     newest first, grouped by day. Each entry: the exported image, format +
+     dimension + headline, "Open session" (honest when the id is gone) and a
+     two-tap delete (same inline-confirm pill pattern as templates/moodboard —
+     deletion is permanent). ── */
+  const exportsFolder = (() => {
+    if (exportEntries === null) return <p style={{fontSize:13,fontFamily:F.body,color:B.ash}}>Loading your exports…</p>;
+    if (!exportsConfigured) return <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:460}}>
+      Export history needs cloud sync, which isn't set up on this device. Your downloads still land in your Downloads folder as usual.</p>;
+    if (exportEntries.length === 0) return <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:440}}>
+      No exports yet — download a design and it will appear here, linked to its post.</p>;
+    const dayGroups = groupExportsByDay(exportEntries);
+    const pill = {fontFamily:FU.subtitle,fontSize:10,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",borderRadius:999,padding:"6px 12px",cursor:"pointer",whiteSpace:"nowrap"};
+    return <div style={{display:"flex",flexDirection:"column",gap:22,maxWidth:640}}>
+      {dayGroups.map(group => <div key={group.day}>
+        <div style={{fontSize:10,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:2,textTransform:"uppercase",color:B.burnham,marginBottom:10}}>{group.label}</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {group.items.map(entry => {
+            const armed = confirmDeleteExport === entry.id;
+            const when = new Date(entry.created_at);
+            return <div key={entry.id} style={{display:"flex",gap:14,alignItems:"flex-start",background:"#fff",border:`1px solid ${B.ash}33`,borderRadius:10,padding:"10px 12px",boxShadow:"0 1px 8px rgba(43,80,64,0.05)"}}>
+              <div style={{flex:"0 0 auto",width:76,height:76,borderRadius:8,overflow:"hidden",background:`${B.ash}22`}}>
+                {entry.url
+                  ? <img src={entry.url} alt={entry.headline || "exported design"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+                  : <span style={{display:"grid",placeItems:"center",width:"100%",height:"100%",fontSize:9,color:B.ash,fontFamily:FU.subtitle,letterSpacing:1,textTransform:"uppercase"}}>File</span>}
+              </div>
+              <div style={{flex:"1 1 auto",minWidth:0}}>
+                <div style={{fontSize:12.5,fontFamily:F.body,color:B.jet,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{entry.headline || "Untitled design"}</div>
+                <div style={{fontSize:10.5,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:0.8,textTransform:"uppercase",color:B.ash,marginTop:4}}>
+                  {(entry.format || "png").toUpperCase()} · {dimensionLabelOf ? dimensionLabelOf(entry.dimension_id) : (entry.dimension_id || "—")}
+                  <span style={{textTransform:"none",letterSpacing:0,fontWeight:500,marginLeft:8}}>{when.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</span>
+                </div>
+                <div style={{display:"flex",gap:6,marginTop:9,flexWrap:"wrap"}}>
+                  {armed
+                    ? <>
+                        <button type="button" onClick={()=>deleteExportEntry(entry)}
+                          style={{...pill,color:"#fff",background:B.jet,border:`1px solid ${B.jet}`}}>Yes, delete</button>
+                        <button type="button" onClick={()=>setConfirmDeleteExport(null)}
+                          style={{...pill,color:B.burnham,background:"transparent",border:`1px solid ${B.ash}55`}}>Keep</button>
+                      </>
+                    : <>
+                        {entry.session_id
+                          ? <button type="button" title="Reopen the post this was exported from"
+                              onClick={()=>openLinkedSession(entry.session_id, "That post isn't in your gallery anymore — the exported file is still saved here.")}
+                              style={{...pill,color:"#fff",background:B.burnham,border:`1px solid ${B.burnham}`}}>Open session</button>
+                          : <span style={{...pill,cursor:"default",color:B.ash,border:`1px solid ${B.ash}33`}}>No session recorded</span>}
+                        <button type="button" title="Delete this export from history (permanent)"
+                          onClick={()=>setConfirmDeleteExport(entry.id)}
+                          style={{...pill,color:B.burnham,background:"transparent",border:`1px solid ${B.ash}55`}}>Delete</button>
+                      </>}
+                </div>
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>)}
+    </div>;
+  })();
+
   return <div className="wo-feedgal" role="dialog" aria-modal="true" aria-label="Your posts">
     <style>{`
       .wo-feedgal{position:fixed;inset:0;z-index:380;background:${B.whiteSmoke};overflow-y:auto;-webkit-overflow-scrolling:touch}
@@ -87,8 +188,9 @@ function FeedGallery({
         <button type="button" onClick={()=>{ startNewPost(); close(); }} style={{fontFamily:FU.subtitle,fontSize:11,fontWeight:600,letterSpacing:.6,color:"#fff",background:B.burnham,border:"none",borderRadius:999,padding:"8px 16px",cursor:"pointer"}}>＋ New post</button>
         <button type="button" aria-label="Close the gallery" title="Back to the canvas (Esc)" onClick={close} style={{width:34,height:34,borderRadius:10,border:"none",background:`${B.ash}20`,color:B.jet,fontSize:16,lineHeight:1,cursor:"pointer",display:"grid",placeItems:"center"}}>✕</button>
       </div>
-      <div className="wo-feedgal-tabs" role="tablist" aria-label="Folders">{folders.map(item=><button key={item.id} type="button" role="tab" aria-selected={folder===item.id} className="wo-feedtab" onClick={()=>setFolder(item.id)}>{item.label}<span className="wo-feedtab-n">{item.n}</span></button>)}</div>
-      {folder === "moodboard" ? moodboardFolder : tiles.length === 0 ? <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:440}}>{folder === "favourites" ? "No favourites yet — tap the ♥ on a design or tile, and it lands here. The studio learns from what you love." : `No saved posts yet — describe one to ${assistantName} and it will appear here automatically.`}</p> : <div className="wo-feedgal-grid">{tiles.map(renderTile)}</div>}
+      <div className="wo-feedgal-tabs" role="tablist" aria-label="Folders">{folders.map(item=><button key={item.id} type="button" role="tab" aria-selected={folder===item.id} className="wo-feedtab" onClick={()=>setFolder(item.id)}>{item.label}{item.n != null && <span className="wo-feedtab-n">{item.n}</span>}</button>)}</div>
+      {exportNotice && <p role="status" style={{fontSize:12.5,fontFamily:F.body,color:B.burnham,background:`${B.wisteria}22`,border:`1px solid ${B.wisteria}66`,borderRadius:9,padding:"9px 12px",marginBottom:14,maxWidth:520,lineHeight:1.5}}>{exportNotice}</p>}
+      {folder === "exports" ? exportsFolder : folder === "moodboard" ? moodboardFolder : tiles.length === 0 ? <p style={{fontSize:13,fontFamily:F.body,color:B.ash,lineHeight:1.6,maxWidth:440}}>{folder === "favourites" ? "No favourites yet — tap the ♥ on a design or tile, and it lands here. The studio learns from what you love." : `No saved posts yet — describe one to ${assistantName} and it will appear here automatically.`}</p> : <div className="wo-feedgal-grid">{tiles.map(renderTile)}</div>}
     </div>
     {enlargedItem && <div role="dialog" aria-modal="true" aria-label="Inspiration image" onClick={()=>setEnlargedItem(null)} style={{position:"fixed",inset:0,zIndex:390,background:"rgba(37,45,40,0.72)",display:"grid",placeItems:"center",padding:32,cursor:"zoom-out"}}>
       <div onClick={event=>event.stopPropagation()} style={{maxWidth:"min(90vw,720px)",maxHeight:"86vh",display:"flex",flexDirection:"column",gap:12,alignItems:"center"}}>

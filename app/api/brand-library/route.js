@@ -133,14 +133,21 @@ export async function POST(request) {
     const storagePath = `uploads/${Date.now()}-brand-library-${index}.png`;
     const { error: upErr } = await supabase.storage.from('images').upload(storagePath, buffer, { contentType: 'image/png', upsert: false });
     if (upErr) return Response.json({ ok: false, index, error: upErr.message }, { status: 500 });
-    const { error: dbErr } = await supabase.from('images').insert({
+    const row = {
       storage_path: storagePath,
       thumb_path: null,
       filename: `brand-library-${index}.png`,
-      source_type: 'midjourney_render', // AI render → no consent gate
+      source_type: 'generated', // (taxonomy 2026-07-29) AI pipeline output → no consent gate
       consent_status: 'na',
       metadata: { size: buffer.length, type: 'image/png', ext: 'png', batch: 'brand-library', provider, scene: plan.scene },
-    });
+    };
+    let { error: dbErr } = await supabase.from('images').insert(row);
+    // Un-migrated DB (old CHECK still live) → 23514: fall back to the legacy
+    // equivalent so a batch run never breaks mid-migration; /api/images GET maps
+    // it back to 'generated' for the UI.
+    if (dbErr && dbErr.code === '23514') {
+      ({ error: dbErr } = await supabase.from('images').insert({ ...row, source_type: 'midjourney_render' }));
+    }
     if (dbErr) { await supabase.storage.from('images').remove([storagePath]); return Response.json({ ok: false, index, error: dbErr.message }, { status: 500 }); }
   } catch (err) {
     return Response.json({ ok: false, index, error: err?.message || 'save failed' }, { status: 500 });

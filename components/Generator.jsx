@@ -7072,6 +7072,9 @@ export default function App() {
     compressImage,
     MAX_LIB,
     SAMPLE_IMAGES,
+    // (Media organization 2026-07-29) activity lineage — generated/uploaded
+    // images record the session they entered the library from.
+    sessionId,
   });
 
   // (Feed gallery, item 9) recent-exports history + "Clear all" removed — the
@@ -7875,6 +7878,7 @@ function useProductWorkflows(workspace) {
     draw,
     renderScene,
     dimensions: DIMENSIONS,
+    dimensionId,   // (export history 2026-07-29) the single-download record's format lineage
     exportFormat,
     headline,
     activeTemplateName,
@@ -8084,6 +8088,9 @@ function createEditorChromeModel(workspace) {
     addMoodboardFile={addMoodboardFile}
     deleteMoodboardItem={deleteMoodboardItem}
     assistantName={DEFAULT_ASSISTANT_NAME}
+    // (Export history 2026-07-29) the Exports folder labels its entries with the
+    // human format name; DIMENSIONS is module-scope in this file.
+    dimensionLabelOf={(id)=>DIMENSIONS.find(d=>d.id===id)?.label || id || "—"}
     palette={B}
     fonts={{brand:F,ui:FU}}
   />;

@@ -206,7 +206,13 @@ insert into brand_overlays (slug, name, storage_path, kind, category, ratio_num,
   ('acc-wave',     'Wave',         '/assets/accessories/wave.svg',           'accessory', 'accessories', 3,   1,   9, '00000000-0000-0000-0000-000000000001')
 on conflict (brand_id, slug) do nothing;
 
--- Images (uploaded source assets)
+-- Images (generated + uploaded source assets)
+-- (Media organization — client ruling 2026-07-29) source_type is activity-based:
+-- 'generated' (the studio's AI photo pipeline) | 'uploaded' (a person brought it
+-- in). The old ('midjourney_render','real_photo') vocabulary is retired — an
+-- EXISTING database is converted by lib/migrations/2026-07-29-media-organization.sql
+-- (create-if-not-exists below cannot alter a live CHECK constraint; run that
+-- migration once by hand). consent_status stays an orthogonal dimension.
 create table if not exists images (
   id              uuid primary key default gen_random_uuid(),
   created_at      timestamptz default now(),
@@ -214,28 +220,37 @@ create table if not exists images (
   storage_path    text not null,                 -- path in Supabase Storage
   thumb_path      text,                          -- compressed thumbnail path
   filename        text not null,
-  source_type     text not null check (source_type in ('midjourney_render','real_photo')),
+  source_type     text not null check (source_type in ('generated','uploaded')),
   consent_status  text not null default 'na' check (consent_status in ('na','cleared','pending','blocked')),
-  -- na = not applicable (midjourney), cleared/pending/blocked = real photos
-  metadata        jsonb not null default '{}'::jsonb  -- width, height, etc.
+  -- na = not applicable (no identifiable people), cleared/pending/blocked = real photos of people
+  metadata        jsonb not null default '{}'::jsonb  -- width, height, scene prompt, etc.
 );
 
--- Exported assets (composited outputs)
+-- (Media organization 2026-07-29) Activity lineage: which design session the
+-- image entered the library from ("the system can auto group them base on the
+-- activity"). Nullable — pre-lineage rows honestly stay unlinked and the
+-- Library groups them under "Earlier / unlinked". Idempotent add for existing DBs.
+alter table images add column if not exists session_id text;
+create index if not exists images_session_idx on images (session_id, created_at desc);
+
+-- Export history (client ruling 2026-07-29: export records store the REAL
+-- exported PNG, and "for history, i should be easily going back to the
+-- session"). Replaces the dead pre-2026-07 scaffold shape (post_type/channel/
+-- logo_* — never written by the app); an EXISTING database is reshaped by
+-- lib/migrations/2026-07-29-media-organization.sql. Objects live in the
+-- private 'images' bucket under exports/… (no new bucket needed).
 create table if not exists exports (
   id              uuid primary key default gen_random_uuid(),
   created_at      timestamptz default now(),
-  created_by      text,
-  source_image_id uuid references images(id) on delete set null,  -- lineage
-  storage_path    text not null,
-  thumb_path      text,
-  post_type       text not null,        -- photo_logo | quote | event | text_post | texture_text
-  channel         text not null,        -- instagram_feed | instagram_story | facebook_post | whatsapp
-  logo_variant_id uuid references logo_variants(id) on delete set null,
-  logo_position   text,
-  logo_size       text,
+  session_id      text,                 -- design_sessions.id — "Open session" lineage
+  dimension_id    text,                 -- e.g. 'ig_square' | 'story'
+  format          text check (format in ('png','jpeg')),
+  storage_path    text not null,        -- the real exported file, in the 'images' bucket
   headline        text,
   metadata        jsonb not null default '{}'::jsonb
 );
+create index if not exists exports_created_idx on exports (created_at desc);
+create index if not exists exports_session_idx on exports (session_id, created_at desc);
 
 -- Design templates (SHARED team library — mirrors localStorage "wo-design-templates")
 -- Same trust model as images: no auth, single shared space keyed by BRAND_ID.
@@ -400,5 +415,5 @@ on conflict (id) do nothing;
 -- ── Storage buckets (run after creating tables) ─
 -- Create these manually in Supabase → Storage:
 -- 1. "logos"   — public  — for SVG logo files
--- 2. "images"  — private — for uploaded source images
--- 3. "exports" — private — for composited outputs
+-- 2. "images"  — private — for uploaded/generated source images AND export
+--    history objects (stored under the exports/… prefix — no separate bucket)
