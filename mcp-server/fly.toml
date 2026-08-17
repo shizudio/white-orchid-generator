@@ -1,0 +1,36 @@
+# ── White Orchid MCP — Fly.io config ─────────────────────────────────────────
+# Small always-on VM. auto_stop is OFF on purpose: generations legitimately run
+# 30–120s and a scale-to-zero cold start (image pull + Chromium) would eat the
+# first user's patience every time. min_machines_running=1 keeps exactly one
+# machine warm. Cost: shared-cpu-1x with 2GB RAM ≈ $10/mo (1GB ≈ $5/mo but
+# headless Chromium + Next-driven pages can OOM there — 2GB is the honest
+# recommendation).
+#
+# Secrets (never in this file):  fly secrets set WO_MCP_AUTH_TOKEN=… WO_MCP_BASE_URL=…
+
+app = "white-orchid-mcp"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"

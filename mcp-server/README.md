@@ -99,14 +99,16 @@ see the call block until done.
   checklist blocks comes back `{ blocked: true }` with its status, exactly as
   the studio would refuse a human.
 
-## Phase 2 (deferred): remote HTTP MCP for claude.ai connectors
+## Phase 2 (built): remote HTTP MCP for claude.ai connectors
 
-A remote MCP (Streamable HTTP on Vercel) would let claude.ai web connect
-without a local process — but this server needs **headless Chromium**, which is
-heavy/fragile in serverless functions (cold-start binary size, 60s limits vs
-30–90s generations). The honest phase-2 shape is a small always-on host (Fly/
-Railway/a VM) running this same driver behind the SDK's Streamable HTTP
-transport with an auth token, pointed at the production app URL. The tool
-contracts in `tools.mjs` are transport-agnostic on purpose — phase 2 swaps the
-transport in `index.mjs`, nothing else. Not built yet; ruled out of scope for
-task #67.
+`http.mjs` serves the **same server construction** (`server.mjs` — both entries
+import it) over the SDK's Streamable HTTP transport, for a small always-on host
+pointed at the production studio, so teammates can use these tools from
+claude.ai when the owner's laptop is off. Fail-closed shared-secret auth
+(`WO_MCP_AUTH_TOKEN` — Bearer header, `?key=`, or `/t/<token>/` path), per-IP +
+global rate limits, a 2-browser concurrency gate with honest busy errors, and a
+`/healthz` endpoint. Container (`Dockerfile`, Playwright base image) and Fly.io
+config (`fly.toml`) live alongside. **Owner runbook: `README-remote.md`** —
+deploy commands, secrets, claude.ai connector steps, and the plain cost/access
+warnings (the URL+token spends real production credits; all users share the one
+brand workspace's Posts — that is the product model).

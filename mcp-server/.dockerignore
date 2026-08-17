@@ -1,0 +1,8 @@
+node_modules
+.profile
+out
+Dockerfile
+.dockerignore
+fly.toml
+README.md
+README-remote.md
