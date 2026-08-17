@@ -7873,6 +7873,19 @@ function useProductWorkflows(workspace) {
     setTopMenu,
     setFeedOpen,
   });
+  // (MCP boot param — task #67) `/generate?session=<id>` opens a stored post
+  // through the SAME openSession flow the Posts tiles use (restore semantics,
+  // pins intact, current-session pointer updated) — no parallel restore path.
+  // Runs once, only after bootstrap has settled a sessionId; a dead id is a
+  // no-op (openSession returns false and the freshly minted session stands).
+  const bootSessionParamRef = useRef(false);
+  useEffect(() => {
+    if (bootSessionParamRef.current || !sessionId) return;
+    bootSessionParamRef.current = true;
+    let requested = null;
+    try { requested = new URLSearchParams(window.location.search).get("session"); } catch { requested = null; }
+    if (requested && requested !== sessionId) openSession(requested);
+  }, [sessionId, openSession]);
   const { download, downloadAll } = useExportOrchestration({
     canvasRef,
     draw,

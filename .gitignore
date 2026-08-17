@@ -23,3 +23,9 @@ generated/
 # isolated build dirs + codedb tool snapshot
 .next-*/
 codedb.snapshot
+
+# MCP server output artifacts (wo_export_post files, never committed)
+mcp-server/out/
+
+# MCP server persistent browser profile (device-local sessions)
+mcp-server/.profile/

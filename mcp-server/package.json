@@ -1,0 +1,11 @@
+{
+  "name": "white-orchid-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Local stdio MCP server that drives the real White Orchid Content Studio headlessly (Playwright) — generation, refinement, and export all run through the app's own client pipeline.",
+  "bin": { "white-orchid-mcp": "index.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}
