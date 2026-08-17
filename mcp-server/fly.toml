@@ -8,8 +8,13 @@
 #
 # Secrets (never in this file):  fly secrets set WO_MCP_AUTH_TOKEN=… WO_MCP_BASE_URL=…
 
-app = "white-orchid-mcp"
+app = "white-orchid-generator"
 primary_region = "sin"
+
+# EXACTLY ONE machine (fly scale count 1): MCP sessions are in-memory per
+# process, so a second HA machine makes follow-up requests land on a machine
+# that never saw the initialize ("Session not found") — observed live on the
+# first deploy, fixed by scaling to 1. Deploys preserve the machine count.
 
 [build]
   dockerfile = "Dockerfile"
