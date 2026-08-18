@@ -105,6 +105,15 @@
     "arch:quote_margin:twitter"
    ],
    "reason": "DELIBERATE. Client ruling 2026-08-17 \u2014 'i want there to be always logo, currently some generations dont have logo by default.' The brand mark became REQUIRED CONTENT for generations: resolveLogoDrawClass is TOTAL (the retired WP-P P1 none/url restraint now resolves to the quiet corner mark; lockup unchanged), the mark anchors inside the PLATFORM-AWARE margins (smText \u2014 the born-clean safe-area-logo fix, 20 story cells), and an uncached mark variant falls back to the real lockup via putLogo instead of vanishing. Exactly the 10 archetypes that authored logoUse none/url change, x all 6 formats = 60 cells: big_number, documentary, editorial_split, floated_card, full_bleed_duotone, message_pill, motif_field, petal_window, portrait_credential, quote_margin. All 84 other cells (mark/lockup archetypes + every legacy postType cell) byte-identical. Visually reviewed live (documentary photo-sampled corner mark; quote_margin bottom-centre mark; big_number/floated_card via render truth). Guards on the change: born-clean 456/456, arch-stress 114/114, legacy-dup 30/30; capture settled + determinism-gated in the canonical environment."
+  },
+  {
+   "at": "2026-08-18",
+   "commit": "ab337e1 (parallel session) \u2014 fix(archetypes): retire hairline rule/underline furniture; baseline bumped by the orchestrating session after cross-session drift was caught by the pre-work battery",
+   "cells": [
+    "arch:big_number:banner",
+    "arch:serif_word:banner"
+   ],
+   "reason": "DELIBERATE. Client ruling 2026-08-18 \u2014 'remove the hairline decoration all together.' ab337e1 removed the rule/underline furniture tells from the archetype catalog (serif_word underline, editorial_split rule, big_number underline, quote_margin rule, etc.). The fixture set paints that furniture in exactly these two banner cells; every other cell (142) byte-identical. Guards on the change: born-clean 456/456, arch-stress 114/114, legacy-dup 30/30. Capture settled + determinism-gated in the canonical environment."
   }
  ],
  "hashes": {
@@ -113,7 +122,7 @@
   "arch:serif_word:story": "8d8f4f50:72x128",
   "arch:serif_word:twitter": "7f98b272:128x72",
   "arch:serif_word:facebook": "262c142f:128x67",
-  "arch:serif_word:banner": "4007d2d8:128x43",
+  "arch:serif_word:banner": "37b9fe70:128x43",
   "arch:editorial_split:ig_portrait": "7ac71a9b:102x128",
   "arch:editorial_split:ig_square": "85a0918f:128x128",
   "arch:editorial_split:story": "870a202b:72x128",
@@ -125,7 +134,7 @@
   "arch:big_number:story": "a5325828:72x128",
   "arch:big_number:twitter": "778c1617:128x72",
   "arch:big_number:facebook": "31528444:128x67",
-  "arch:big_number:banner": "b9062f62:128x43",
+  "arch:big_number:banner": "771c9182:128x43",
   "arch:full_bleed_duotone:ig_portrait": "261a93a7:102x128",
   "arch:full_bleed_duotone:ig_square": "d654503a:128x128",
   "arch:full_bleed_duotone:story": "086dcb77:72x128",
