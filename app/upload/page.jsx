@@ -10,6 +10,60 @@ import Nav from '@/components/Nav';
 // The real-people question and per-file consent selector are gone: files upload
 // straight in with no gating. The DB's consent_status column stays dormant at
 // its default; the API no longer reads it.
+// (2026-08-18 client report — a phone/camera photo failed to upload with no
+// error shown) Vercel's Node.js Serverless Functions cap a request body at
+// 4.5MB, a platform limit this app cannot raise. A phone/camera photo often
+// exceeds it; the platform then rejects the request before /api/images ever
+// runs. MAX_UPLOAD_BYTES stays comfortably under that ceiling (multipart
+// form-data framing adds a little overhead on top of the raw file bytes).
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+// A byte budget an oversized photo is compressed DOWN to — leaves headroom
+// under MAX_UPLOAD_BYTES so the compressed result reliably clears the cap.
+const COMPRESS_TARGET_BYTES = 3.5 * 1024 * 1024;
+const MAX_DIMENSION = 4096; // camera photos routinely exceed what any format needs on screen
+
+// Downscale + re-encode an oversized image client-side so an ordinary camera
+// photo uploads without the person ever seeing a size-limit error. Returns the
+// original file untouched when it already fits. Re-encodes as JPEG (quality
+// stepped down until it fits, or the byte budget is reached) since the large
+// files this exists for are camera photos; a transparent PNG is composited
+// onto white first so it doesn't come out with a black background.
+async function compressImageIfNeeded(file) {
+  if (!file || file.size <= MAX_UPLOAD_BYTES) return file;
+  let objectUrl;
+  try {
+    objectUrl = URL.createObjectURL(file);
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Could not read this image'));
+      el.src = objectUrl;
+    });
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; // transparent PNG → white backing, not black
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    let blob = null;
+    for (const quality of [0.85, 0.7, 0.55, 0.4]) {
+      // eslint-disable-next-line no-await-in-loop
+      blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (blob && blob.size <= COMPRESS_TARGET_BYTES) break;
+    }
+    if (!blob) return file; // canvas encoding failed — fall through, let the server respond honestly
+    const name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+    return new File([blob], name, { type: 'image/jpeg' });
+  } catch {
+    return file; // any failure here just leaves the original file to fail its own honest way
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export default function UploadPage() {
   const [files, setFiles] = useState([]); // [{file, preview, status, error, result}]
   const [dragging, setDragging] = useState(false);
@@ -42,17 +96,31 @@ export default function UploadPage() {
   const uploadOne = async (entry) => {
     update(entry.id, { status: 'uploading', error: null });
 
-    const fd = new FormData();
-    fd.append('file', entry.file);
-    fd.append('source_type', 'uploaded');   // taxonomy 2026-07-29: a person brought it in
+    try {
+      const uploadFile = await compressImageIfNeeded(entry.file);
+      const fd = new FormData();
+      fd.append('file', uploadFile);
+      fd.append('source_type', 'uploaded');   // taxonomy 2026-07-29: a person brought it in
 
-    const res = await fetch('/api/images', { method: 'POST', body: fd });
-    const data = await res.json();
+      const res = await fetch('/api/images', { method: 'POST', body: fd });
+      // (2026-08-18) A request the platform rejects before it reaches our route
+      // (e.g. still over the size cap) comes back as a non-JSON error page, not
+      // our API's JSON shape — .json() throwing here used to escape uncaught,
+      // leaving the file card stuck on "Uploading…" forever with no explanation.
+      const data = await res.json().catch(() => null);
 
-    if (!res.ok) {
-      update(entry.id, { status: 'error', error: data.error || 'Upload failed' });
-    } else {
-      update(entry.id, { status: 'done', result: data });
+      if (!res.ok || !data) {
+        update(entry.id, {
+          status: 'error',
+          error: data?.error || (res.status === 413
+            ? "That photo is still too large to upload — try a smaller one."
+            : 'Upload failed — check your connection and try again.'),
+        });
+      } else {
+        update(entry.id, { status: 'done', result: data });
+      }
+    } catch {
+      update(entry.id, { status: 'error', error: 'Upload failed — check your connection and try again.' });
     }
   };
 
