@@ -10,8 +10,15 @@ A prompt-first social-media design studio for non-technical preschool staff (The
 
 ## 2. Doc ownership (one source of truth per fact)
 
+> **RATIFIED 2026-08-18 — read `docs/template-system-spec.md` before any product work.**
+> The client ratified a template-system direction (fixed hand-authored templates, an
+> admin/user split, four dimensions, autofit-with-floor budgets). It is **not yet
+> implemented**, but it CHANGES the status of several laws in §3 and supersedes parts of
+> the specs below. That doc's §2 lists exactly what it owns and what it overrides.
+
 | Fact | Owner |
 |---|---|
+| Template contract · admin/user split · autofit+floor budgets · the 4 dimensions | `docs/template-system-spec.md` (RATIFIED 2026-08-18 — supersedes the entries it names) |
 | Composition/archetype geometry (numeric) | `docs/visual-language-spec.md` (FINAL — supersedes both `visual-language-research*.md` drafts) |
 | Per-format layout & font-scale rules | `docs/format-design-spec.md` |
 | Editor UX contract (one canvas, session=post) | `docs/ux-architecture.md` (ratified) |

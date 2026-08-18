@@ -2,6 +2,8 @@
 
 **Read `docs/operating-manual.md` before non-trivial work.** This file is the fixed per-session cost; depth lives in the manual and the spec docs it indexes (§2 there maps every fact to its one owning doc).
 
+**Also read `docs/template-system-spec.md` (RATIFIED 2026-08-18) before product work.** Fixed hand-authored templates + an admin/user split. Not yet implemented, but it changes the status of several non-negotiables below (born-clean becomes structural; pins-win becomes admin-only) and supersedes parts of the other specs. Its §2 says exactly what it owns.
+
 ## Non-negotiables
 - **NEVER `git push` without the user's explicit word.** "push" = `git push origin main:staging`. Production only on explicit "push to main/production". Verify on localhost first.
 - **Born-clean**: fresh generations carry zero advisor dots — layout-time rules, never post-hoc flags.
