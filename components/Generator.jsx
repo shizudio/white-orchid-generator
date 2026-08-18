@@ -8337,7 +8337,13 @@ function createEditorChromeModel(workspace) {
      anchor each OPEN issue to its element's box corner. 4+ open issues collapse
      to ONE dot at the canvas top-right (never measle the canvas). Issues without
      precise geometry also pin to the top-right. Acked issues get NO dot. */
+  // (Temporary, 2026-08-18) Canvas-anchored dots hidden while the AI-audit
+  // no-op-fix defect is diagnosed — findings still flow to the Export/Ready
+  // checklist untouched; only this on-canvas surface is suppressed. Revert by
+  // deleting this early return.
+  const SHOW_ADVISOR_DOTS = false;
   const advisorDots = (() => {
+    if (!SHOW_ADVISOR_DOTS) return { anchored: [], corner: null };
     const fmt = (ledgerCheck?.formats || []).find(f => f.dimensionId === dimensionId);
     if (!fmt || !Array.isArray(fmt.issues) || !fmt.issues.length) return { anchored: [], corner: null };
     // (One Advice Ledger, rule 3) Partition source-agnostically: a LOCAL issue uses the
