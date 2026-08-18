@@ -4,7 +4,7 @@ import { generatePhoto } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
-import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal, detectLayoutVariety } from '@/lib/assistant-intents';
+import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal, detectLayoutVariety, routeCtaCopyToCtaHome, CTA_PILL_MAX } from '@/lib/assistant-intents';
 import { LAYOUT_VARIETY_RINGS, NO_LAYOUT_SWITCH_REPLY } from '@/lib/layout-switch-verification.mjs';
 import { seededRotationPick } from '@/lib/landing-archetype-rotation.mjs';
 
@@ -1136,7 +1136,7 @@ export async function POST(request) {
   const landingTextOnly = wantsTextOnly(landingUserText);
   const landingArchetypeHint = pickLandingArchetypeHint(landingTextOnly, likePrefs);
   const contextRule = context === 'landing'
-    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set an ARCHETYPE (archetypeId), postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText) that the request clearly supports. Do not leave it minimal.
+    ? `This is the FIRST message from a new user on the landing page. They have no design yet. Produce a COMPLETE, ready-to-edit starting composition: set an ARCHETYPE (archetypeId), postType, dimensionId, bgColor, a suitable logoId + logoPosition + logoSize, and any copy fields (headline/subtext/attribution/dateText/pillText) that the request clearly supports. Do not leave it minimal.
 
 ARCHETYPE — REQUIRED. You MUST set patch.archetypeId to one of these editorial compositions, chosen by the request's INTENT:
 ${landingArchetypeCatalog()}
@@ -1157,6 +1157,7 @@ VARIETY (important — the studio has felt repetitive):
 - AESTHETIC: default to CLEAN and HIGH-CONTRAST. Generous breathing room: short copy, no more fields filled than the request needs. One focal idea per design.
 - COPY LENGTH (important — long copy renders tiny and becomes unreadable as a feed thumbnail): keep the headline to ~6 words or fewer, and any caption/subtext to ONE short line (~14 words / ~110 characters max). Do not write a paragraph. If the request implies more detail, pick the single most important line and leave the rest out.
 - FIT THE SLOT (character budgets — write copy that fits by construction; anything longer is tightened to fit): headline ≤ ${LANDING_COPY_MAX.headline} characters, subtext / caption ≤ ${LANDING_COPY_MAX.subtext} characters, attribution ≤ ${LANDING_COPY_MAX.attribution} characters, dateText ≤ ${LANDING_COPY_MAX.dateText} characters.
+- CALL TO ACTION → patch.pillText, NEVER subtext/attribution/headline. An action line — "register now at two.co", "sign up today", "visit two.co", "call 6123 4567", "apply by 30 Nov", any short imperative or a web address — is a BUTTON, and the engine paints pillText as a small accent pill at button scale (≤ ${CTA_PILL_MAX} characters, rendered in caps). subtext and attribution are READING COPY: they paint at caption/support scale, several times larger, in the column right under the title — a call to action put there competes with the headline and wraps across the design. So: the brief's message goes in the headline, its supporting detail (if any) in subtext, and its ACTION in pillText. If the brief names no action, leave pillText null.
 
 PHOTO (scenePrompt) — REQUIRED for every plan except an explicitly text-only brief. When the chosen archetype is PHOTO-LED (editorial_split, floated_card, documentary, full_bleed_duotone, portrait_credential, texture_text / photo_logo post types), write patch.scenePrompt: a PHOTOGRAPHER'S brief for the background photo. Follow this template EXACTLY and keep it to 1–2 sentences:
   • ONE scene, ONE subject with a concrete action, a setting, and lighting.
@@ -1382,6 +1383,18 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // carries the brand logo: strip any stray model-authored removal. "remove the
     // logo" remains an EDITOR-turn pin (law 5) — it is never part of a new plan.
     delete patch.hideLogo;
+
+    // ── CTA COPY LANDS IN THE CTA-CLASS HOME (task #72) ──────────────────────
+    // Client repro: "Term 4 enrolment reminder, register now at two.co" put
+    // "Register now at two.co" in the reading copy, where it painted at SUPPORT
+    // scale (heroSize / heroToSupport — 1/3–1/4 of the headline on the low-ratio
+    // archetypes) and wrapped across three lines beside the title. The prompt
+    // below now names pillText as the CTA home; this belt is the deterministic
+    // half (the model is not a guarantee — operating-manual: belts own the law).
+    // It fires BEFORE the copy-budget fit and before the headline-led subtext
+    // clear, so the CTA is rehomed rather than trimmed as caption copy or
+    // silently dropped. Never overrides a CTA the plan placed itself (law 5).
+    routeCtaCopyToCtaHome(patch);
 
     // ── DURABLE ROTATION HYDRATION (G1) ──────────────────────────────────────
     // The frequency-cap + anti-repeat ring is correctly GLOBAL PER BRAND but was
