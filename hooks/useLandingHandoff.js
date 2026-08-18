@@ -13,6 +13,7 @@ export function useLandingHandoff({
   imageObject,
   actionsRef,
   firstShotResolveRef,
+  photoRemovedRef = null,
 }) {
   const landingPendingRef = useRef(false);
   const firstShotGateRanRef = useRef(false);
@@ -40,6 +41,14 @@ export function useLandingHandoff({
       return undefined;
     }
     const actions = actionsRef.current;
+    // (Task #69 photo-load fix — honest fallback) A landing plan that DELIBERATELY
+    // landed photo-less (removeImage: the degraded AI-decide path) must stay a clean
+    // solid design: flag it so the editor bootstrap never seeds the greeting sample
+    // photo into this generation's media window (law 6 — the scratch photo must not
+    // masquerade as this generation's photo).
+    if (photoRemovedRef && handoff?.patch?.removeImage === true && !handoff?.imageUrl) {
+      photoRemovedRef.current = true;
+    }
     const designPatch = {
       ...(handoff?.patch || {}),
       ...(handoff?.imageUrl ? {imageSrc:handoff.imageUrl} : {}),
@@ -55,6 +64,14 @@ export function useLandingHandoff({
         scene: handoff.scenePrompt || "",
         message: handoff.originalMessage || "",
       });
+    }
+    // (Task #69) A landing UPLOAD lands in the Library like any studio upload:
+    // source_type 'uploaded' + session lineage (the #64 machinery). The editor
+    // owns the POST because only it knows the freshly created session id.
+    if (handoff?.imageOrigin === "uploaded"
+        && typeof handoff?.imageUrl === "string"
+        && handoff.imageUrl.startsWith("data:")) {
+      actions.persistLandingUpload?.(handoff.imageUrl);
     }
 
     actions.setChatSeed?.({

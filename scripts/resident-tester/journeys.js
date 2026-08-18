@@ -119,6 +119,17 @@ async function runJourneys(page, run, cons, baseUrl) {
       await ta.fill('An open house invite for 18 July');
       await page.$('button[aria-label="Send"]').then(b => b && b.click());
     }
+    // (#69) A photo-led plan pauses at the photo-source chooser — accept the
+    // default ("Let AI decide") like a human's one tap; text-only plans
+    // navigate straight through and the poll falls out to waitForURL.
+    {
+      const chooserDeadline = Date.now() + 45000;
+      while (Date.now() < chooserDeadline && !page.url().includes('/generate')) {
+        const aiDefault = await page.$('[data-wo-photo-source="ai"]').catch(() => null);
+        if (aiDefault) { await aiDefault.click().catch(() => {}); break; }
+        await settle(300);
+      }
+    }
     // Wait for navigation to /generate + the canvas to mount.
     await page.waitForURL('**/generate', { timeout: 60000 }).catch(() => {});
     await page.waitForSelector('canvas[aria-label="Interactive post preview"]', { timeout: 30000 });

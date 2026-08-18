@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useReducer } from "react";
 import Nav from "./Nav";
 import LibraryPicker from "./LibraryPicker";
+import PhotoSourceChooser from "./PhotoSourceChooser";
 import EditorCanvas from "./EditorCanvas";
 import ContextualInspector from "./ContextualInspector";
 import TemplateLibrary from "./TemplateLibrary";
@@ -113,6 +114,7 @@ import {
   materializeArchetypeLayout,
   isTextOnlyArchetype,
   resolveArchetypeVariant as archetypeVariant,
+  resolveLogoDrawClass,
 } from "@/lib/archetype-layout-policy.mjs";
 
 /* ── DEV/TEST HOOK GATES (security, ratified item 8) ──────────────────────────
@@ -5270,11 +5272,12 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
       }
       // logo — CONTRAST-AWARE VARIANT on a solid field (green on light, ivory on dark)
       // unless the user chose one; photo-bleed keeps photo-region contrast handling.
-      // (WP-P P1) LOGO RESTRAINT — the feed reference stamps the lockup on brand/closing
-      // cards ONLY; every other tile carries at most a url line (drawn as furniture) or
-      // nothing. Honour an explicit user logo placement (userLogoTouched); otherwise the
-      // archetype/variant `logoUse` policy governs: none|url → no lockup, mark|lockup → draw.
-      const logoUse = mat.logoUse || "url";
+      // (Task #69 — ALWAYS LOGO, client ruling 2026-08-17) The brand mark is REQUIRED
+      // CONTENT on every generation: the old WP-P P1 restraint ("none"/"url" tiles carry
+      // no mark) is retired through the TOTAL resolver — every archetype now draws at
+      // least the quiet corner mark; "lockup" keeps the full lockup. An explicit USER
+      // removal (_logoRemoved below) stays a pin the render honors verbatim (law 5).
+      const logoUse = resolveLogoDrawClass(mat.logoUse);
       // (Commit 1) COMBINED TEXT ENVELOPE for the logo guard. The banner/twitter
       // caption↔lockup collision came from passing ONLY the hero box to putLogo — the
       // logo guard then happily sat on the SUPPORT caption (which on wide big_number
@@ -5353,8 +5356,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         const markSizeId = logoBase.explicit ? logoBase.sizeId : (provArch?.elements?.logo?.sizeId||"s");
         const mSz=w*(markSizeId==="xl"?0.20:markSizeId==="l"?0.16:markSizeId==="m"?0.13:0.072);
         const isCentered=/center/.test(markPos);
-        const cx=isCentered?w/2:(/left/.test(markPos)?sm.l*w+mSz/2:(1-sm.r)*w-mSz/2);
-        const cy=/top/.test(markPos)?sm.t*h+mSz/2+(isCentered?h*0.06:0):(1-sm.b)*h-mSz/2;
+        // (Task #69) The mark anchors inside the PLATFORM-AWARE margins (smText —
+        // the same tightening every text role uses), not the raw archetype sm: on
+        // Story the raw bottom margin sits inside the platform chrome band, and the
+        // now-required mark was born there on 20 cells (safe-area-logo). Same rule
+        // as text: the platform zone wins.
+        const cx=isCentered?w/2:(/left/.test(markPos)?smText.l*w+mSz/2:(1-smText.r)*w-mSz/2);
+        const cy=/top/.test(markPos)?smText.t*h+mSz/2+(isCentered?h*0.06:0):(1-smText.b)*h-mSz/2;
         // (WP-W0 coordinator item 3) MARK CONTRAST — on a photo the FIELD colour says
         // nothing about what's actually UNDER the mark (the specimen: an ivory mark
         // sitting on white orchid blossoms). Sample the already-drawn canvas beneath
@@ -5396,6 +5404,11 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // its box so "move the logo" verifies against the canvas and a click on the
         // mark selects the Logo element (dead clicks are impossible, §2.2).
         if(drew)renderTruth.logoBox={x:cx-mSz/2,y:cy-mSz/2,w:mSz,h:mSz,position:markPos,mark:true};
+        // (Task #69 — always-logo safest fallback) No cached REAL mark variant for this
+        // backing → the mark must not silently vanish (required-mark law, the mirror of
+        // #57's title-always-paints). Fall back to the standard lockup through putLogo:
+        // still a REAL brand asset (law 3 holds), placed by the full placement machinery.
+        if(!drew) putLogo(textEnvelope, ["twitter","facebook","banner"].includes(dimId)?{...logoOpts,sizeId:"s"}:logoOpts);
       } else if(drawLockup){
         // (Crops addendum) WIDE-FORMAT LOCKUP CAP — outside the brand bookends the
         // lockup must never be the largest element on a tile; on the wide formats
@@ -6423,6 +6436,9 @@ export default function App() {
   // Library & History
   const [library, setLibrary] = useState([]); // [{id, thumb, full}]
   const [showLibPicker, setShowLibPicker] = useState(false);
+  // (Task #69) The New-post photo-source offer — raised by startNewPost, cleared
+  // by any choice or dismissal (the shared PhotoSourceChooser renders it).
+  const [newPostPhotoOffer, setNewPostPhotoOffer] = useState(false);
   // Undo stack for AI design patches (LIFO, capped). Each entry is a full
   // snapshot of the applyable fields taken *before* a patch was applied, so
   // undoLastAiChange() can pop and restore. Depth >= 5.
@@ -6748,7 +6764,7 @@ export default function App() {
     AI_UNDO_DEPTH, applyDesignPatch, applyInspectorPatch, applyPatch,
     applyPatchRef, buildMaterialized, dispatchElementCommand, executeWorkflowGroups, genBrief, harmonizeRef, manualHarmRef,
     manualHarmTick, materializeArchetype, noteManualEdit, redoLastChange,
-    setGenBrief, snapshotApplyableState, startNewPost,
+    setGenBrief, snapshotApplyableState, startNewPost: startNewPostBase,
     dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
     undoLastAiChange,
   } = useDesignPatchPipeline({
@@ -6841,19 +6857,47 @@ export default function App() {
 
 
   const firstShotResolveRef = useRef(null);
+  // (Task #69) The landing session id may not exist yet when the handoff processes
+  // (the first autosave creates it async) — the persist below polls this ref so an
+  // uploaded landing photo never loses its session lineage to that race.
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  // (Task #69 — photo-source chooser) A LANDING upload lands in the Library exactly
+  // like a studio upload: source_type 'uploaded' + session lineage (#64 machinery).
+  // Fire-and-forget: a failed library write never blocks the design (same contract
+  // as loadFile's background save).
+  const persistLandingUpload = async (dataUrl) => {
+    try {
+      let sid = sessionIdRef.current;
+      for (let i = 0; !sid && i < 20; i++) { await new Promise(r => setTimeout(r, 500)); sid = sessionIdRef.current; }
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], `landing-upload-${Date.now()}.png`, { type: blob.type || "image/png" });
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("source_type", "uploaded");
+      if (sid) fd.append("session_id", sid);
+      await fetch("/api/images", { method: "POST", body: fd });
+    } catch { /* non-blocking — the canvas photo is already applied */ }
+  };
   const landingActionsRef = useRef({});
   landingActionsRef.current = {
     applyDesignPatch,
     setGenerationBrief: setGenBrief,
     setChatSeed,
     setGalleryOpen,
+    persistLandingUpload,
   };
+  // (Task #69 photo-load fix — honest fallback) TRUE when the landing plan
+  // deliberately landed photo-less (removeImage): the greeting sample must not
+  // seed this generation's media window (law 6 — no masquerading scratch photo).
+  const landingPhotoRemovedRef = useRef(false);
   const landingPendingRef = useLandingHandoff({
     fontsLoaded,
     imageSource: image,
     imageObject: imageObj,
     actionsRef: landingActionsRef,
     firstShotResolveRef,
+    photoRemovedRef: landingPhotoRemovedRef,
   });
 
   useEditorBootstrap({
@@ -6861,6 +6905,7 @@ export default function App() {
     loadImage: imgFrom,
     setImageObject: setImageObj,
     setFontsLoaded,
+    sampleSuppressedRef: landingPhotoRemovedRef,
   });
 
   const verificationActionsRef = useRef({});
@@ -7076,6 +7121,24 @@ export default function App() {
     // images record the session they entered the library from.
     sessionId,
   });
+
+  // (Task #69 — photo-source chooser, client ruling 2026-08-17) A NEW post raises
+  // the same shared three-way offer the landing flow uses ("Let AI decide" /
+  // library / upload) instead of silently keeping the sample photo. Dismissible,
+  // one tap, then move on; every existing New-post call site rides the wrapper.
+  // Lives HERE (not in the patch pipeline hook) because the choice handlers need
+  // refreshPhoto/setShowLibPicker, which are App-scope media actions.
+  const startNewPost = useCallback((...args) => {
+    const result = startNewPostBase(...args);
+    setNewPostPhotoOffer(true);
+    return result;
+  }, [startNewPostBase]);
+  const onNewPostPhotoChoice = useCallback((source) => {
+    setNewPostPhotoOffer(false);
+    if (source === "ai") refreshPhoto();            // AI decides: the deterministic fresh-photo roll
+    else if (source === "library") setShowLibPicker(true);
+    // "upload" is handled by the chooser card's own file input (loadFile), "dismiss" just closes.
+  }, [refreshPhoto]);
 
   // (Feed gallery, item 9) recent-exports history + "Clear all" removed — the
   // Posts gallery marks exported sessions instead; the OS download folder is
@@ -7688,7 +7751,7 @@ export default function App() {
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
     findingAckPinned, findingActions, focusTextField, formatThumbs, genBrief,
     ghostSlots, imgRef, inspectorOpen:!!inspectorEl, inspectorWorkspace, issueBoxOf, layoutSwitchVerifier, ledgerCheck, loadFile,
-    mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
+    mediaObj, moreLikeThis, newPostPhotoOffer, nudgeDismissedRef, onCanvasKeyDown, onNewPostPhotoChoice, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
@@ -8260,7 +8323,7 @@ function EditorShell({ workspace }) {
     editorScale, exportFail, exportNudge, exportOpen, feedOpen,
     findingAckPinned, findingActions, focusTextField, formatThumbs, genBrief,
     ghostSlots, imgRef, inspectorOpen, inspectorWorkspace, issueBoxOf, layoutSwitchVerifier, ledgerCheck, loadFile,
-    mediaObj, moreLikeThis, nudgeDismissedRef, onCanvasKeyDown, onPanEnd,
+    mediaObj, moreLikeThis, newPostPhotoOffer, nudgeDismissedRef, onCanvasKeyDown, onNewPostPhotoChoice, onPanEnd,
     onPanMove, onPanStart, openAdvisorPopover, openSession,
     overlayChromeVisible, photoSel, photoT, polishing, postTiles, postType, previewRef,
     proposal, proposalBusy, proposalErr, readyCheck, redoLastChange, redoStack,
@@ -8940,6 +9003,29 @@ function EditorShell({ workspace }) {
         </div>
       )}
       {showLibPicker && <LibraryPicker onSelect={selectFromLibrary} onClose={()=>setShowLibPicker(false)} />}
+      {/* (Task #69) New-post photo-source offer — the same shared chooser the landing
+          flow uses: one tap, then move on. Upload rides a local hidden input through
+          loadFile (which persists to the Library with session lineage, #64). */}
+      {newPostPhotoOffer && (
+        <div style={{ position:"absolute", left:"50%", bottom:84, transform:"translateX(-50%)", zIndex:30,
+          background:"var(--surface, #FBFBF2)", borderRadius:16, padding:"14px 18px",
+          boxShadow:"0 8px 28px rgba(21,44,40,0.18)", border:"1px solid rgba(37,78,72,0.14)" }}>
+          <PhotoSourceChooser
+            hint="What photo should this post use?"
+            onChoose={(source)=>{
+              if(source==="upload"){
+                const input=document.createElement("input");
+                input.type="file"; input.accept="image/*";
+                input.onchange=(e)=>{ const f=e.target.files?.[0]; if(f) loadFile(f); onNewPostPhotoChoice("dismiss"); };
+                input.click();
+                return;
+              }
+              onNewPostPhotoChoice(source);
+            }}
+            onDismiss={()=>onNewPostPhotoChoice("dismiss")}
+          />
+        </div>
+      )}
       {/* AI Audit — the MANUAL vision pass (One Advice Ledger). Its findings merge
           into the same dots + Export checklist as the local checker; this surface is
           only the runner status + summary (no parallel findings list). Top-level mount
@@ -9190,9 +9276,19 @@ function useDesignPatchPipeline(workspace) {
       // A bgColor change on a materialized design must ALSO land on the visible field
       // (the variant palette shadows background there) — but not during a genuine
       // layout switch, where the incoming archetype's authored palette must win.
+      // (Task #69 photo-load fix) A GENUINE same-patch layout switch: the incoming
+      // archetype's materialization owns media styling (frame + treatment) and the
+      // shape reset boundary, so model-echoed defaults riding the same patch
+      // (photoFrameType "none", removeOverlays) must not clobber the fresh layout's
+      // media window — that clobber rendered a landing library/upload photo invisible.
+      const archetypeSwitchInPatch = typeof patch.archetypeId === "string"
+        && patch.archetypeId !== "none"
+        && patch.archetypeId !== archetypeId
+        && ARCHETYPE_IDS.includes(patch.archetypeId);
       const semanticPatchPlan = compileDesignPatchCommands(patch, {
         fieldFollowsBackground: !!(archetypeId && archetypeId !== "none")
           && !(typeof patch.archetypeId === "string" && patch.archetypeId !== archetypeId),
+        archetypeOwnsMediaStyle: archetypeSwitchInPatch,
       });
       const applySemanticCommands = entries => applied.push(...executeDesignCommandEntries(entries, {
         dispatchCommand:command => {
@@ -9276,6 +9372,11 @@ function useDesignPatchPipeline(workspace) {
       masterPhotoTransform:imgT,
       photoWindowKind:photoWindowRef.current?.kind||null,
       validColorIds:Object.keys(B),
+      // (Task #69 photo-load fix) A same-patch archetype materialization owns the
+      // shape reset boundary — suppress the model's removeOverlays so it cannot
+      // wipe the incoming layout's structural media-host frame (planned from the
+      // stale pre-materialization shape list).
+      archetypeMaterialized:!!transitions.archetype,
     }));
 
     const completion=resolveDesignPatchCompletion({patch,appliedFields:applied,options:opts});

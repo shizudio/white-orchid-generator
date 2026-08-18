@@ -415,8 +415,22 @@ export async function generatePost({ brief, format = DEFAULT_FORMAT }, log) {
     stages.set('landing-plan');
     await page.click('button[aria-label="Send"]');
 
-    // The landing page runs plan → (photo start/poll, up to ~75s) → navigates.
+    // The landing page runs plan → (photo-source choice, task #69) →
+    // (photo start/poll, up to ~75s) → navigates.
+    // (#69) PHOTO-LED plans pause at the inline photo-source chooser, whose
+    // default is "Let AI decide" — accept it with the same one tap a human
+    // makes ([data-wo-photo-source="ai"] is the chooser's driver contract),
+    // then wait for the studio navigation. Text-only plans navigate straight
+    // through — the poll simply falls through to waitForURL.
     stages.set('generation');
+    {
+      const chooserDeadline = Date.now() + Math.min(45_000, stages.remaining());
+      while (Date.now() < chooserDeadline && !page.url().includes('/generate')) {
+        const aiDefault = await page.$('[data-wo-photo-source="ai"]').catch(() => null);
+        if (aiDefault) { await aiDefault.click().catch(() => {}); break; }
+        await settle(300);
+      }
+    }
     await page.waitForURL('**/generate*', { timeout: stages.remaining() });
     stages.set('studio-render');
     await page.waitForSelector('canvas[aria-label="Interactive post preview"]', { timeout: Math.min(45_000, stages.remaining()) });

@@ -4,6 +4,9 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Nav from '@/components/Nav';
+import LibraryPicker from '@/components/LibraryPicker';
+import PhotoSourceChooser from '@/components/PhotoSourceChooser';
+import { planIsPhotoLed, resolveLandingPhotoOutcome } from '@/lib/photo-source-policy.mjs';
 
 // (D1 item 7) First-run suggestions ROTATE and vary in KIND so the empty state
 // teaches the RANGE of what you can say — whole posts AND small changes. On each
@@ -77,8 +80,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState('');        // staged progress line during photo gen
   const [note, setNote] = useState('');
+  // (Task #69 — photo source chooser) A PHOTO-LED plan pauses here for ONE tap:
+  // Let AI decide (default, primary) / Pick from my library / Upload. Text-only
+  // plans never set this — they hand off straight through (no photo to choose).
+  const [pendingPlan, setPendingPlan] = useState(null); // { data, patch, content }
+  const [libOpen, setLibOpen] = useState(false);
   const textareaRef = useRef(null);
   const stageTimerRef = useRef(null);
+  const uploadRef = useRef(null);
 
   // Generate the post's background PHOTO from a scenePrompt via the start-job/poll
   // pipeline. Returns a photo data URL, or null to signal the caller to fall back
@@ -161,34 +170,107 @@ export default function Home() {
       // portrait. This drives both the generated photo's aspect and the editor view.
       const patch = { ...(data.patch || {}) };
       if (!patch.dimensionId) patch.dimensionId = 'ig_portrait';
-      // 2. If photo-led, GENERATE the background photo (Higgsfield). Fall back to any
-      //    Library photo the plan attached, else stay text-only (solid field).
-      // PHASE 2 — photo generation (the longest step; the copy says so).
-      let imageUrl = data.imageUrl || null;
-      if (data.scenePrompt) {
-        enterPhotoPhase();
-        const photo = await generateScenePhoto(data.scenePrompt, patch.dimensionId);
-        if (photo) imageUrl = photo;
+      // 2. PHOTO-LED plans pause for the ONE-TAP photo-source choice (task #69,
+      //    client ruling 2026-08-17). Text-only plans hand off straight through.
+      if (planIsPhotoLed(data)) {
+        stopStageTicker();
+        setPendingPlan({ data, patch, content });
+        return; // loading stays true — the chooser renders in the status area
       }
-      // PHASE 3 — composing + handing off to the editor.
-      stopStageTicker();
-      setStage(GEN_PHASE.compose);
-      // 3. Hand off the composed design + photo to the editor.
-      try {
-        sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
-          patch,
-          reply: data.reply || '',
-          originalMessage: content,
-          scenePrompt: data.scenePrompt || null,
-          imageUrl,
-        }));
-      } catch { /* private mode — the studio still opens, just without seeding */ }
-      router.push('/generate');
+      finishGeneration({ data, patch, content }, { imageUrl: null, imageOrigin: null, removeImage: false, note: null });
     } catch {
       stopStageTicker();
       setNote("I couldn't reach the AI just now. You can still open the studio below.");
       setLoading(false);
     }
+  }
+
+  // PHASE 3 — composing + handing off to the editor. `outcome` is the resolved
+  // photo-source result (lib/photo-source-policy.mjs): a landed image + origin, or
+  // the HONEST degraded path (removeImage + the fallback note appended to the chat
+  // seed) — never a silently repeated stock image (law 6).
+  function finishGeneration(pending, outcome) {
+    stopStageTicker();
+    setStage(GEN_PHASE.compose);
+    const patch = {
+      ...pending.patch,
+      // Only a photo-led plan that ended photo-less clears the media — the studio's
+      // default scratch photo must never masquerade as this generation's photo.
+      ...(outcome.removeImage && planIsPhotoLed(pending.data) ? { removeImage: true } : {}),
+    };
+    const reply = [pending.data.reply || '', outcome.note || ''].filter(Boolean).join('\n\n');
+    try {
+      sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
+        patch,
+        reply,
+        originalMessage: pending.content,
+        scenePrompt: pending.data.scenePrompt || null,
+        imageUrl: outcome.imageUrl,
+        // 'uploaded' origin → the editor persists it to the Library with session
+        // lineage (the #64 machinery) via useLandingHandoff.
+        imageOrigin: outcome.imageOrigin,
+      }));
+    } catch { /* private mode — the studio still opens, just without seeding */ }
+    router.push('/generate');
+  }
+
+  // One tap on the chooser: AI decide runs the generation pipeline (with the
+  // graceful solid-field fallback); Library opens the picker; Upload opens the
+  // file input. Library/Upload keep pendingPlan until an image actually lands so
+  // closing the picker returns to the choice instead of losing the generation.
+  async function chooseSource(source) {
+    const pending = pendingPlan;
+    if (!pending) return;
+    if (source === 'library') { setLibOpen(true); return; }
+    if (source === 'upload') { uploadRef.current?.click(); return; }
+    setPendingPlan(null);
+    enterPhotoPhase();
+    const photo = await generateScenePhoto(pending.data.scenePrompt, pending.patch.dimensionId);
+    finishGeneration(pending, resolveLandingPhotoOutcome({ source: 'ai', aiPhotoDataUrl: photo }));
+  }
+
+  function onLibraryPick(img) {
+    const pending = pendingPlan;
+    setLibOpen(false);
+    if (!pending) return;
+    if (!img?.url) return; // stay on the chooser — nothing was picked
+    setPendingPlan(null);
+    finishGeneration(pending, resolveLandingPhotoOutcome({ source: 'library', libraryUrl: img.url }));
+  }
+
+  // Compress an uploaded file to a bounded JPEG data URL (≤1080px) so the
+  // sessionStorage handoff stays small; the editor persists it to the Library
+  // (source_type 'uploaded' + session lineage) once the session exists.
+  function compressFileToDataUrl(file, maxSize = 1080, quality = 0.7) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('read failed'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('decode failed'));
+        img.onload = () => {
+          try {
+            const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          } catch (err) { reject(err); }
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onUploadFile(file) {
+    const pending = pendingPlan;
+    if (!pending || !file) return;
+    setPendingPlan(null);
+    setStage('Preparing your photo…');
+    const dataUrl = await compressFileToDataUrl(file).catch(() => null);
+    finishGeneration(pending, resolveLandingPhotoOutcome({ source: 'upload', uploadDataUrl: dataUrl }));
   }
 
   function onKeyDown(event) {
@@ -257,10 +339,22 @@ export default function Home() {
             </button>
           </form>
 
+          {/* (Task #69) PHOTO SOURCE — a photo-led plan pauses here for one tap:
+              AI decide (default, primary) / library / upload — then moves on.
+              Inline in the status area, never a blocking modal. */}
+          {pendingPlan && (
+            <div style={{ marginTop: 18 }}>
+              <PhotoSourceChooser
+                hint="One tap for the photo — where should it come from?"
+                onChoose={chooseSource}
+              />
+            </div>
+          )}
+
           {/* In-place generating state: the ~2–5s wait reads as intentional rather
               than a dead click. The brand orchid pulses beside a status line; the
               input above is disabled while loading. On response we navigate as before. */}
-          {loading && (
+          {loading && !pendingPlan && (
             <div role="status" aria-live="polite" style={{
               marginTop: 18, display: 'inline-flex', alignItems: 'center', gap: 10,
               fontFamily: 'var(--font-body)', fontSize: 15, color: 'var(--fg, #3a3f3a)',
@@ -270,6 +364,13 @@ export default function Home() {
               <span>{stage || 'Designing your starting point'}<span className="wo-dots" aria-hidden="true">…</span></span>
             </div>
           )}
+
+          {/* (Task #69) Library picker + hidden upload input for the chooser. The
+              picker is the studio's own LibraryPicker (one component, both flows);
+              closing it without a pick returns to the chooser. */}
+          {libOpen && <LibraryPicker onSelect={onLibraryPick} onClose={() => setLibOpen(false)} />}
+          <input ref={uploadRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) onUploadFile(f); e.target.value = ''; }} />
 
           {note && !loading && (
             <p role="status" style={{

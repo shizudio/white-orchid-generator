@@ -1,6 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 import { PATCH_JSON_SCHEMA, PATCH_FIELD_GUIDE, PATCH_OPTIONS } from '@/lib/design-patch';
-import { generatePhoto, higgsfieldConfigured } from '@/lib/higgsfield';
+import { generatePhoto } from '@/lib/higgsfield';
 import { getLikePreferences, weightedPick, likeCountFor, emptyPreferences } from '@/lib/preferences';
 import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE_RULES, DEFAULT_PHOTO_BRIEF } from '@/lib/brand-defaults';
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
@@ -99,43 +99,15 @@ function photoDirectiveForArchetype(archetypeId) {
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 const WINDOW_MS = 60_000;
 
-// (Commit 3) LANDING PHOTO ATTACH — for photo-led archetypes, pull a suitable image
-// from the Supabase Library so the landing design isn't text-only-plain by default.
-// Uses the admin client directly (no HTTP self-call): query the `images` table,
-// prefer brand-library batch entries (metadata.batch === 'brand-library'), pick a
-// random one, and return a fresh SIGNED URL for the client to apply as the background.
-// GRACEFUL: any failure (empty Library, storage unconfigured, no rows) returns null,
-// so the landing flow proceeds text-only exactly as before. Which archetypes benefit:
+// PHOTO-LED archetype set (photo is structural to the composition). Formerly this
+// also gated `pickLandingPhoto`, the SILENT Library auto-attach — retired by task
+// #69 (client ruling 2026-08-17: the photo source is an explicit user choice on
+// the landing chooser; Library images attach only through the user's own pick).
 const PHOTO_ATTACH_ARCHETYPES = new Set([
   'editorial_split', 'floated_card', 'documentary', 'full_bleed_duotone',
   'shape_cutout',   // (R2) the cutout needs a photo to reveal
   'message_pill',   // (R3) the pill overlaps a full-bleed photo
 ]);
-async function pickLandingPhoto(archetypeId, dimensionId) {
-  if (!PHOTO_ATTACH_ARCHETYPES.has(archetypeId)) return null;
-  try {
-    const supabase = getAdminClient();
-    const { data, error } = await supabase
-      .from('images')
-      .select('storage_path, metadata, source_type')
-      .order('created_at', { ascending: false })
-      .limit(60);
-    if (error || !Array.isArray(data) || !data.length) return null;
-    // Prefer curated brand-library entries; fall back to any Library image.
-    const branded = data.filter(r => (r.metadata && r.metadata.batch) === 'brand-library');
-    const pool = branded.length ? branded : data;
-    if (!pool.length) return null;
-    const chosen = pool[Math.floor(Math.random() * pool.length)];
-    if (!chosen?.storage_path) return null;
-    const { data: signed, error: sErr } = await supabase.storage
-      .from('images')
-      .createSignedUrl(chosen.storage_path, 60 * 60); // 1h — the client applies it immediately
-    if (sErr || !signed?.signedUrl) return null;
-    return signed.signedUrl;
-  } catch {
-    return null; // Library unavailable → text-only landing, unchanged behaviour
-  }
-}
 const MAX_REQUESTS = 20; // conversational — allow a few more turns/minute than the one-shot planner
 const requestLog = new Map();
 
@@ -1377,8 +1349,9 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // so it's usable above despite appearing after the returns.
   async function finalizeBody(reply, patch) {
 
-  // (Commit 3) Landing photo attach URL — set inside the landing block below, returned
-  // separately from the patch so the client applies it as the background image.
+  // Landing photo attach URL — RETIRED (task #69): always null now. The key stays
+  // in the payload for client compatibility, but the photo source is the user's
+  // explicit chooser pick on the landing page — never a server-side attach.
   let landingPhotoUrl = null;
   // (Photo-first) A photographer brief for the post's photo, returned so the client
   // starts a Higgsfield photo job (the photo it composes the design over). Null for
@@ -1403,6 +1376,11 @@ Current design state (compact): ${JSON.stringify(designState)}`;
   // request still lands its overlay on the cleared canvas.
   if (context === 'landing') {
     patch.removeOverlays = true;
+
+    // (Client ruling 2026-08-17 — ALWAYS LOGO) A fresh landing generation always
+    // carries the brand logo: strip any stray model-authored removal. "remove the
+    // logo" remains an EDITOR-turn pin (law 5) — it is never part of a new plan.
+    delete patch.hideLogo;
 
     // ── DURABLE ROTATION HYDRATION (G1) ──────────────────────────────────────
     // The frequency-cap + anti-repeat ring is correctly GLOBAL PER BRAND but was
@@ -1529,12 +1507,12 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     if (archIsPhotoLed && !landingScenePrompt) {
       landingScenePrompt = fallbackScene(intent);
     }
-    // LIBRARY FALLBACK — when Higgsfield is NOT configured (no scene generation path)
-    // OR the model gave no scene, attach a Library image so a photo-led design isn't
-    // text-only-plain. Graceful: null when the Library is empty/unconfigured.
-    if (archIsPhotoLed && (!landingScenePrompt || !higgsfieldConfigured())) {
-      landingPhotoUrl = await pickLandingPhoto(finalArchetype, designState.dimensionId);
-    }
+    // (Task #69 — the photo source is now an EXPLICIT user choice) The silent
+    // Library auto-attach that made unconfigured/no-scene landings repeat the
+    // same stock image is RETIRED: the landing page asks the user (Let AI decide /
+    // Pick from my library / Upload), and an AI-decide failure degrades to the
+    // honest solid-field path with a note (law 6). Library images attach ONLY
+    // through the user's explicit pick — never implicitly here.
   } else if (patch && patch.archetypeId != null && patch.archetypeId !== 'none') {
     // ── EDITOR LAYOUT-CHANGE GUARD (Commit 1) ────────────────────────────────
     const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.content || '';
