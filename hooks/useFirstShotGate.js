@@ -1,5 +1,6 @@
 import { computeReadyChecklist } from "@/lib/audit-local";
 import { logFeedback as logFeedbackClient, newTurnId } from "@/lib/sessions";
+import { layoutVarietyRing, rotationOrderAfter } from "@/lib/layout-switch-verification.mjs";
 
 const BLOCKER_IDS = new Set([
   "contrast-fail",
@@ -23,6 +24,7 @@ export function useFirstShotGate({
   copy,
   applyPatch,
   sessionId,
+  hasImage = false,
 }) {
   const scoreCandidate = (candidateArchetypeId, variant, textColor, candidateCopy) => {
     const perFormat = [];
@@ -85,7 +87,25 @@ export function useFirstShotGate({
       if (score.blockers === 0) break;
     }
 
-    if (best.blockers < baseline.blockers && (best.variant !== initialVariant || best.textColor)) {
+    // (Task #71 — variety never beats correctness, the #59 solver-verified pattern)
+    // When no variant/text-colour of the SEEDED archetype can place the content
+    // (blockers remain after every candidate), ADVANCE to the next suitable
+    // archetype in the shared variety ring (rotationOrderAfter — the same rotation
+    // source as "Try another layout") and take the first one that scores clean.
+    // Bounded to 3 candidates (each scores all 6 formats). A clean advance is a
+    // system free variable on a fresh generation — never a pin override.
+    let advancedTo = null;
+    if (best.blockers > 0) {
+      const ring = layoutVarietyRing(!!hasImage).filter(id => archetypesById[id]);
+      for (const candidateId of rotationOrderAfter(ring, archetypeId).slice(0, 3)) {
+        const score = scoreCandidate(candidateId, 0, null, copy);
+        attempts.push({ attempt: attempts.length, archetypeId: candidateId, variant: 0, tc: null, blockers: score.blockers });
+        if (score.blockers === 0) { advancedTo = candidateId; break; }
+      }
+    }
+    if (advancedTo) {
+      applyPatch({archetypeId:advancedTo,archVariant:0},{amendUndo:true,systemFreeVariables:true});
+    } else if (best.blockers < baseline.blockers && (best.variant !== initialVariant || best.textColor)) {
       applyPatch({
         ...(best.variant !== initialVariant ? {archetypeId,archVariant:best.variant} : {}),
         ...(best.textColor ? {textColorId:best.textColor} : {}),
@@ -106,7 +126,8 @@ export function useFirstShotGate({
             tc: best.textColor,
             blockers: best.blockers,
           },
-          healed: best.blockers < baseline.blockers,
+          healed: !!advancedTo || best.blockers < baseline.blockers,
+          advancedTo: advancedTo || null,
           attempts,
           ts: new Date().toISOString(),
         },

@@ -6,6 +6,7 @@ import { DEFAULT_BRAND_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_TONE, DEFAULT_VOICE
 import { loadRotation, saveRotation, rotationClient } from '@/lib/rotation-state';
 import { detectBandRemoval, reconcileEditorLayoutClaim, detectAddElement, detectPolishRequest, addElementClassRefusal, detectLayoutVariety } from '@/lib/assistant-intents';
 import { LAYOUT_VARIETY_RINGS, NO_LAYOUT_SWITCH_REPLY } from '@/lib/layout-switch-verification.mjs';
+import { seededRotationPick } from '@/lib/landing-archetype-rotation.mjs';
 
 export const runtime = 'nodejs';
 // Image generation (gpt-image-1, medium quality) can take 10–30s; the default
@@ -1426,17 +1427,45 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     const textOnly = wantsTextOnly(lastUserText);
     let picked = LANDING_ARCH_BY_ID[patch.archetypeId] ? patch.archetypeId : null;
     if (picked === 'petal_window' && !wantsDecoration(lastUserText)) picked = null; // petal only when named
-    if (!picked) picked = resolveLandingArchetype(null, intent, likePrefs); // model omitted / invalid → pick suited
-    let finalArchetype = resolveLandingArchetype(picked, intent, likePrefs);
+    // ── SEEDED COMPOSITION ROTATION (task #71, client ruling 2026-08-18) ─────
+    // "always the same composition (image on the right)" — the old pick was
+    // first-cap-clear over an ordered list whose head (editorial_split) won almost
+    // every brief (the cap window has an n>=4 floor and the model's prompt steers
+    // the same way). A fresh brief's archetype is now a SEEDED ROTATION over the
+    // suited pool (lib/landing-archetype-rotation.mjs): seed = brief copy-hash +
+    // the durable rotation ring's length, walk skips the previous pick and any
+    // cap-busting id — deterministic, no Math.random, caps/rhythm supreme.
+    // EXPLICIT INTENT STILL WINS (law 5): a brief that names a layout ("full
+    // image post", "make it a quote card", the petal/orchid decor gate) keeps the
+    // model's vetted pick through the original cap-resolve pipeline.
+    const explicitLayoutAsk = wantsLayoutChange(lastUserText)
+      || (picked === 'petal_window' && wantsDecoration(lastUserText));
+    let finalArchetype;
+    if (explicitLayoutAsk && picked) {
+      finalArchetype = resolveLandingArchetype(picked, intent, likePrefs);
+    } else {
+      const pool = textOnly
+        ? CAP_SELECTABLE.filter(a => !PHOTO_LED.has(a.id) && a.suits.includes(intent)).map(a => a.id)
+        : (PHOTO_LED_BY_INTENT[intent] || PHOTO_LED_BY_INTENT.text_post);
+      const fallbackTextPool = textOnly ? CAP_SELECTABLE.filter(a => !PHOTO_LED.has(a.id)).map(a => a.id) : [];
+      finalArchetype = seededRotationPick({
+        pool: pool.length ? pool : fallbackTextPool,
+        seedText: lastUserText,
+        recentPicks: RECENT_PICKS,
+        capExceeded: exceedsCap,
+      }) || resolveLandingArchetype(picked, intent, likePrefs);
+    }
     // ── PHOTO-FIRST DEFAULT ── unless the brief is explicitly text-only, the FIRST
     // answer is a photo-led composition (solid-field tiles live in the "Try another"
     // rotation instead — great in a feed, plain standalone). Deterministic, cap-aware.
     if (!textOnly && !PHOTO_LED.has(finalArchetype)) {
       finalArchetype = pickPhotoLedArchetype(intent);
     }
-    // Variety: never serve the SAME photo-led archetype twice in a row — successive
-    // briefs should read as distinct compositions, not the same split re-skinned.
-    if (!textOnly && PHOTO_LED.has(finalArchetype) &&
+    // Variety backstop: never serve the SAME photo-led archetype twice in a row —
+    // the seeded rotation already skips the previous pick; this belt only fires for
+    // an explicit-layout repeat (which the user asked for, so it stands) — kept for
+    // the model-pick path where the ask wasn't layout-specific.
+    if (!explicitLayoutAsk && !textOnly && PHOTO_LED.has(finalArchetype) &&
         RECENT_PICKS[RECENT_PICKS.length - 1] === finalArchetype) {
       const prefs = (PHOTO_LED_BY_INTENT[intent] || PHOTO_LED_BY_INTENT.text_post)
         .filter(id => id !== finalArchetype);
