@@ -34,12 +34,16 @@ function compactDesignState(raw) {
   const {
     postType, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
-    selectedLogoId, logoId, logoPosition, logoSize,
+    selectedLogoId, logoId, logoPosition, logoSize, fontSizes,
   } = raw;
   return {
     postType, dimensionId, bgColor, textColorId, backdropMode,
     headline, subtext, attribution, dateText,
     logoId: logoId || selectedLogoId, logoPosition, logoSize,
+    // (no-op guard) coerceFixToCategory diffs a proposed hierarchy fix against
+    // the CURRENT font-size steps — it was silently missing here, so that guard
+    // (and the same-as-current check below) never had real data to compare against.
+    fontSizes: fontSizes && typeof fontSizes === 'object' ? fontSizes : null,
     hasImage: !!raw.hasImage,
   };
 }
