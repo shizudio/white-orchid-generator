@@ -71,10 +71,26 @@ function ShapeInspectorPanel({
     {addOpen&&<div style={{marginTop:12,marginBottom:4}}>{addTray}</div>}
     <div style={{fontSize:10,color:B.burnham,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1.4,textTransform:"uppercase",marginBottom:5,marginTop:16,paddingTop:12,borderTop:`1px solid ${B.ash}22`}}>Shapes on this design</div>
     <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,marginBottom:10}}>Structure controls the composition. Decoration adds optional expression.</div>
-    {!layers.length
-      ? <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No shapes yet. Add one above — then drag, rotate and resize it on the preview.</div>
-      : <div style={{display:"flex",flexDirection:"column",gap:13,marginBottom:10}}>{groups.map(group=><section key={group.id} aria-label={group.label}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}><span title={group.hint} style={{fontSize:10,color:B.jet,fontFamily:F.subtitle,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase"}}>{group.label}</span><span style={{fontSize:9,color:B.ash,fontFamily:F.body,textAlign:"right"}}>{group.layers.length}</span></div><div style={{display:"flex",flexDirection:"column",gap:6}}>{group.layers.map(renderLayer)}</div></section>)}</div>}
-    {selectedEditor&&<div style={{padding:"10px 11px",borderRadius:9,background:`${B.whiteSmoke}88`,border:`1px solid ${B.ash}2e`,marginBottom:10}}>{selectedEditor}</div>}
+    {/* (Client ruling 2026-08-18 / panel-hierarchy pattern: pills → name of
+        selection → selection features) When a shape is SELECTED, the section
+        holding it moves to the 2nd row — directly after the selection context,
+        before the other section — and the "Editing: …" block renders right
+        under it, so editing is adjacent instead of below the fold. The
+        unselected state keeps today's order (Structure, then Decoration). */}
+    {(() => {
+      const selectedGroupId = selectedId ? (layers.find(layer => layer.id === selectedId)?.group || null) : null;
+      const orderedGroups = selectedGroupId
+        ? [...groups.filter(g => g.id === selectedGroupId), ...groups.filter(g => g.id !== selectedGroupId)]
+        : groups;
+      const editorBlock = selectedEditor
+        ? <div key="editor" style={{padding:"10px 11px",borderRadius:9,background:`${B.whiteSmoke}88`,border:`1px solid ${B.ash}2e`}}>{selectedEditor}</div>
+        : null;
+      if (!layers.length) return <>
+        <div style={{fontSize:11,color:B.ash,fontFamily:F.body,lineHeight:1.5,marginBottom:10}}>No shapes yet. Add one above — then drag, rotate and resize it on the preview.</div>
+        {editorBlock}
+      </>;
+      return <div style={{display:"flex",flexDirection:"column",gap:13,marginBottom:10}}>{orderedGroups.map(group=><section key={group.id} aria-label={group.label}><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:6}}><span title={group.hint} style={{fontSize:10,color:B.jet,fontFamily:F.subtitle,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase"}}>{group.label}</span><span style={{fontSize:9,color:B.ash,fontFamily:F.body,textAlign:"right"}}>{group.layers.length}</span></div><div style={{display:"flex",flexDirection:"column",gap:6}}>{group.layers.map(renderLayer)}{group.id===selectedGroupId?editorBlock:null}</div></section>)}</div>;
+    })()}
   </>;
 }
 

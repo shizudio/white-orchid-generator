@@ -27,6 +27,16 @@ import { runLocalAudit as computeLocalAudit, partitionIssues, extractAuditFindin
 import { newTurnId, getCurrentSessionId, localGetSession, logFeedback as logFeedbackClient, looksLikeGuardSession } from "@/lib/sessions";
 import { DEFAULT_PALETTE, DEFAULT_FONTS, DEFAULT_LOGO_VARIANTS, DEFAULT_OVERLAY_ASSETS, DEFAULT_ASSISTANT_NAME, DEFAULT_BRAND_NAME, DEFAULT_FURNITURE_TEXT, RETIRED_OVERLAY_ASSETS, RETIRED_OVERLAY_REPLACEMENT, PETAL_WINDOW_MASK_ASSET } from "@/lib/brand-defaults";
 import { editorSelectionReducer, selectionInspectorKey, selectionSceneId } from "@/lib/editor-selection.mjs";
+import {
+  classifySvgArt,
+  displayOverlayName,
+  lineArtModeFor,
+  normalizeOverlayModeForAsset,
+  partitionShapeTray,
+  sanitizeSvgText,
+  shapeDeletePlan,
+  svgAspectRatio,
+} from "@/lib/overlay-shapes.mjs";
 import { resolveInheritedValue } from "@/lib/format-inheritance.mjs";
 import {
   clampNormalizedRoleBox,
@@ -6285,6 +6295,20 @@ export default function App() {
 
   // Overlay assets: library + placed layers
   const [overlays, setOverlays] = useState([]);            // [{id,name,dataUrl,kind,ratio}]
+  // (Shapes delete — client ruling 2026-08-18) Assets HIDDEN from the shape
+  // tray. Built-in brand shapes are never destroyed — hiding is picker-only, so
+  // placed instances on existing designs keep rendering (paint-time asset
+  // resolution ignores this list). Mirrored to localStorage; the cloud copy
+  // (bucket JSON via /api/overlay-assets) wins by union when configured.
+  const [hiddenShapeIds, setHiddenShapeIds] = useState([]);
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("wo-hidden-shapes") || "[]");
+      if (Array.isArray(stored) && stored.length) {
+        setHiddenShapeIds(previous => Array.from(new Set([...previous, ...stored.filter(id => typeof id === "string")])));
+      }
+    } catch { /* storage optional */ }
+  }, []);
   // (WP-W0 specimen 4) Per-piece FURNITURE overrides, keyed furn_<type>_<i> on the
   // active archetype's furniture list: { hidden?, color? (brand token), widthScale? }.
   // Makes hairline rules / index tokens / url lines first-class: selectable,
@@ -6983,6 +7007,71 @@ export default function App() {
         ...previous.filter(asset => asset.official),
       ]);
     },
+    // (Shapes delete 2026-08-18) Cloud hidden-shape list — union with the local
+    // mirror so a hide taken on another device lands here too.
+    installHiddenOverlays: ids => {
+      setHiddenShapeIds(previous => Array.from(new Set([...previous, ...ids.filter(id => typeof id === "string")])));
+    },
+  };
+
+  /* ── Shape-library brand writes (client ruling 2026-08-18) ─────────────────
+     All three follow the graceful-degradation contract: cloud miss → the change
+     still lands locally + an HONEST note, never a crash.                    */
+  // Hide a BUILT-IN brand shape from the picker (brand-wide when cloud is up).
+  const hideBuiltinShape = async (asset) => {
+    const next = Array.from(new Set([...hiddenShapeIds, asset.id]));
+    setHiddenShapeIds(next);
+    try { localStorage.setItem("wo-hidden-shapes", JSON.stringify(next)); } catch { /* optional */ }
+    try {
+      const response = await fetch("/api/overlay-assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiddenIds: next }),
+      });
+      const data = await response.json().catch(() => null);
+      return { cloud: !!data?.configured };
+    } catch { return { cloud: false }; }
+  };
+  // Delete a USER-UPLOADED shape (its storage object is really removed).
+  const deleteUploadedShape = async (asset) => {
+    setOverlays(previous => previous.filter(item => item.id !== asset.id));
+    if (!asset.official) return { cloud: true }; // device-local upload — nothing in the cloud
+    try {
+      const response = await fetch(`/api/brand-assets?id=${encodeURIComponent(asset.id)}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      return { cloud: !!data?.configured };
+    } catch { return { cloud: false }; }
+  };
+  // Upload a new brand shape from the "+" tile: sanitize → classify → store as
+  // an OFFICIAL brand asset (whole-workspace); local-only fallback when the
+  // cloud is unconfigured. Credit-free (no AI calls anywhere in this path).
+  const uploadBrandShape = async ({ name, svgText }) => {
+    const { svg } = sanitizeSvgText(svgText);
+    if (!/<svg[\s>]/i.test(svg)) return { ok: false, note: "That file doesn't look like a valid SVG." };
+    const art = classifySvgArt(svg);
+    const ratio = svgAspectRatio(svg);
+    const cleanName = String(name || "").trim().slice(0, 48) || "Shape";
+    let dataUrl;
+    try { dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`; }
+    catch { return { ok: false, note: "That SVG could not be read." }; }
+    let asset = null, cloud = false;
+    try {
+      const response = await fetch("/api/brand-assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: cleanName, dataUrl, kind: "center", ratio, art }),
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.configured && data.asset?.src) {
+        asset = { ...data.asset, category: "overlays", official: true };
+        cloud = true;
+      }
+    } catch { /* fall through to the local-only asset */ }
+    if (!asset) {
+      asset = { id: "up_" + Date.now().toString(36), name: cleanName, dataUrl, kind: "center", ratio, art, category: "overlays" };
+    }
+    setOverlays(previous => [...previous.filter(item => item.id !== asset.id), asset]);
+    return { ok: true, cloud, asset };
   };
   const { brandKit, logoVariantsVersion } = useBrandCatalogHydration({
     brandKitFromContext,
@@ -7679,9 +7768,9 @@ export default function App() {
   const inspectorWorkspace = <InspectorWorkspace workspace={{
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
     archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
-    closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
+    closeInspector, dateText, deadRoles, deleteLayer, deleteUploadedShape, dim, dimensionId,
     effectiveFieldId, effectiveFieldOpt, effectiveT, focusTextField, foldOpen, fontSizes,
-    furnitureOverrides, headline, heroRegister, image, imageObj, imgRef,
+    furnitureOverrides, headline, heroRegister, hiddenShapeIds, hideBuiltinShape, image, imageObj, imgRef,
     inspectorEl, inspectorNotes,
     isOverride, layoutShapeFlash, layoutShapeSecRef, logoObj, logoOverlapHint,
     logoHidden, logoPosition, logoSel, markTab, mediaKind, mediaObj, microLabel,
@@ -7697,7 +7786,7 @@ export default function App() {
     setTextSelected:selectionCommands.setTextSelected,
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
-    updateLayerT, updateTextLayout,
+    updateLayerT, updateTextLayout, uploadBrandShape,
     // (Symptom-3 remedy honesty) the contrast-remedy block needs the measured text
     // surface luminance + frame-layer state — thread them or the panel throws (M6-adjacent
     // prop-drop class; see the mediaObj/brandKit precedents).
@@ -9238,6 +9327,18 @@ function useDesignPatchPipeline(workspace) {
       // frame add composes (the full-bleed archetype hosts the photo per the media-host
       // rule, added AFTER materialization below); copy is preserved by materializeArchetype;
       // born-clean re-solves contrast over the photo (documentary whisper / message_pill).
+      // (Line-art merge — client ruling 2026-08-18) A NEW line-art placement lands
+      // on the asset's CORRECT renderer — "outline" (stroked silhouette) for
+      // silhouette assets, "lineart" (native strokes) for line drawings — whichever
+      // spelling the grammar produced (the AI enum keeps both values). Applies to
+      // NEW adds only: stored layers keep their exact mode (render-fingerprint law).
+      if (patch.addOverlay && typeof patch.addOverlay.mode === "string" && patch.addOverlay.assetId) {
+        const addAsset = [...overlays, ...DEFAULT_OVERLAYS].find(a => a.id === patch.addOverlay.assetId);
+        const normalizedMode = normalizeOverlayModeForAsset(patch.addOverlay.mode, addAsset || {});
+        if (normalizedMode !== patch.addOverlay.mode) {
+          patch = { ...patch, addOverlay: { ...patch.addOverlay, mode: normalizedMode } };
+        }
+      }
       let autoSwitchedTo = null, pendingShapeSwitchOffer = null;
       if (patch.addOverlay && typeof patch.archetypeId !== "string"
           && isEditorialSplitArchetype(archetypeId ? ARCHETYPES_BY_ID[archetypeId] : null)) {
@@ -9542,9 +9643,9 @@ function InspectorWorkspace({ workspace }) {
   const {
     _opacityDead, accessibilityNote, addShape, applyInspectorPatch, applyPatch,
     archVariant, archetypeId, attribution, backdropMode, beginRoleEdit, bgAlpha, bgSel,
-    closeInspector, dateText, deadRoles, deleteLayer, dim, dimensionId,
+    closeInspector, dateText, deadRoles, deleteLayer, deleteUploadedShape, dim, dimensionId,
     effectiveFieldId, effectiveFieldOpt, effectiveT, focusTextField, foldOpen, fontSizes,
-    furnitureOverrides, headline, heroRegister, image, imageObj, imgRef, inspectorEl, inspectorNotes,
+    furnitureOverrides, headline, heroRegister, hiddenShapeIds, hideBuiltinShape, image, imageObj, imgRef, inspectorEl, inspectorNotes,
     isOverride, layoutShapeFlash, layoutShapeSecRef, logoObj, logoOverlapHint,
     logoHidden, logoPosition, logoSel, markTab, mediaKind, mediaObj, microLabel,
     overlayLayers, overlays, patchPhoto, photoFrame, photoSel, pillText, placeLogo, postType,
@@ -9555,7 +9656,7 @@ function InspectorWorkspace({ workspace }) {
     setPhotoSel, setSelOverlay, setShowLibPicker, setTextSelected,
     subtext, suggestedColor, suggestedTextColor, textColorId, textContrast,
     textLayout, textMinContrast, textRole, textSelected, toggleFold, typeLayouts,
-    updateLayerT, updateTextLayout, videoObj,
+    updateLayerT, updateTextLayout, uploadBrandShape, videoObj,
     textSurfaceLuminance, hasFrameLayer,
     designDocument, contentLedger, dispatchElementCommand,
     dispatchSizeCommands, setGlobalSize, pinLegacyFontSize, clearLegacyFontSizePin,
@@ -9580,6 +9681,11 @@ function InspectorWorkspace({ workspace }) {
   // class's reason, shown under the picker (the ratified disabled-affordance pattern:
   // visibly inert + tap explains why — LogoInspectorPanel precedent). {cls, reason}.
   const [addTextInertNote, setAddTextInertNote] = useState(null);
+  // (Shapes tray 2026-08-18) "+" upload window, pending tile-delete confirm and
+  // the honest cloud-degradation note under the tray.
+  const [shapeUpload, setShapeUpload] = useState(null);       // { name, svgText, fileName, error, busy } | null
+  const [pendingShapeDelete, setPendingShapeDelete] = useState(null); // asset | null
+  const [shapeTrayNote, setShapeTrayNote] = useState(null);   // string | null
   // Add a new element of `cls` with a short brand starter, then select it so its
   // inspector opens immediately (an honest "no room in this format" note appears there
   // reactively if the solver could not seat it — never a silent no-op, M2).
@@ -9625,30 +9731,105 @@ function InspectorWorkspace({ workspace }) {
       // placed repeatedly. The badge shows how many are on the design (delete lives on
       // the canvas + the Shapes inspector), not an on/off toggle.
       const count = overlayLayers.filter(l => l.assetId === o.id).length;
+      // (2026-08-18) Presentation name — ids stay stable (Petal 1/2/3 · Motif 1).
+      const name = displayOverlayName(o);
+      const src = o.dataUrl || o.src;
       // Petal marks are ivory assets — a soft celadon backing keeps them visible
       // on the white tile (accessories stay on white).
       const tileBg = (o.builtin && o.category === "overlays") ? `${B.celadonDeep}2e` : "#fff";
+      // (2026-08-18) Ivory-on-celadon glyphs were near-invisible: SVG glyphs
+      // render as a DARK-INK (burnham) mask instead of the raw ivory art.
+      // Stacked 3× so partial-alpha fills (shape-1 ships 0.4) still read.
+      // PNG uploads (the motif line drawing) keep their own dark strokes.
+      const isSvg = typeof src === "string" && (src.startsWith("data:image/svg") || /\.svg(\?|$)/i.test(src));
+      const glyph = isSvg
+        ? <span aria-hidden="true" style={{position:"relative",width:"100%",height:"62%",display:"block"}}>
+            {[0,1,2].map(i=><span key={i} style={{position:"absolute",inset:0,background:B.burnham,WebkitMaskImage:`url("${src}")`,maskImage:`url("${src}")`,WebkitMaskRepeat:"no-repeat",maskRepeat:"no-repeat",WebkitMaskPosition:"center",maskPosition:"center",WebkitMaskSize:"contain",maskSize:"contain"}}/>)}
+          </span>
+        : <img src={src} alt="" style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain"}} />;
       return (
-        <button key={o.id} onClick={()=>addShape(o)} title={`${o.name} — tap to add${count?` (${count} placed)`:""}`}
-          style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${count?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
-          <img src={o.dataUrl||o.src} alt={o.name} style={{maxWidth:"100%",maxHeight:"62%",objectFit:"contain",opacity:count?1:0.6}} />
-          <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{o.name}</span>
-          {count>0&&<span style={{position:"absolute",top:3,right:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 4px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>{count}</span>}
-        </button>
+        <div key={o.id} className="wo-shape-tile" style={{position:"relative"}}>
+          <button onClick={()=>addShape(o)} title={`${name} — tap to add${count?` (${count} placed)`:""}`}
+            style={{position:"relative",width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1px solid ${count?B.burnham:B.ash+"22"}`,background:tileBg,padding:8,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+            {glyph}
+            <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600,color:B.burnham,textAlign:"center",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{name}</span>
+            {count>0&&<span style={{position:"absolute",top:3,left:3,fontSize:8,background:B.burnham,color:"#fff",borderRadius:3,padding:"1px 4px",lineHeight:1.3,fontFamily:FU.subtitle,fontWeight:700}}>{count}</span>}
+          </button>
+          {/* (2026-08-18) Hover ✕ (always shown on touch devices via the hover:none
+              media query below) → confirm card under the tray, never an instant delete. */}
+          <button type="button" className="wo-tile-x" aria-label={`Delete ${name}`} title={`Delete ${name}`}
+            onClick={()=>{setShapeTrayNote(null);setPendingShapeDelete(o);}}
+            style={{position:"absolute",top:-5,right:-5,width:18,height:18,borderRadius:"50%",border:`1px solid ${B.ash}55`,background:"#fff",color:B.tangerine,cursor:"pointer",fontSize:10,lineHeight:1,display:"grid",placeItems:"center",padding:0,boxShadow:"0 1px 3px rgba(0,0,0,0.14)"}}>✕</button>
+        </div>
       );
     };
     // (client ruling 2026-07-23) Suppress retired off-brand art REGARDLESS of source
     // — a stale cloud brand_overlays row must not resurrect the Orchid tile.
-    const trayOverlays = overlays.filter(o => !RETIRED_OVERLAY_ASSETS.includes(o.id));
-    const petals = trayOverlays.filter(o => o.builtin && o.category === "overlays");
-    const decorations = trayOverlays.filter(o => !(o.builtin && o.category === "overlays"));
+    // (client ruling 2026-08-18) The SHAPES row = built-in petal silhouettes +
+    // uploaded shape-class assets (the motif and any "+"-tile upload); hidden
+    // assets leave the tray only — placed instances keep rendering.
+    const { shapes, decorations } = partitionShapeTray(overlays, { retired:RETIRED_OVERLAY_ASSETS, hidden:hiddenShapeIds });
+    const submitShapeUpload = async () => {
+      const u = shapeUpload;
+      if (!u || !u.svgText || !String(u.name||"").trim() || u.busy) return;
+      setShapeUpload(prev=>({ ...prev, busy:true, error:null }));
+      const result = await uploadBrandShape({ name:u.name, svgText:u.svgText });
+      if (!result.ok) { setShapeUpload(prev=>({ ...prev, busy:false, error:result.note })); return; }
+      setShapeUpload(null);
+      setShapeTrayNote(result.cloud ? null : "Cloud isn’t configured — the new shape is saved on this device only, not to the whole workspace.");
+    };
+    const confirmShapeDelete = async () => {
+      const asset = pendingShapeDelete;
+      setPendingShapeDelete(null);
+      if (!asset) return;
+      const plan = shapeDeletePlan(asset);
+      const result = plan.action === "hide" ? await hideBuiltinShape(asset) : await deleteUploadedShape(asset);
+      setShapeTrayNote(result.cloud ? null : (plan.action === "hide"
+        ? "Cloud isn’t configured — the shape is hidden on this device only."
+        : "Cloud isn’t configured — the shape was removed on this device only."));
+    };
+    const deletePlan = pendingShapeDelete ? shapeDeletePlan(pendingShapeDelete) : null;
     return (
       <>
+        <style>{`.wo-shape-tile .wo-tile-x{opacity:0;pointer-events:none;transition:opacity .12s}
+.wo-shape-tile:hover .wo-tile-x,.wo-shape-tile:focus-within .wo-tile-x{opacity:1;pointer-events:auto}
+@media (hover:none){.wo-shape-tile .wo-tile-x{opacity:1;pointer-events:auto}}`}</style>
         <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"2px 0 6px"}}>Shapes</div>
-        <div style={{fontSize:10,color:B.jet,fontFamily:F.body,lineHeight:1.45,margin:"0 0 8px"}}>The brand’s petal marks — frame a photo or place one as a quiet accent.</div>
+        <div style={{fontSize:10,color:B.jet,fontFamily:F.body,lineHeight:1.45,margin:"0 0 8px"}}>The brand’s shape marks — frame a photo or place one as a quiet accent.</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>
-          {petals.map(shapeTile)}
+          {shapes.map(shapeTile)}
+          <button type="button" key="wo-shape-add" onClick={()=>{setShapeTrayNote(null);setPendingShapeDelete(null);setShapeUpload({name:"",svgText:null,fileName:"",error:null,busy:false});}}
+            title="Upload a new brand shape (SVG)" aria-label="Upload a new brand shape"
+            style={{width:"100%",aspectRatio:"1/1",borderRadius:10,border:`1.5px dashed ${B.ash}88`,background:"#fff",color:B.burnham,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4}}>
+            <span aria-hidden="true" style={{fontSize:18,lineHeight:1}}>＋</span>
+            <span style={{fontSize:9,fontFamily:FU.subtitle,fontWeight:600}}>Add</span>
+          </button>
         </div>
+        {shapeUpload&&<div style={{margin:"0 0 12px",padding:"10px 11px",borderRadius:9,background:`${B.whiteSmoke}99`,border:`1px solid ${B.ash}33`}}>
+          <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>New brand shape</div>
+          <input type="text" placeholder="Shape name" value={shapeUpload.name} maxLength={48}
+            onChange={e=>{const v=e.target.value;setShapeUpload(prev=>({...prev,name:v}));}}
+            style={{width:"100%",boxSizing:"border-box",padding:"7px 9px",borderRadius:7,border:`1px solid ${B.ash}55`,fontFamily:F.body,fontSize:12,marginBottom:7}}/>
+          <input type="file" accept=".svg,image/svg+xml" aria-label="Choose an SVG file"
+            onChange={e=>{const f=e.target.files&&e.target.files[0];if(!f)return;const reader=new FileReader();reader.onload=()=>setShapeUpload(prev=>prev?{...prev,svgText:String(reader.result||""),fileName:f.name,error:null}:prev);reader.readAsText(f);}}
+            style={{width:"100%",fontFamily:F.body,fontSize:11,marginBottom:7}}/>
+          <div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,marginBottom:8}}>SVG only. It’s cleaned (no scripts or external links), classified for line-art, and saved to your brand for the whole workspace.</div>
+          {shapeUpload.error&&<div style={{fontSize:10,color:B.tangerine,fontFamily:F.body,marginBottom:8}}>{shapeUpload.error}</div>}
+          <div style={{display:"flex",gap:7}}>
+            <button type="button" onClick={()=>setShapeUpload(null)} style={{padding:"5px 10px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"#fff",color:B.jet,fontFamily:FU.subtitle,fontSize:9,fontWeight:700,cursor:"pointer"}}>Cancel</button>
+            <button type="button" disabled={!shapeUpload.svgText||!shapeUpload.name.trim()||shapeUpload.busy} onClick={submitShapeUpload}
+              style={{padding:"5px 10px",borderRadius:999,border:`1px solid ${B.burnham}`,background:(!shapeUpload.svgText||!shapeUpload.name.trim()||shapeUpload.busy)?`${B.burnham}66`:B.burnham,color:"#fff",fontFamily:FU.subtitle,fontSize:9,fontWeight:800,cursor:(!shapeUpload.svgText||!shapeUpload.name.trim()||shapeUpload.busy)?"default":"pointer"}}>{shapeUpload.busy?"Saving…":"Add to brand"}</button>
+          </div>
+        </div>}
+        {pendingShapeDelete&&deletePlan&&<div role="alertdialog" aria-label={`Delete ${displayOverlayName(pendingShapeDelete)}?`}
+          style={{margin:"0 0 12px",padding:"10px 11px",borderRadius:9,background:`${B.tangerine}0d`,border:`1px solid ${B.tangerine}44`}}>
+          <div style={{fontSize:10,fontFamily:F.body,color:B.jet,lineHeight:1.45}}>{deletePlan.message}</div>
+          <div style={{display:"flex",gap:7,marginTop:8}}>
+            <button type="button" onClick={()=>setPendingShapeDelete(null)} style={{padding:"5px 9px",borderRadius:999,border:`1px solid ${B.ash}55`,background:"#fff",color:B.jet,fontFamily:FU.subtitle,fontSize:9,fontWeight:700,cursor:"pointer"}}>Cancel</button>
+            <button type="button" onClick={confirmShapeDelete} style={{padding:"5px 9px",borderRadius:999,border:`1px solid ${B.tangerine}`,background:B.tangerine,color:"#fff",fontFamily:FU.subtitle,fontSize:9,fontWeight:800,cursor:"pointer"}}>{deletePlan.action==="hide"?"Remove from brand":"Delete shape"}</button>
+          </div>
+        </div>}
+        {shapeTrayNote&&<div style={{fontSize:10,color:B.ash,fontFamily:F.body,lineHeight:1.45,margin:"0 0 10px"}}>{shapeTrayNote}</div>}
         {decorations.length>0 && <>
           <div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:600,letterSpacing:1.4,textTransform:"uppercase",margin:"2px 0 6px"}}>Decoration</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
@@ -9674,7 +9855,7 @@ function InspectorWorkspace({ workspace }) {
             const a = overlays.find(o => o.id === v.shapeId);
             const sel = archVariant === i;
             return (
-              <button key={`${v.shapeId}-${i}`} type="button" aria-pressed={sel} title={a?.name || v.shapeId}
+              <button key={`${v.shapeId}-${i}`} type="button" aria-pressed={sel} title={a ? displayOverlayName(a) : v.shapeId}
                 onClick={()=>applyInspectorPatch({archetypeId, archVariant:i},{controlId:"shape"})}
                 style={{width:64,height:64,borderRadius:12,cursor:"pointer",display:"grid",placeItems:"center",
                   background:B[v.bg] || v.bg,transition:"all 0.15s",
@@ -9699,7 +9880,9 @@ function InspectorWorkspace({ workspace }) {
   // layout, ABOVE) → the list of every FREE shape layer on the design (thumb + mode badge
   // + per-instance delete, tap to edit inline) → "＋ Add shape" opening the shape tray
   // (built-in + uploaded brand shapes). Every action rides applyPatch → undoable + honest.
-  const SHAPE_MODE_LABEL = { frame:"Frame", overlay:"Fill", outline:"Outline", lineart:"Line Art" };
+  // (Line-art merge 2026-08-18) outline + lineart are ONE user-facing "Line Art"
+  // mode — the internal renderer stays per-asset (see lib/overlay-shapes.mjs).
+  const SHAPE_MODE_LABEL = { frame:"Frame", overlay:"Fill", outline:"Line Art", lineart:"Line Art" };
   const renderShapesHome = () => {
     const hasLayoutShapes=(ARCHETYPES_BY_ID[archetypeId]?.variants||[]).some(variant=>variant.shapeId);
     const selectedLayer=overlayLayers.find(layer=>layer.uid===selOverlay);
@@ -9711,12 +9894,13 @@ function InspectorWorkspace({ workspace }) {
     const seen=new Map();
     const layers=overlayLayers.map(layer=>{
       const asset=overlays.find(item=>item.id===layer.assetId);seen.set(layer.assetId,(seen.get(layer.assetId)||0)+1);
-      return {id:layer.uid,name:asset?.name,src:asset?.dataUrl||asset?.src,label:(asset?.name||"Shape")+(counts.get(layer.assetId)>1?" · "+seen.get(layer.assetId):""),modeLabel:SHAPE_MODE_LABEL[layer.mode||"frame"]||layer.mode,roleLabel:shapeRoleLabel(layer),group:shapeLayerGroup(layer),isMediaHost:designDocument.composition.mediaHostShapeId===layer.uid};
+      const assetName=asset?displayOverlayName(asset):null; // (2026-08-18) presentation names, stable ids
+      return {id:layer.uid,name:assetName,src:asset?.dataUrl||asset?.src,label:(assetName||"Shape")+(counts.get(layer.assetId)>1?" · "+seen.get(layer.assetId):""),modeLabel:SHAPE_MODE_LABEL[layer.mode||"frame"]||layer.mode,roleLabel:shapeRoleLabel(layer),group:shapeLayerGroup(layer),isMediaHost:designDocument.composition.mediaHostShapeId===layer.uid};
     });
     return <ShapeInspectorPanel hasLayoutShapes={hasLayoutShapes} layoutSectionRef={layoutShapeSecRef} layoutFlash={layoutShapeFlash}
       layoutPicker={renderShapeVariantPanel()}
       layers={layers} selectedId={selOverlay} onSelect={id=>selectElement("overlay",id)} onDelete={deleteLayer}
-      selectedEditor={selectedLayer?<><div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Editing: {overlays.find(asset=>asset.id===selectedLayer.assetId)?.name||"Shape"}</div>{renderOverlayPanel()}</>:null}
+      selectedEditor={selectedLayer?<><div style={{fontSize:10,color:B.burnham,fontFamily:FU.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Editing: {(()=>{const asset=overlays.find(item=>item.id===selectedLayer.assetId);return asset?displayOverlayName(asset):"Shape";})()}</div>{renderOverlayPanel()}</>:null}
       addOpen={!!foldOpen.shapeAdd} onToggleAdd={()=>toggleFold("shapeAdd")} addTray={renderShapesSection()} palette={B} fonts={F}/>;
   };
 
@@ -10163,6 +10347,7 @@ function InspectorWorkspace({ workspace }) {
       isMaster={dimensionId===MASTER_DIM} isOverride={isOverride} dimensionLabel={dim.label}
       onMode={mode=>setLayerMode(selOverlay,mode)} onStyle={style=>setLayerStyle(selOverlay,style)}
       onTransform={patch=>updateLayerT(selOverlay,patch)} onReset={()=>resetLayer(selOverlay)}
+      lineArtMode={lineArtModeFor(asset||{})}
       moreOpen={!!foldOpen.overlay} onToggleMore={()=>toggleFold("overlay")} palette={B} fonts={F}/>;
   };
 

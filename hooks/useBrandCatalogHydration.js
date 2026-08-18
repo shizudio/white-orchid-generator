@@ -43,6 +43,9 @@ export function useBrandCatalogHydration({ brandKitFromContext, actionsRef }) {
           || !Array.isArray(data.overlays)
           || !data.overlays.length) return;
         actionsRef.current.installBuiltinOverlays?.(data.overlays);
+        // (Shapes delete, 2026-08-18) The workspace-wide hidden-shape list rides
+        // the same response; cloud wins over the localStorage mirror.
+        if (Array.isArray(data.hidden)) actionsRef.current.installHiddenOverlays?.(data.hidden);
       })
       .catch(() => {});
     return () => { cancelled = true; };

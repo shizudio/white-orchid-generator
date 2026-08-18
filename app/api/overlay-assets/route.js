@@ -19,7 +19,28 @@ export const runtime = 'nodejs';
 const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 
 function unconfigured(extra = {}) {
-  return Response.json({ configured: false, overlays: [], ...extra });
+  return Response.json({ configured: false, overlays: [], hidden: [], ...extra });
+}
+
+// (Shapes delete, client ruling 2026-08-18) Built-in brand shapes are HIDDEN
+// from the picker rather than destroyed — the asset row and the client
+// fallback survive so placed instances on existing designs keep rendering.
+// The workspace-wide hidden list is a small JSON object in the existing
+// public brand-asset bucket (no schema DDL): logos/brand-assets/hidden-overlays.json.
+const HIDDEN_BUCKET = 'logos';
+const HIDDEN_PATH = 'brand-assets/hidden-overlays.json';
+
+async function readHiddenList(supabase) {
+  try {
+    const { data, error } = await supabase.storage.from(HIDDEN_BUCKET).download(HIDDEN_PATH);
+    if (error || !data) return [];
+    const parsed = JSON.parse(await data.text());
+    return Array.isArray(parsed?.hidden)
+      ? parsed.hidden.filter(id => typeof id === 'string').slice(0, 100)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 // storage_path may be a route-relative public asset path (today: /assets/...)
@@ -63,7 +84,37 @@ export async function GET() {
       })
       .filter(Boolean);
     if (!overlays.length) return unconfigured();
-    return Response.json({ configured: true, overlays });
+    const hidden = await readHiddenList(supabase);
+    return Response.json({ configured: true, overlays, hidden });
+  } catch {
+    return unconfigured();
+  }
+}
+
+// POST /api/overlay-assets — persist the workspace-wide hidden-shape list.
+// Body: { hiddenIds: string[] }. Same degradation contract: any env/bucket
+// problem returns { configured:false } (never a 500) and the client keeps its
+// localStorage mirror, honestly noting the cloud miss.
+export async function POST(request) {
+  let supabase;
+  try { supabase = getAdminClient(); } catch { return unconfigured(); }
+  let body;
+  try { body = await request.json(); } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  const hiddenIds = Array.isArray(body?.hiddenIds)
+    ? body.hiddenIds.filter(id => typeof id === 'string' && id.length <= 120).slice(0, 100)
+    : null;
+  if (!hiddenIds) {
+    return Response.json({ error: 'hiddenIds must be an array of asset ids.' }, { status: 400 });
+  }
+  try {
+    const payload = Buffer.from(JSON.stringify({ hidden: hiddenIds }), 'utf8');
+    const { error } = await supabase.storage
+      .from(HIDDEN_BUCKET)
+      .upload(HIDDEN_PATH, payload, { contentType: 'application/json', upsert: true });
+    if (error) return unconfigured();
+    return Response.json({ configured: true, hidden: hiddenIds });
   } catch {
     return unconfigured();
   }

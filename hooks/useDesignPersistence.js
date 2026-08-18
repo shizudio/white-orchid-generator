@@ -128,6 +128,9 @@ export function useDesignPersistence({
               src: asset.src,
               kind: asset.kind || "center",
               ratio: asset.ratio || 1,
+              // (2026-08-18) Line-art classification stored at upload time;
+              // legacy uploads surface null and default to linework client-side.
+              art: asset.art || null,
               category: "overlays",
               official: true,
             }));
