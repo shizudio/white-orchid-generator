@@ -26,6 +26,25 @@ test("logo and shape identities pass through unchanged", () => {
   assert.equal(resolveScenePointerTarget(scene, 5, 5)?.element.id, "shape:petal");
 });
 
+// (2026-08-18 client report — "sometimes i can't drag it") A logo painted above
+// an overlapping text/furniture role must win the pointer: the old code checked
+// text/furniture unconditionally BEFORE logo, so a click on the visually-topmost
+// logo silently started a text drag instead whenever their hit-boxes overlapped.
+const overlapScene = [
+  { id:"text:hero", type:"text", role:"hero", bounds:bounds(0,0,100,100), z:40, interactive:true },
+  { id:"logo:primary", type:"logo", bounds:bounds(40,40,30,30), z:50, interactive:true },
+];
+test("a higher-z logo overlapping a text role wins the pointer (z-order fix)", () => {
+  const hit = resolveScenePointerTarget(overlapScene, 55, 55);
+  assert.equal(hit?.kind, "logo");
+  assert.equal(hit?.element.id, "logo:primary");
+});
+test("the same overlapping scene still resolves to text OUTSIDE the logo box", () => {
+  const hit = resolveScenePointerTarget(overlapScene, 5, 5);
+  assert.equal(hit?.kind, "text");
+  assert.equal(hit?.role, "hero");
+});
+
 // editorial_split-style scene: text/shape on the left, the painted photo on the
 // right. The bare photo must be selectable (invariant 9), but any element painted
 // above it keeps hit-order priority.
