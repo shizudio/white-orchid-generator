@@ -587,11 +587,10 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.18, logoUse:"mark", // (r3 fix #2) solid statement tile → subtle corner orchid mark
-    // (T1) text-only tile read empty on v3 → 3 furniture tells: an underline under the
-    // eyebrow, an index token top-right (counterweighting the top-left hero), and a
-    // bottom-left counterweight url line balancing the caption side.
+    // (T1 → client ruling 2026-08-18) v3's three tells are now two: the hairline
+    // underline is RETIRED with every other hairline decoration ("remove the hairline
+    // decoration all together"). The index token + counterweight url line remain.
     furniture:[
-      {type:"underline", x:0.06, y:0.135, w:0.10},
       {type:"index", text:"01", x:0.94, y:0.135, size:0.028, align:"right"},
       {type:"counterweight", x:0.06, y:0.90},
     ],
@@ -621,8 +620,8 @@ const ARCHETYPES = [
     photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["event","photo_logo","text_post"], frequencyCap:0.12,
     cropDrama:1.18, // (T8) push the crop tighter — v3's split photo read timid vs tile 10's winner
-    // (T1) photo archetype → ≤1 tell: a hairline rule dividing hero from the detail tier.
-    furniture:[ {type:"rule", x:0.08, y:0.575, w:0.30} ],
+    // (Client ruling 2026-08-18) The T1 hairline rule dividing hero from the detail
+    // tier is RETIRED ("remove the hairline decoration all together") — no furniture.
     perDim:{ story:{photo:{x:0,y:0.58,w:1,h:0.42},hero:{x:0.08,y:0.10,w:0.84,h:0.28},support:{x:0.08,y:0.40,w:0.84,h:0.14}} },
   },
   { // §2.3 Big Number / Date
@@ -646,11 +645,9 @@ const ARCHETYPES = [
     ],
     photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["event"], frequencyCap:0.12, usesDateAsHero:true,
-    // (T1) v3 tile 3 scored 1/5 "too plain, not centralized for no reason". Anchor the
-    // numeral with an underline under the label, a small index top-left, and a bottom
-    // counterweight so the thirds placement reads deliberate.
+    // (T1 → client ruling 2026-08-18) The label underline is RETIRED with every
+    // hairline decoration; the index token + accent badge still anchor the numeral.
     furniture:[
-      {type:"underline", x:0.33, y:0.175, w:0.09},
       {type:"index", text:"— No. 18", x:0.10, y:0.16, size:0.024, align:"left"},
       // (R2a) ACCENT BADGE — event archetype carries the Higgsfield-style pill; shows
       // only on accent variants (skipped on the dark variant). One-accent rule holds.
@@ -732,11 +729,10 @@ const ARCHETYPES = [
     variants:[ {bg:"burnham",ink:"whiteSmoke",accentUse:"field",klass:"dark"} ],
     photoTreatment:"warmGrade", heroRegister:"serif", caps:false,
     suitedPostTypes:["quote"], frequencyCap:0.14, logoUse:"none", // (P1) statement/quote: no logo
-    // (T1) v3 tile 6 "plain but composition slightly better" → 2 tells on the green
-    // field: a short hairline rule above the quote (a quote-mark surrogate) and a
-    // bottom counterweight opposite the attribution.
+    // (T1 → client ruling 2026-08-18) The short hairline rule above the quote is
+    // RETIRED with every hairline decoration; the index token (the "On Play"
+    // micro-label carrier) remains the one tell on the green field.
     furniture:[
-      {type:"rule", x:0.10, y:0.22, w:0.12, alpha:0.5},
       {type:"index", text:"On Play", x:0.90, y:0.235, size:0.024, align:"right"},
     ],
     perDim:{ banner:{hero:{x:0.10,y:0.14,w:0.80,h:0.50}} },
@@ -759,11 +755,10 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false,
     suitedPostTypes:["text_post","quote"], frequencyCap:0.12, leadingBody:1.35, logoUse:"mark", // (r3 fix #2) manifesto → subtle corner orchid mark
-    // (T1) v3 tile 7 "plain, content small" → an index+underline at the top anchor and
-    // a bottom counterweight give the manifesto page-feel structure.
+    // (T1 → client ruling 2026-08-18) The top-anchor underline is RETIRED with every
+    // hairline decoration; the index line + bottom counterweight keep the page feel.
     furniture:[
       {type:"index", text:"— The White Orchid", x:0.12, y:0.19, size:0.024, align:"left"},
-      {type:"underline", x:0.12, y:0.205, w:0.11},
       {type:"counterweight", x:0.12, y:0.90},
     ],
     // (Commit 1) Story: shorter hero + a small caption box lifted clear of the bottom
@@ -822,13 +817,10 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) statement tile → corner mark ("OUR BELIEF" tile scored "no logo?")
     suitedPostTypes:["event","text_post","photo_logo"], frequencyCap:0.12,
-    // (WP-P §7) STATEMENT CALM — the reference statement tiles carry NOTHING but the
-    // eyebrow + the serif statement. The r2 pill/index/counterweight are retired here
-    // (the pill is now the CTA card's job); a single hairline under the eyebrow stays as
-    // the one restrained tell. Positioned just under the eyebrow (y0.28), clear of the hero.
-    furniture:[
-      {type:"underline", x:0.08, y:0.115, w:0.10, alpha:0.4},
-    ],
+    // (WP-P §7 → client ruling 2026-08-18) STATEMENT CALM, now fully bare — the r2
+    // pill/index/counterweight were already retired, and the last remaining tell (the
+    // hairline under the eyebrow) is RETIRED with every hairline decoration. The tile
+    // carries nothing but the eyebrow + the serif statement.
     perDim:{ banner:{microLabel:{x:0.05,y:0.16,w:0.90,h:0.10},hero:{x:0.05,y:0.32,w:0.90,h:0.44}} },
   },
   { // §2.10 Side-by-Side Portrait + Credential (wide-leaning)
@@ -1045,7 +1037,8 @@ const ARCHETYPES = [
     ],
     photoTreatment:"none", heroRegister:"serif", caps:false, logoUse:"mark", // (r3 fix #2) stat tile → corner mark
     suitedPostTypes:["event","text_post"], frequencyCap:0.08,
-    furniture:[ {type:"underline", x:0.10, y:0.205, w:0.08, alpha:0.4} ],
+    // (Client ruling 2026-08-18) The eyebrow underline is RETIRED with every hairline
+    // decoration — the giant serif stat carries the tile alone.
     perDim:{ story:{hero:{x:0.09,y:0.34,w:0.82,h:0.30},support:{x:0.10,y:0.72,w:0.80,h:0.12}} },
   },
   { // §2.15 CTA / Enrolment Card — eyebrow + serif hero + details block + tangerine pill
@@ -1889,15 +1882,14 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
 /* ═══ ANCHORING FURNITURE (calibration r1 / T1) ══════════════════════════════════
    Board v3's text-only tiles (1,3,6,7,9) read EMPTY and their off-centre placement
    read arbitrary — the client's top note. This painter draws the small "designed,
-   not templated" tells the spec §0/§2 name (hairline rules, a short underline under
-   the micro-label, a small numeral/index label, and a COUNTERWEIGHT micro-element in
-   the opposing region) so asymmetry reads deliberate. Encoded as per-archetype data
-   (`furniture:[{type,...}]`) — text-only archetypes carry 2–3 pieces, photo ≤1 — and
-   rendered here from fractions. Respects the one-warmth-device + anti-clutter rules:
-   these are hairline INK tells at low alpha, not a warmth device.
+   not templated" tells the spec §0/§2 name (a small numeral/index label and a
+   COUNTERWEIGHT micro-element in the opposing region) so asymmetry reads deliberate.
+   (Client ruling 2026-08-18 — "remove the hairline decoration all together") The
+   hairline tells ("rule" + "underline") are RETIRED across the whole system: the
+   catalog authors none and this painter no longer knows how to draw one.
+   Encoded as per-archetype data (`furniture:[{type,...}]`) and rendered here from
+   fractions. Respects the one-warmth-device + anti-clutter rules.
    Item types (all positions are canvas fractions):
-     {type:"rule", x,y,w, alpha?}            – horizontal hairline (0.5–1px burnham)
-     {type:"underline", x,y,w, alpha?}       – short rule (drawn under a micro-label)
      {type:"index", text, x,y, size?, align?}– small numeral/index token (e.g. "01")
      {type:"counterweight", text?, x,y, size?, align?} – url/context line in the
         opposing region; defaults to a short brand line to balance the hero mass.
@@ -1914,7 +1906,7 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
    role, e.g. the index token acting as the micro-label carrier). Items may also
    carry `colorOverride` (hex) from the design's furnitureOverrides. */
 // (Refinement 1) offsetFor(it) → {dx,dy} fractions | null: a user's free-placement delta
-// for THIS furniture piece (pill / rule / index / counterweight). When present the piece
+// for THIS furniture piece (pill / index / counterweight). When present the piece
 // is drawn at it.x+dx / it.y+dy AND the safe-rect + clash guards are bypassed — a role the
 // user dragged is deliberate and can go literally anywhere (governing rule: never blocked,
 // never auto-corrected; consequences surface only as advisor reminders). When null the
@@ -1922,13 +1914,9 @@ function drawMicroLabel(ctx, str, x, y, size, opts={}){
 function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offsetFor){
   if(!Array.isArray(items)||!items.length) return;
   const safeL=sm.l*w, safeR=(1-sm.r)*w, safeTop=sm.t*h, safeBot=(1-sm.b)*h;
-  const hair=Math.max(0.5, Math.round(Math.min(w,h)*0.0009)); // 0.5–1px @ common sizes
   const offOf=(it)=>{ const o=offsetFor?offsetFor(it):null; return (o&&(o.dx||o.dy))?{dx:o.dx||0,dy:o.dy||0}:null; };
   const boxOf=(it)=>{
     const px=(fx)=>fx*w, py=(fy)=>fy*h;
-    if(it.type==="rule"||it.type==="underline"){
-      return {x:px(it.x),y:py(it.y)-hair,w:(it.w||0.1)*w,h:hair*2+2};
-    }
     const s=(it.size||0.026)*h;
     if(it.type==="badge"){
       // caps label + tracking + a horizontal pill pad on each side.
@@ -1962,12 +1950,7 @@ function drawFurniture(ctx, items, w, h, sm, ink, avoid, accent, onDrawn, offset
     // A user-dragged / solver-placed piece bypasses both (it may sit where it was pinned).
     if(!_freePlaced && !_solverPlaced && (bx.x<safeL-2||bx.x+bx.w>safeR+2||bx.y<safeTop-2||bx.y+bx.h>safeBot+2)) continue;
     if(!_freePlaced && !_solverPlaced && clash(bx)) continue;
-    if(it.type==="rule"||it.type==="underline"){
-      ctx.globalAlpha=it.alpha==null?(it.type==="underline"?0.55:0.32):it.alpha;
-      ctx.fillStyle=it.colorOverride||ink;
-      ctx.fillRect(it.x*w, it.y*h, (it.w||0.1)*w, hair);
-      if(onDrawn) onDrawn(it._role||it._key||`furn_${it.type}`, bx);
-    }else if(it.type==="index"){
+    if(it.type==="index"){
       ctx.globalAlpha=it.alpha==null?0.7:it.alpha;
       ctx.fillStyle=it.colorOverride||ink;
       const s=(it.size||0.030)*h;
@@ -5133,7 +5116,8 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         if(_roleB && !dropped.includes("Details")) _roleB.support={x:supBox.x,y:supBox.y,w:supBox.w,h:Math.max(supUsedH,fontMeta.subtext||supBox.h*0.4)};
       }
       if(_roleB && dateDrawn) _roleB.date=dateDrawn;
-      // (T1) ANCHORING FURNITURE — hairline rules / underline / index / counterweight.
+      // (T1) ANCHORING FURNITURE — index / counterweight / badge (hairline rules and
+      // underlines retired, client ruling 2026-08-18).
       // Drawn after text so the avoid-list uses each role's ACTUAL drawn box; any
       // furniture item that would overprint hero/support/label/photo is skipped inside
       // drawFurniture (never clutters, never collides — anti-pattern #15/#16).
@@ -5166,12 +5150,13 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
             ? { ...it, _role: "eyebrow", ...(typeof microLabel === "string" && microLabel ? { text: microLabel } : {}) }
             : it);
         }
-        // Per-piece overrides (hidden / colour / width) from the design state.
+        // Per-piece overrides (hidden / colour) from the design state. widthScale is
+        // inert since the hairline rule/underline retirement (client ruling 2026-08-18)
+        // — no remaining furniture type has a width; stale saved values no-op safely.
         base = base.filter(it => !(furnitureOverrides[it._key] && furnitureOverrides[it._key].hidden)).map(it => {
           const ov = furnitureOverrides[it._key]; if (!ov) return it;
           const out = { ...it };
           if (ov.color && B[ov.color]) out.colorOverride = B[ov.color];
-          if (typeof ov.widthScale === "number" && (it.type === "rule" || it.type === "underline")) out.w = (it.w || 0.1) * ov.widthScale;
           return out;
         });
         return base;
@@ -5193,9 +5178,9 @@ function renderLegacyScene(ctx, w, h, opts = {}, runtime) {
         // a click-editable role like hero/support/eyebrow.
         const furnItems = furnitureBase;
         // (Refinement 1) each furniture piece is a draggable role: the pill reports as
-        // "pill" and hairline/index/counterweight report their _role/_key. The offset
+        // "pill" and index/counterweight report their _role/_key. The offset
         // resolver returns the user's stored delta (in fractions) for that same key so a
-        // dragged pill / rule / index sits exactly where it was dropped (free placement).
+        // dragged pill / index sits exactly where it was dropped (free placement).
         const _furnRoleKey = (it) => (it && (it.type==="badge" ? (it._role||"pill") : (it._role||it._key||`furn_${it.type}`))) || "";
         // ── THE BADGE ADOPTS THE SOLVER (docs/element-placement-spec.md §2; P1 2b-ii) ──
         // A badge (accent pill) — the archetype's authored prior, or the default spot a
@@ -7937,6 +7922,9 @@ function useProductWorkflows(workspace) {
     copy: { headline, subtext, attribution, dateText },
     applyPatch,
     sessionId,
+    // (Task #71) the gate's archetype-advance walks the photo or text variety ring
+    // depending on whether this generation actually carries an image.
+    hasImage: !!image,
   });
   const { resolveProposal, dismissProposalLater } = useTemplateProposalReview({
     renderScene,
@@ -10360,7 +10348,8 @@ function InspectorWorkspace({ workspace }) {
     const m = /^furn_([a-z]+)_(\w+)$/.exec(String(key||"")); if(!m) return null;
     return { type:m[1], key };
   };
-  const FURN_LABELS = { rule:"Hairline rule", underline:"Underline", index:"Small label", counterweight:"URL line", badge:"Pill" };
+  // (Client ruling 2026-08-18) rule/underline labels retired with the hairline furniture.
+  const FURN_LABELS = { index:"Small label", counterweight:"URL line", badge:"Pill" };
   const renderFurniturePanel = (key) => {
     const meta = furnitureMetaFor(key); if(!meta) return null;
     return <FurnitureInspectorPanel elementKey={key} type={meta.type} overrides={furnitureOverrides[key]||{}}
