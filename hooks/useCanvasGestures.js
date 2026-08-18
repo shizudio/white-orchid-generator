@@ -238,6 +238,7 @@ export function useCanvasGestures({
         dragRef.current = {
           mode: "overlay", x: event.clientX, y: event.clientY, ox: transform.x, oy: transform.y, rect,
           shapeId: selectedLayer.uid,
+          downX: event.clientX, downY: event.clientY, moved: false,
           elementSize: size, ratio: asset?.ratio || 1,
           original: { key: "overlay", cx: transform.x, cy: transform.y },
         };
@@ -351,6 +352,7 @@ export function useCanvasGestures({
         dragRef.current = {
           mode: "overlay", x: event.clientX, y: event.clientY, ox: transform.x, oy: transform.y, rect,
           shapeId: hitLayer.uid,
+          downX: event.clientX, downY: event.clientY, moved: false,
           elementSize: size, ratio: asset?.ratio || 1,
           original: { key: "overlay", cx: transform.x, cy: transform.y },
         };
@@ -464,6 +466,11 @@ export function useCanvasGestures({
       return;
     }
     if (drag.mode === "overlay") {
+      // (2026-08-18) The same 5px dead-zone the text and logo branches already have.
+      // Without it a shape dispatched a full patch + reflow re-solve + repaint on the
+      // first sub-pixel jitter of a plain TAP — the one drag branch that did.
+      if (!drag.moved && Math.hypot(event.clientX - drag.downX, event.clientY - drag.downY) <= 5) return;
+      drag.moved = true;
       let x = drag.ox + (event.clientX - drag.x) / drag.rect.width;
       let y = drag.oy + (event.clientY - drag.y) / drag.rect.height;
       const size = drag.elementSize || 0.2;

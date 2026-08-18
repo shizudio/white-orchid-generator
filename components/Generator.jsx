@@ -2616,14 +2616,51 @@ function drawOutlineLayer(ctx, oc, shapeImg, w, h, t, color, width) {
 // Line Art mode: preserve the full stroke/pattern artwork from an uploaded
 // image, not just the outside silhouette. It keeps darker/saturated "ink"
 // pixels and removes pale fills, then recolours the remaining linework.
+//
+// (Client report 2026-08-18 — "a lot of latency when moving around Motif 1")
+// The recolour ran over the WHOLE canvas on every repaint: getImageData + a
+// per-pixel JS loop + putImageData covered every pixel of the design
+// (1080×1350 ≈ 1.46M px), so a drag paid the full cost on every pointermove and a
+// 5%-scale motif cost exactly as much as a full-bleed one. Uploaded assets
+// classify as LINEWORK (lib/overlay-shapes.mjs) and route to this painter, which
+// is why the client's uploaded motif was the slow one while the built-in petals
+// (silhouette → the cheaper outline painter) felt fine.
+//
+// The fix is confined to the READBACK WINDOW, deliberately: the shape is still
+// drawn at its live position and still recoloured in exactly the same order at
+// exactly the same size, so the painted result is bit-identical. Only the shape's
+// own bounding box is read back and looped, because every pixel outside it is
+// transparent — the old loop's `a < 10` branch already wrote alpha 0 over alpha 0
+// there, i.e. ~96% of the work was a provable no-op.
+//
+// (Rejected, on measurement: caching a recoloured raster at the shape's own size
+// and transform-drawing it. Far faster still, but it reorders resampling against
+// thresholding, which on thin linework measured 28–53% MORE ink pixels — a
+// visible change to the client's artwork, which a latency fix may not make.)
+function lineArtReadbackBox(shapeImg, w, h, t) {
+  const ratio = (shapeImg.width / shapeImg.height) || 1;
+  const ow = (t.scale ?? 0.2) * w, oh = ow / ratio;
+  const theta = ((t.rotation || 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(theta)), sin = Math.abs(Math.sin(theta));
+  // Half-extents of the rotated rect's axis-aligned bounds, padded 2px so an
+  // anti-aliased edge can never fall outside the window and paint un-recoloured.
+  const hw = (ow / 2) * cos + (oh / 2) * sin + 2;
+  const hh = (ow / 2) * sin + (oh / 2) * cos + 2;
+  const cx = (t.x ?? 0.5) * w, cy = (t.y ?? 0.5) * h;
+  const x0 = Math.max(0, Math.floor(cx - hw)), y0 = Math.max(0, Math.floor(cy - hh));
+  const x1 = Math.min(w, Math.ceil(cx + hw)), y1 = Math.min(h, Math.ceil(cy + hh));
+  return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
 function drawLineArtLayer(ctx, oc, shapeImg, w, h, t, color, threshold = 0.72) {
   if (!shapeImg) return;
   const o = oc.getContext("2d", { willReadFrequently:true });
   o.clearRect(0, 0, w, h);
   o.globalCompositeOperation = "source-over";
   drawOverlayLayer(o, shapeImg, w, h, { ...t, opacity:1 });
+  const box = lineArtReadbackBox(shapeImg, w, h, t);
+  if (!box.w || !box.h) return;   // scrolled fully off-canvas — nothing to paint
   let imgData;
-  try { imgData = o.getImageData(0, 0, w, h); } catch(_) {
+  try { imgData = o.getImageData(box.x, box.y, box.w, box.h); } catch(_) {
     ctx.save(); ctx.globalAlpha = t.opacity ?? 1; ctx.drawImage(oc, 0, 0); ctx.restore();
     return;
   }
@@ -2644,7 +2681,7 @@ function drawLineArtLayer(ctx, oc, shapeImg, w, h, t, color, threshold = 0.72) {
     if (alpha <= 0) { d[i+3] = 0; continue; }
     d[i]=keepColor.r; d[i+1]=keepColor.g; d[i+2]=keepColor.b; d[i+3]=Math.round(a*alpha);
   }
-  o.putImageData(imgData, 0, 0);
+  o.putImageData(imgData, box.x, box.y);
   ctx.save();
   ctx.globalAlpha = t.opacity ?? 1;
   ctx.drawImage(oc, 0, 0);
