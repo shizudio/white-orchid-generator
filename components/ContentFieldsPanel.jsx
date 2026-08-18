@@ -19,7 +19,10 @@ function ContentFieldsPanel({idPrefix,postType,content,heroRegister,eyebrow,pill
     <div style={{fontSize:10,color:B.ash,fontFamily:F.subtitle,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:5}}>{label}</div>
     {node}
   </div>;
-  const input=(field,placeholder,maxLength,{mt=false,role,id,multiline=false,markers=false,label}={})=>{
+  // `multiline` opens the field to hard line breaks (Enter). `multilineHeight` sizes
+  // the box: a HEADLINE gets a compact two-line box (the break is for controlling
+  // where a title turns, not for prose), while Body/Quote keep the taller default.
+  const input=(field,placeholder,maxLength,{mt=false,role,id,multiline=false,multilineHeight=88,markers=false,label}={})=>{
     const Tag=multiline?"textarea":"input";
     // (Symptom 4) Hero copy stores the italic-phrase *markers*, but a plain input
     // renders them as literal asterisks. Show CLEAN text and re-derive the markers
@@ -28,7 +31,7 @@ function ContentFieldsPanel({idPrefix,postType,content,heroRegister,eyebrow,pill
     const stored=content[field]??"";
     const shown=markers?stripItalicMarkers(stored):stored;
     const handle=markers?(value=>onField(field,applyEditedText(stored,value))):(value=>onField(field,value));
-    const field_=<Tag id={id} className="wo-mfield" data-wo-role={role} aria-label={placeholder} placeholder={placeholder} maxLength={maxLength} value={shown} {...focusProps(role)} onChange={event=>handle(event.target.value)} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:F.body,...(multiline?{height:88,resize:"vertical"}:{})}}/>;
+    const field_=<Tag id={id} className="wo-mfield" data-wo-role={role} aria-label={placeholder} placeholder={placeholder} maxLength={maxLength} value={shown} {...focusProps(role)} onChange={event=>handle(event.target.value)} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${B.ash}44`,borderRadius:10,fontSize:14,color:B.jet,boxSizing:"border-box",background:"#FAFAF7",fontFamily:F.body,...(multiline?{height:multilineHeight,resize:"vertical",lineHeight:1.35}:{})}}/>;
     // The row's label is the RATIFIED client-facing role name (lib/text-role-labels.mjs) —
     // the same word the on-canvas selection chip uses, so one text is never called two
     // things. Fields that feed no single render role fall back to their placeholder.
@@ -58,10 +61,10 @@ function ContentFieldsPanel({idPrefix,postType,content,heroRegister,eyebrow,pill
   </div>:null;
   return <>
     {postType==="quote"&&<>{input("headline","Quote text",280,{role:"hero",id:idPrefix,multiline:true})}{input("attribution","Attribution",100,{role:"support",mt:true})}</>}
-    {postType==="event"&&<>{input("headline","Event title",100,{role:"hero",id:idPrefix,markers:true})}{input("dateText","Date (e.g. 15 January)",50,{role:"date",mt:true})}{input(supportKey,"Details / CTA",180,{role:"support",mt:true})}</>}
-    {postType==="text_post"&&<>{input("subtext","Intro line",140,{role:"support"})}{input("headline","Headline",200,{role:"hero",id:idPrefix,mt:true,markers:true})}{input("attribution","Subtext",220,{mt:true})}{content.dateText?input("dateText","Date (e.g. 15 January)",50,{role:"date",mt:true}):null}</>}
-    {postType==="texture_text"&&input("headline","Overlay text (e.g. NOW OPEN)",100,{role:"hero",id:idPrefix,markers:true})}
-    {postType==="photo_logo"&&<>{input("headline","Heading (optional)",100,{role:"hero",id:idPrefix,markers:true})}<div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no heading needed.</div></>}
+    {postType==="event"&&<>{input("headline","Event title",100,{role:"hero",id:idPrefix,markers:true,multiline:true,multilineHeight:58})}{input("dateText","Date (e.g. 15 January)",50,{role:"date",mt:true})}{input(supportKey,"Details / CTA",180,{role:"support",mt:true})}</>}
+    {postType==="text_post"&&<>{input("subtext","Intro line",140,{role:"support"})}{input("headline","Headline",200,{role:"hero",id:idPrefix,mt:true,markers:true,multiline:true,multilineHeight:58})}{input("attribution","Subtext",220,{mt:true})}{content.dateText?input("dateText","Date (e.g. 15 January)",50,{role:"date",mt:true}):null}</>}
+    {postType==="texture_text"&&input("headline","Overlay text (e.g. NOW OPEN)",100,{role:"hero",id:idPrefix,markers:true,multiline:true,multilineHeight:58})}
+    {postType==="photo_logo"&&<>{input("headline","Heading (optional)",100,{role:"hero",id:idPrefix,markers:true,multiline:true,multilineHeight:58})}<div style={{fontSize:10,color:B.ash,marginTop:6,fontFamily:F.body,lineHeight:1.5}}>Leave blank for a clean photo + logo — no heading needed.</div></>}
     {/* (ruling 1) The secondary slot presents as BODY — its field is multiline so the
         one Body can hold PARAGRAPHS (ruling 3; Enter = new paragraph), except when the
         support role is fed by the attribution credit (single line stays). */}

@@ -1411,7 +1411,15 @@ Current design state (compact): ${JSON.stringify(designState)}`;
     // caption at render — the source of the ~1 advisor dot on live landing designs.
     for (const [f, max] of Object.entries(LANDING_COPY_MAX)) {
       if (typeof patch[f] === 'string' && patch[f].trim()) {
-        const fitted = fitCopy(patch[f], max);
+        // (born-clean, 2026-08-18) An author's newline is now a HARD line break in
+        // the renderer (Generator.textLines), so a stray \n in MODEL-authored copy
+        // would silently add a line to a FRESH design and could push it into
+        // overflow — a born-clean regression. AI copy is normalized to single
+        // spaces here; a person's own line breaks are untouched (this path is
+        // landing-only, and fitCopy stays newline-agnostic because the editor's
+        // copy-tighten action shares it and must never flatten an owner's breaks).
+        const flattened = patch[f].replace(/\s*[\r\n]+\s*/g, ' ');
+        const fitted = fitCopy(flattened, max);
         if (fitted !== patch[f]) patch[f] = fitted;
       }
     }

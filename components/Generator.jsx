@@ -268,7 +268,19 @@ const SAMPLE_IMAGES = [
 ];
 
 /* ───────── HELPERS ───────── */
-function textLines(ctx,text,maxW){const words=String(text||"").trim().split(/\s+/).filter(Boolean),lines=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
+// (Client ruling 2026-08-18 — "when user is entering text and press enter, goes to
+// the next line") An author's explicit newline is a HARD BREAK: the text is split on
+// newlines FIRST, then each segment is measured-word-wrapped independently, so a
+// headline turns exactly where the writer pressed Enter and still wraps on width
+// beyond that. Previously the split was /\s+/ across the whole string, which
+// collapsed every newline into a space — the field could not even hold one (single-
+// line <input>) and the renderer would have ignored it regardless.
+// Blank segments (a double-Enter) collapse to a single break on purpose: an empty
+// painted line would spend vertical budget and push copy into overflow for no
+// visible gain. Body PARAGRAPHS are a different affordance — lib/body-paragraphs.mjs
+// splitParagraphs() consumes those newlines upstream and passes each paragraph here
+// already break-free, so the two never double-handle the same character.
+function textLines(ctx,text,maxW){const lines=[];for(const segment of String(text||"").split(/\r?\n/)){const words=segment.trim().split(/\s+/).filter(Boolean);if(!words.length)continue;let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(line&&ctx.measureText(test).width>maxW){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);}return lines;}
 function fitText(ctx,text,font,size,maxW,maxH,lineRatio=1.12,minSize=24){let fitted=Math.max(size,minSize),lines=[];while(fitted>=minSize){ctx.font=font(fitted);lines=textLines(ctx,text,maxW);if(lines.length*fitted*lineRatio<=maxH)break;fitted-=2;}return{size:fitted,lines,lineHeight:fitted*lineRatio};}
 // ── Hard per-format readable-font floors (Task 4 / spec §1 legibility + §6) ──
 // Every text role has an ABSOLUTE minimum canvas-px height so no copy can render
