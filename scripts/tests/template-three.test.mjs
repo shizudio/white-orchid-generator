@@ -117,39 +117,38 @@ test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () =
   }
 });
 
-test('DECISION 4 — the motif is FIXED, and it is a REAL asset (law 3)', () => {
-  assert.ok(Array.isArray(T.motif));
-  assert.equal(T.motif.length, 1, 'the client ruled the motif fixed — a second id would be a choice she cannot make');
-  assert.equal(T.slots.motif.present, true);
-  assert.equal(T.slots.motif.asset, T.motif[0]);
-  const asset = templateMotifAsset(T);
-  assert.ok(asset, 'the declared motif must resolve');
-  assert.equal(asset.id, 'petal-brand');
-  assert.ok(existsSync(join(publicDir, asset.src.replace(/^\//, ''))), `law 3: ${asset.src} must be a real file`);
-  assert.deepEqual(templateMotifs(T).map((m) => m.id), ['petal-brand']);
-  // It is the BRAND petal, derived from the ratified orchid mark — not a new
-  // shape invented for this template.
-  assert.ok(DEFAULT_OVERLAY_ASSETS.some((o) => o.id === 'petal-brand' && o.src === asset.src));
-  assert.equal(MOTIF_LABELS['petal-brand'], 'Brand petal');
-  // NO PICKER. Nothing in the panel serves a motif, in either direction.
+test('DECISION 4 (AMENDED) — the band carries the words and NOTHING else', () => {
+  // Client ruling 2026-08-18: "band should not have the petal motif". The
+  // watermark is retired from this template. It is declared ABSENT, never
+  // omitted (§6.3) — the closed vocabulary stays complete, so the decision is
+  // recorded in the contract rather than leaving a hole a later edit could
+  // fill by accident.
+  assert.equal(T.motif, 'none', 'the sanctioned set must say none, not merely be missing');
+  assert.equal(T.slots.motif.present, false);
+  assert.ok(!('asset' in T.slots.motif), 'a retired motif must not keep pointing at an asset');
+  for (const dimId of dimIds()) {
+    assert.equal(T.slots.motif.dimensions[dimId].present, false, `${dimId}: motif must be absent`);
+  }
+  assert.deepEqual(templateMotifs(T), [], 'nothing resolves — there is no motif to paint');
+  // NO PICKER either, in either direction: nothing to choose, nothing offering it.
   for (const section of T.panelSections) {
     assert.ok(!PANEL_SECTION_SERVES[section].includes('motif'), `${section} must not offer a motif picker`);
   }
 });
 
-test('DECISION 4 — the motif is DATA: a box and a ghosted opacity per dimension', () => {
+
+test('DECISION 4 (AMENDED) — nothing is painted into the band but type', () => {
+  // The retired motif must not leave a ghost: no box, no opacity, nothing the
+  // core could still reach for. The band's only ink is the kicker and the
+  // big line.
   for (const dimId of dimIds()) {
     const m = T.slots.motif.dimensions[dimId];
-    assert.equal(typeof m.opacity, 'number');
-    assert.ok(m.opacity > 0 && m.opacity <= MOTIF_MAX_OPACITY, `${dimId}: ${m.opacity} is not a ghost`);
-    assert.equal(m.required, false, 'a fixed motif can never be something SHE failed to supply');
-    // It lives in the BAND, never over the photograph.
-    const p = T.slots.photo.dimensions[dimId].box;
-    assert.equal(hit(rect(m.box), rect(p)), false, `${dimId}: the motif must not reach the photo`);
-    // …and inside the frame: only a photo window may bleed.
-    assert.ok(m.box.x >= 0 && m.box.y >= 0 && m.box.x + m.box.w <= 1 && m.box.y + m.box.h <= 1);
+    assert.equal(m.present, false);
+    assert.ok(!('box' in m), `${dimId}: a retired motif must not keep geometry`);
+    assert.ok(!('opacity' in m), `${dimId}: a retired motif must not keep an opacity`);
   }
 });
+
 
 test('an id that would traverse a path resolves to NOTHING rather than a 404 (law 3)', () => {
   for (const bad of ['../secret', '/etc/passwd', 'Shape-1', '', null]) {
@@ -341,15 +340,16 @@ test('nothing about Classic or Petal Window moved', () => {
   }
 });
 
-test('the Figma SVG seed REFUSES this template rather than dropping the motif or the plate (M4)', () => {
-  // The seed's round-trip truth is a plain box rect. It cannot carry a
-  // silhouette stamped into the field, and it cannot carry the plate that is
-  // the entire reason the mark is legible on a photograph. Handing the designer
-  // a Figma file that is not the template — and then importing that difference
-  // back as truth — is the failure this refusal exists to prevent.
+test('the Figma SVG seed REFUSES this template rather than dropping the plate (M4)', () => {
+  // The seed's round-trip truth is a plain box rect. It cannot carry the plate
+  // that is the entire reason the mark is legible on a photograph. Handing the
+  // designer a Figma file that is not the template — and then importing that
+  // difference back as truth — is the failure this refusal exists to prevent.
+  // (The motif was retired by client ruling; the plate alone still refuses.)
   const refusal = svgSeedRefusal(T);
-  assert.ok(refusal, 'a template with a motif and a plate must refuse the seed');
-  assert.match(refusal, /motif/);
+  assert.ok(refusal, 'a template with a plate must refuse the seed');
+  assert.match(refusal, /plate/i);
   // …and it still emits for the template that has neither.
   assert.equal(svgSeedRefusal(TEMPLATE_LABEL_HEADLINE), null);
 });
+

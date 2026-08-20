@@ -76,8 +76,9 @@ async function run() {
 
   // LAW 3 — the declared motif must resolve to a real asset before anything
   // else is worth measuring.
-  const motif = templateMotifAsset(T);
-  if (!motif) fail(`the declared motif id '${T.slots.motif?.asset}' does not resolve — law 3`);
+  const motifDeclared = T.slots.motif?.present === true;
+const motif = motifDeclared ? templateMotifAsset(T) : null;
+  if (motifDeclared && !motif) fail(`the declared motif id '${T.slots.motif?.asset}' does not resolve — law 3`);
   const variants = templateLogoVariants(T);
   if (variants.length !== (T.allowedLogoAssets || []).length) fail('a sanctioned logo variant id did not resolve — law 3');
 
@@ -119,7 +120,9 @@ async function run() {
         i.src = src;
       });
 
-      const motifImage = await loadImage(motifSrc);
+      // A RETIRED motif is not fetched at all: requesting a deliberately-absent
+      // file would log a 404 the console gate would (rightly) flag as an error.
+      const motifImage = motifSrc ? await loadImage(motifSrc) : null;
       const logoLight = await loadImage('/public' + tpl.logoAssets.light);
       const logoDark = await loadImage('/public' + tpl.logoAssets.dark);
       const variantImages = {};
@@ -393,7 +396,8 @@ async function run() {
       for (const dimId of dimIds) {
         const dim = DIMENSIONS[dimId];
         const p = slotConstraint(tpl, 'photo', dimId).box;
-        const m = slotConstraint(tpl, 'motif', dimId).box;
+        const mSlot = slotConstraint(tpl, 'motif', dimId);
+    const m = mSlot && mSlot.box ? mSlot.box : null;
         const rect = (b) => ({ x: b.x, y: b.y, r: b.x + b.w, b: b.y + b.h });
         const hit = (a, c) => !(a.r <= c.x || c.r <= a.x || a.b <= c.y || c.b <= a.y);
         const textRects = ['heading', 'pill'].map((s) => ({ s, r: rect(slotConstraint(tpl, s, dimId).box) }));
@@ -415,7 +419,7 @@ async function run() {
         overlaps.push({
           dimId,
           textOverPhoto: textRects.map((t) => [t.s, hit(t.r, rect(p))]),
-          motifOverPhoto: hit(rect(m), rect(p)),
+          motifOverPhoto: m ? hit(rect(m), rect(p)) : false,
           plateOverText: plateRects.map((q) => [q.position, textRects.some((t) => hit(q, t.r))]),
           plateInFrame: plateRects.map((q) => [q.position, q.x >= 0 && q.y >= 0 && q.r <= 1 && q.b <= 1]),
           plateRects,
@@ -454,7 +458,7 @@ async function run() {
       };
     }, {
       FILLER, CORPORA,
-      motifSrc: motif ? `/public${motif.src}` : '/public/assets/shapes/__missing__.svg',
+      motifSrc: motifDeclared ? (motif ? `/public${motif.src}` : '/public/assets/shapes/__missing__.svg') : null,
       variantList: variants.map((v) => ({ id: v.id, src: v.src, colour: v.colour, ink: v.ink })),
       manifest,
     });
@@ -467,8 +471,10 @@ async function run() {
     for (const c of result.cases) {
       const at = `${c.kind}/${c.dimId}`;
       if (!c.truth.photo) fail(`${at}: the photo did not paint`);
-      if (!c.truth.motif) fail(`${at}: the declared motif did not paint`);
-      else if (c.truth.motif.asset !== T.slots.motif.asset) fail(`${at}: the motif painted '${c.truth.motif.asset}', not the declared asset`);
+      if (!motifDeclared) {
+      if (c.truth.motif) fail(`${at}: a RETIRED motif painted anyway — the band carries the words and nothing else`);
+    } else if (!c.truth.motif) fail(`${at}: the declared motif did not paint`);
+      else if (motifDeclared && c.truth.motif.asset !== T.slots.motif.asset) fail(`${at}: the motif painted '${c.truth.motif.asset}', not the declared asset`);
       if (c.truth.missingRequired.length) fail(`${at}: a satisfied required slot was reported missing (${c.truth.missingRequired.join(', ')})`);
       if (c.truth.missingAssets.length) fail(`${at}: missing assets ${c.truth.missingAssets.join(', ')}`);
       if (!c.truth.logoBox) fail(`${at}: the mark did not paint`);
@@ -593,10 +599,12 @@ async function run() {
       if (c.truth.photo) fail(`${at}: a photo was reported where none was given`);
       if (!c.truth.missingRequired.includes('photo')) fail(`${at}: a REQUIRED photo is missing and the render did not say so — export could not be blocked`);
       if (!c.truth.photoPlaceholder) fail(`${at}: no placeholder was painted — the empty state is a blank, not an invitation`);
-      if (!c.truth.motif) fail(`${at}: the motif must still paint while the photo is missing — the band is not waiting on the picture`);
+      if (motifDeclared && !c.truth.motif) fail(`${at}: the motif must still paint while the photo is missing — the band is not waiting on the picture`);
+    if (!motifDeclared && c.truth.motif) fail(`${at}: a retired motif painted in the empty state`);
     }
-    if (!result.motifless.missingAssets.includes('motif')) fail('a render with no motif image did not report the missing asset');
+    if (motifDeclared && !result.motifless.missingAssets.includes('motif')) fail('a render with no motif image did not report the missing asset');
     if (result.motifless.motif) fail('a render with no motif image reported a motif anyway');
+  if (!motifDeclared && result.motifless.missingAssets.includes('motif')) fail('a RETIRED motif was reported missing — it is not declared, so nothing may await it');
 
     // ── THE GEOMETRY IS FIXED ──────────────────────────────────────────────
     for (const g of result.fixedGeometry) {
@@ -638,12 +646,12 @@ async function run() {
       for (const f of result.library.textFails.slice(0, 20)) fail(`library text FAIL ${f.slot} ${f.pair}/${f.dimId} on ${f.file} — ${f.ratio}:1`);
     }
 
-    if (!result.assetsLoaded.motif) fail('the motif asset failed to load');
+    if (motifDeclared && !result.assetsLoaded.motif) fail('the motif asset failed to load');
     if (!result.assetsLoaded.logoLight || !result.assetsLoaded.logoDark) fail(`logo assets failed to load: ${JSON.stringify(result.assetsLoaded)}`);
     if (h.errors.length) fail(`console/page errors: ${JSON.stringify(h.errors)}`);
 
     // ── The report ─────────────────────────────────────────────────────────
-    console.log(`\nMOTIF: ${motif ? `${motif.id} → ${motif.src}` : 'UNRESOLVED'} (FIXED — no picker)`);
+    console.log(`\nMOTIF: ${motifDeclared ? (motif ? `${motif.id} → ${motif.src} (FIXED — no picker)` : 'UNRESOLVED') : 'RETIRED by client ruling — asserted ABSENT on every render'}`);
     console.log(`DECLARED BUDGETS (cross-dimension minimum): heading ${result.headBudget} · pill ${result.pillBudget}`);
     console.log('\n§11 CASE TABLE  (paintedPx/floorPx · lines/maxLines · band ratio · mark ratio)');
     for (const c of result.cases) {
