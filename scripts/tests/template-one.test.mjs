@@ -10,7 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { TEMPLATE_LABEL_HEADLINE as T, MEASURED_BUDGETS } from '../../lib/templates/template-label-headline.mjs';
 import { TEMPLATES, templateById, DEFAULT_TEMPLATE_ID } from '../../lib/templates/index.mjs';
-import { validateTemplate, DIMENSIONS } from '../../lib/templates/template-contract.mjs';
+import {
+  validateTemplate, DIMENSIONS, slotConstraint, PANEL_SECTION_IDS, PANEL_SECTION_SERVES,
+} from '../../lib/templates/template-contract.mjs';
+import { resolveTemplateState } from '../../lib/render-core/render-template.mjs';
 import { floorPxFor } from '../../lib/render-core/floor.mjs';
 import { resolveLogoAsset, templateLogoVariants } from '../../lib/templates/logo-assets.mjs';
 import { DEFAULT_LOGO_VARIANTS } from '../../lib/brand-defaults.js';
@@ -211,4 +214,51 @@ test('the default mark is still whatever the colour class implies (nothing chang
 test('allowedLogoPositions is a real subset — no free placement (§3 non-goals)', () => {
   assert.ok(Array.isArray(T.allowedLogoPositions) && T.allowedLogoPositions.length >= 1);
   assert.ok(T.allowedLogoPositions.every((p) => /^(top|bottom)-(left|right|center)$/.test(p)));
+});
+
+/* ── THE RENAME (client ruling 2026-08-18) ──────────────────────────────────
+   "label + headline template: change it 'Classic'."
+
+   DISPLAY ONLY. The `id` is the key a saved post records; renaming it would
+   orphan every post already made with this template, and the stored reference
+   would resolve to nothing. So the name moved and the id did not, and both
+   halves of that are pinned here — a future "tidy-up" that makes them agree
+   fails this test with the reason written on it. */
+test('the display name is "Classic" and the id is STILL label_headline', () => {
+  assert.equal(T.name, 'Classic');
+  assert.equal(T.id, 'label_headline', 'the id is storage: saved posts key on it, so it may never be renamed');
+  assert.equal(templateById('label_headline'), T, 'a post saved before the rename still resolves');
+  assert.equal(DEFAULT_TEMPLATE_ID, 'label_headline');
+  // The client-facing purpose text carries no stale title either.
+  assert.ok(!/Label \+ Headline/i.test(T.purpose), 'the purpose text still names the old title');
+  assert.ok(!/label_headline/.test(T.name), 'the name must be language, not a key');
+});
+
+/* ── THE PANEL ORDER, AND THE MERGED BACKGROUND SECTION ──────────────────────
+   "replace the edit 'colour' for 'Background', and combine photo selection as
+    part of the edit section." */
+test('colour and photo are ONE section ("background"), and this template leads with the words', () => {
+  // "for classic - i want background and photo to go before the text edit
+  //  boxes" (client ruling 2026-08-18).
+  assert.deepEqual(T.panelSections, ['background', 'words', 'mark', 'markPosition']);
+  assert.equal(T.panelSections[0], 'background', 'what sits behind the words comes first');
+  assert.ok(T.panelSections.indexOf('background') < T.panelSections.indexOf('words'));
+  // `background` is the section that carries BOTH — that is the merge, as data.
+  assert.deepEqual(PANEL_SECTION_SERVES.background, ['colourPair', 'photo']);
+  assert.ok(!T.panelSections.includes('colour'), 'the colour-only section was REPLACED, not kept alongside');
+  assert.ok(!T.panelSections.includes('window'), 'the petal shapes are template two\'s alone');
+  // Every section id is from the closed set, and each appears once.
+  for (const id of T.panelSections) assert.ok(PANEL_SECTION_IDS.includes(id), `${id} is not a known section`);
+  assert.equal(new Set(T.panelSections).size, T.panelSections.length);
+});
+
+test('template one declares NO second state — it cannot branch at all', () => {
+  assert.equal(T.states, undefined, 'a one-layout template must not carry a state table');
+  assert.equal(resolveTemplateState(T, {}), null);
+  assert.equal(resolveTemplateState(T, { showText: false }), null, 'no second layout to switch to, so the toggle can never reach it');
+  // …so every geometry lookup is exactly the lookup it always was.
+  for (const dimId of Object.keys(T.dimensions)) {
+    assert.deepEqual(slotConstraint(T, 'heading', dimId, 'photoOnly'), slotConstraint(T, 'heading', dimId));
+    assert.deepEqual(slotConstraint(T, 'photo', dimId, 'photoOnly'), slotConstraint(T, 'photo', dimId));
+  }
 });

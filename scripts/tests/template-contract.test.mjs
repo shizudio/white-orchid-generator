@@ -25,6 +25,10 @@ function baseline() {
       { id: 'b', label: 'B', bg: '#254E48', ink: '#F5F6E7', contrast: 8.5, klass: 'dark' },
     ],
     motif: 'none',
+    // The panel's sections, in this template's own order (client ruling
+    // 2026-08-18). Validated in both directions, so a baseline that grows a
+    // control must grow the section that offers it.
+    panelSections: ['words'],
     paintOrder: ['heading'],
     registers: { heading: { face: 'title', weight: 500, lineRatio: 1.02 } },
     slots: {
@@ -207,6 +211,9 @@ function withPhoto(extra = {}) {
     },
     ...extra,
   };
+  // A photo needs somewhere to be chosen. `window` is used here because these
+  // fixtures also exercise the mask; `background` is the other legal home.
+  t.panelSections = ['words', 'window'];
   return t;
 }
 
@@ -423,4 +430,171 @@ test('allowedLogoAssets is an id TABLE — empty, duplicated or non-string is re
 
   const behaviour = baseline(); behaviour.allowedLogoAssets = [() => 's1-green'];
   assert.ok(validateTemplate(behaviour).errors.some((e) => /FUNCTION/.test(e)));
+});
+
+
+/* ── §6.2 THE PANEL'S SECTION ORDER IS DATA (client ruling 2026-08-18) ───────
+   The order differs per template ("window … should be the first section"), and
+   the whole point of the contract is that the surface obeys a declaration
+   instead of branching on a template id. So the declaration is validated in
+   BOTH directions: a control with no section is unreachable, and a section
+   with no control is a dead one (M4). */
+test('panelSections is REQUIRED, ordered, and drawn from the closed section set', () => {
+  const t = baseline();
+  delete t.panelSections;
+  assert.ok(validateTemplate(t).errors.some((e) => /panelSections: required non-empty/.test(e)));
+
+  const unknown = baseline();
+  unknown.panelSections = ['words', 'vibes'];
+  assert.ok(validateTemplate(unknown).errors.some((e) => /not a known section/.test(e)));
+
+  const dup = baseline();
+  dup.panelSections = ['words', 'words'];
+  assert.ok(validateTemplate(dup).errors.some((e) => /duplicate section id/.test(e)));
+
+  // ORDER IS PRESERVED AS DECLARED — it is an array, not a set.
+  const ordered = withPhoto();
+  ordered.panelSections = ['window', 'words'];
+  assert.deepEqual(validateTemplate(ordered).errors, []);
+  assert.deepEqual(ordered.panelSections, ['window', 'words']);
+});
+
+test('a control with no section is REFUSED — she could never reach it', () => {
+  const t = withPhoto();
+  t.panelSections = ['words'];
+  assert.ok(validateTemplate(t).errors.some((e) => /nothing offers 'photo'/.test(e)));
+
+  const noWords = baseline();
+  noWords.panelSections = ['colour'];
+  const errs = validateTemplate(noWords).errors;
+  assert.ok(errs.some((e) => /nothing offers 'text'/.test(e)));
+  assert.ok(errs.some((e) => /'colour' serves nothing/.test(e)), 'a section for an absent slot is a dead control (M4)');
+});
+
+test('the SAME control may not be offered by two sections', () => {
+  const t = withPhoto();
+  t.panelSections = ['words', 'background', 'window'];
+  assert.ok(validateTemplate(t).errors.some((e) => /'photo' is offered by background and window/.test(e)));
+});
+
+/* ── AUTHORED STATES (client ruling 2026-08-18) ──────────────────────────────
+   Two discrete layouts a designer drew, chosen by one binary fact. The
+   validator is where "and never a third, and never a blend" is made real. */
+function withStates() {
+  const t = withPhoto();
+  t.states = {
+    withHeading: {},
+    photoOnly: {
+      heading: { portrait: { present: false }, square: { present: false } },
+      photo: {
+        portrait: { box: { x: 0.05, y: 0.05, w: 0.9, h: 0.9 } },
+        square: { box: { x: 0.05, y: 0.05, w: 0.9, h: 0.9 } },
+      },
+    },
+  };
+  return t;
+}
+
+test('a two-state template VALIDATES, and states are optional', () => {
+  assert.deepEqual(validateTemplate(withStates()).errors, []);
+  assert.deepEqual(validateTemplate(withPhoto()).errors, [], 'a single-layout template declares no states at all');
+});
+
+test('a THIRD state is REFUSED — that is where two drawings become a solver', () => {
+  const t = withStates();
+  t.states.almostEmpty = { photo: { portrait: { box: { x: 0, y: 0, w: 1, h: 1 } } } };
+  assert.ok(validateTemplate(t).errors.some((e) => /a THIRD state/.test(e)));
+});
+
+test('a state may override GEOMETRY only — never a budget, a fit or a required flag', () => {
+  for (const [key, value] of [['charBudget', 12], ['maxLines', 4], ['required', true], ['fit', 'contain']]) {
+    const t = withStates();
+    t.states.photoOnly.photo.portrait[key] = value;
+    assert.ok(
+      validateTemplate(t).errors.some((e) => /may override GEOMETRY only/.test(e)),
+      `a state was allowed to move '${key}' — one template would have two contracts`,
+    );
+  }
+});
+
+test('PARTIAL dimension coverage is REFUSED — two designs under one name', () => {
+  const t = withStates();
+  delete t.states.photoOnly.photo.square;
+  assert.ok(validateTemplate(t).errors.some((e) => /partial coverage/.test(e)));
+});
+
+test('a state row identical to the base, or a withHeading that overrides, is a DEAD declaration', () => {
+  const same = withStates();
+  same.states.photoOnly.photo.portrait = { box: { ...same.slots.photo.dimensions.portrait.box } };
+  assert.ok(validateTemplate(same).errors.some((e) => /identical to the base row/.test(e)));
+
+  const copied = withStates();
+  copied.states.withHeading = { photo: { portrait: { box: { x: 0, y: 0, w: 1, h: 1 } } } };
+  assert.ok(validateTemplate(copied).errors.some((e) => /withHeading: must override nothing/.test(e)));
+
+  const empty = withStates();
+  empty.states.photoOnly = {};
+  assert.ok(validateTemplate(empty).errors.some((e) => /overrides nothing/.test(e)));
+});
+
+/* ── WHO MAY BLEED (client ruling 2026-08-18) ───────────────────────────────
+   "the text off petal can be even bigger, overflowing the frame like
+    referenced." A PHOTO WINDOW may extend past the canvas and be cropped by
+   the frame; a TEXT box may never, because copy painted off-canvas is always
+   a mistake. Both halves are pinned. */
+test('a PHOTO window may bleed off the canvas; a TEXT box may not', () => {
+  const bled = withStates();
+  bled.states.photoOnly.photo.portrait.box = { x: -0.12, y: -0.3, w: 1.4, h: 1.5 };
+  assert.deepEqual(validateTemplate(bled).errors, [], 'a window that overflows the frame is a composition, not an error');
+
+  const offCanvasText = baseline();
+  offCanvasText.slots.heading.dimensions.portrait.box = { x: -0.2, y: 0.1, w: 0.9, h: 0.1 };
+  assert.ok(validateTemplate(offCanvasText).errors.some((e) => /only a photo window may bleed/.test(e)));
+
+  // Nonsense is still refused: a window that misses the canvas entirely paints
+  // nothing while claiming to be the design (M4), and an absurd size is the
+  // shape of a units mistake rather than a composition.
+  const missed = withStates();
+  missed.states.photoOnly.photo.square.box = { x: 1.4, y: 0.1, w: 0.5, h: 0.5 };
+  assert.ok(validateTemplate(missed).errors.some((e) => /does not overlap the canvas at all/.test(e)));
+
+  const absurd = withStates();
+  absurd.states.photoOnly.photo.square.box = { x: 0, y: 0, w: 12, h: 12 };
+  assert.ok(validateTemplate(absurd).errors.some((e) => /not by more than 3/.test(e)));
+
+  for (const bad of [{ w: 0 }, { h: 0 }, { w: -0.5 }]) {
+    const t = withStates();
+    t.states.photoOnly.photo.portrait.box = { x: 0, y: 0, w: 1, h: 1, ...bad };
+    assert.ok(validateTemplate(t).errors.some((e) => /must be positive fractions/.test(e)));
+  }
+});
+
+test('a state box is held to the SAME rigour as a base box', () => {
+  const t = withStates();
+
+  const notABox = withStates();
+  notABox.states.photoOnly.photo.square.box = { x: 0, y: 0, w: 1 };
+  assert.ok(validateTemplate(notABox).errors.some((e) => /required \{x,y,w,h\}/.test(e)));
+
+  // …and the behaviour scanner is armed inside a state too.
+  const fn = withStates();
+  fn.states.photoOnly.photo.portrait.box.h = () => 0.9;
+  assert.ok(validateTemplate(fn).errors.some((e) => /FUNCTION/.test(e)));
+});
+
+test('a state cannot introduce a slot the template does not paint', () => {
+  const t = withStates();
+  t.states.photoOnly.body = { portrait: { box: { x: 0, y: 0, w: 1, h: 0.1 } }, square: { box: { x: 0, y: 0, w: 1, h: 0.1 } } };
+  assert.ok(validateTemplate(t).errors.some((e) => /the base template does not paint this slot/.test(e)));
+});
+
+test('slotConstraint applies a state\'s geometry, and NOTHING without one', () => {
+  const t = withStates();
+  const base = slotConstraint(t, 'photo', 'portrait');
+  assert.deepEqual(base.box, { x: 0, y: 0, w: 1, h: 1 }, 'no state named === the baked geometry, untouched');
+  const alt = slotConstraint(t, 'photo', 'portrait', 'photoOnly');
+  assert.deepEqual(alt.box, { x: 0.05, y: 0.05, w: 0.9, h: 0.9 });
+  assert.equal(alt.fit, base.fit, 'the state moved geometry and nothing else');
+  assert.equal(slotConstraint(t, 'heading', 'portrait', 'photoOnly'), null, 'a slot a state deactivates does not paint');
+  assert.ok(slotConstraint(t, 'heading', 'portrait', 'withHeading'), 'and it does in the other state');
 });

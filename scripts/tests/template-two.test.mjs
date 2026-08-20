@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url';
 import {
   TEMPLATE_PETAL_WINDOW as T, TEMPLATES, templateById,
 } from '../../lib/templates/index.mjs';
-import { validateTemplate, DIMENSIONS, MIN_PAIR_CONTRAST, contrastRatio } from '../../lib/templates/template-contract.mjs';
+import {
+  validateTemplate, DIMENSIONS, MIN_PAIR_CONTRAST, contrastRatio, slotConstraint, PANEL_SECTION_SERVES,
+} from '../../lib/templates/template-contract.mjs';
+import { resolveTemplateState, templateOffersTextToggle } from '../../lib/render-core/render-template.mjs';
 import {
   maskAssetById, templateMaskAsset, templateMaskShapes, resolveMaskAsset, MASK_SHAPE_LABELS,
 } from '../../lib/templates/mask-assets.mjs';
@@ -270,4 +273,151 @@ test('the Figma SVG seed REFUSES a masked template rather than dropping the mask
   assert.match(refusal, /round trip/);
   // …and template one, which has no mask, is still exportable.
   assert.equal(svgSeedRefusal(templateById('label_headline')), null);
+});
+
+/* ── THE PANEL ORDER IS THIS TEMPLATE'S OWN (client ruling 2026-08-18) ───────
+   "Make window shape and photo selection the same section, it should be the
+    first section." FIRST is declared here, on the template, and the composer
+   renders the array in sequence — there is no branch on a template id. */
+test('the window is ONE section, and it is FIRST — declared, not assumed', () => {
+  assert.deepEqual(T.panelSections, ['window', 'words', 'colour', 'mark', 'markPosition']);
+  assert.equal(T.panelSections[0], 'window', 'this template is photo-first: the window is the primary decision');
+  assert.ok(T.panelSections.indexOf('window') < T.panelSections.indexOf('words'), 'the window sits ABOVE the heading field');
+  // `window` is the section that carries BOTH the silhouette and the photo, so
+  // the two really are one section rather than two adjacent ones.
+  assert.deepEqual(PANEL_SECTION_SERVES.window, ['photo', 'mask']);
+  assert.ok(!T.panelSections.includes('background'), 'the photo is chosen in the window here, never twice');
+  // …and the two templates genuinely differ, which is the whole reason the
+  // order had to become data.
+  // Both templates now open on WHAT SITS BEHIND THE WORDS — Classic on the
+  // colour field and its optional photo, this one on the window and its
+  // required photo — then the words, then the mark. That is a fact about two
+  // declarations, not a rule anywhere in the panel: the sections themselves
+  // still differ, which is why the order had to become data in the first place.
+  const one = templateById('label_headline');
+  assert.notDeepEqual(one.panelSections, T.panelSections);
+  assert.equal(one.panelSections[0], 'background');
+  assert.equal(T.panelSections[0], 'window');
+  for (const t of [one, T]) {
+    assert.ok(PANEL_SECTION_SERVES[t.panelSections[0]].includes('photo'), 'both lead with the photo\'s own section');
+    assert.ok(t.panelSections.indexOf('words') < t.panelSections.indexOf('mark'));
+  }
+});
+
+/* ── THE TWO AUTHORED STATES (client ruling 2026-08-18) ──────────────────────
+   "if user decides not to put any text, can u default it to larger petal
+    centralized?" — a second DRAWING, not a rule. */
+test('photoOnly is a fully authored second layout — bigger petal, no band, in EVERY dimension', () => {
+  assert.deepEqual(Object.keys(T.states).sort(), ['photoOnly', 'withHeading']);
+  assert.deepEqual(T.states.withHeading, {}, 'the baked geometry IS the with-heading state; a copy could only drift');
+
+  const dimIds = Object.keys(T.dimensions);
+  for (const dimId of dimIds) {
+    // The band is ABSENT — not shrunk, not empty.
+    assert.equal(slotConstraint(T, 'heading', dimId, 'photoOnly'), null, `${dimId}: photoOnly still paints a heading band`);
+    assert.ok(slotConstraint(T, 'heading', dimId, 'withHeading'), `${dimId}: withHeading lost its band`);
+
+    const base = slotConstraint(T, 'photo', dimId);
+    const alt = slotConstraint(T, 'photo', dimId, 'photoOnly');
+    assert.ok(alt, `${dimId}: photoOnly has no window`);
+    // BIGGER — that is the ruling, so it is measured rather than eyeballed.
+    const area = (b) => b.w * DIMENSIONS[dimId].w * b.h * DIMENSIONS[dimId].h;
+    assert.ok(area(alt.box) > area(base.box) * 1.2, `${dimId}: the photoOnly petal is not materially larger`);
+    /* IT BLEEDS, AND IT IS CENTRED (client rulings 2026-08-18: "overflowing
+       the frame like referenced" … "no i need the petals to be centralized").
+       The frame crops the window; it is not scaled to fit. */
+    assert.ok(alt.box.h > base.box.h, `${dimId}: the photoOnly window is not taller`);
+    assert.ok(alt.box.y < 0 || alt.box.w > 1, `${dimId}: the photoOnly window does not overflow the frame at all`);
+    assert.ok(
+      Math.abs(alt.box.x - (1 - alt.box.w) / 2) < 0.001,
+      `${dimId}: the photoOnly window is off-centre (x=${alt.box.x}, centred would be ${(1 - alt.box.w) / 2})`,
+    );
+    // At the silhouette's TRUE proportions — never stretched.
+    const ratio = (alt.box.w * DIMENSIONS[dimId].w) / (alt.box.h * DIMENSIONS[dimId].h);
+    assert.ok(ratio > 0.99 && ratio < 1.02, `${dimId}: the photoOnly window is ${ratio.toFixed(4)}:1 — stretched`);
+    // The CONTRACT half is untouched: a state moves geometry and nothing else.
+    assert.equal(alt.required, base.required);
+    assert.equal(alt.fit, base.fit);
+  }
+  // Budgets are unaffected — photoOnly has no text at all, and the contract
+  // forbids a state from carrying one anyway (§7.1 needs no second copy).
+  assert.equal(T.slots.heading.charBudget, MEASURED_BUDGETS.heading.min);
+  assert.ok(!JSON.stringify(T.states).includes('charBudget'));
+  assert.ok(!JSON.stringify(T.states).includes('maxLines'));
+});
+
+/* HARD CONSTRAINT (client ruling 2026-08-18): the petal may bleed anywhere
+   EXCEPT under the mark. This template sanctions bottom-left AND bottom-right,
+   so the whole bottom strip stays flat field — which is why photoOnly takes its
+   overflow at the top and the sides rather than the bottom.
+
+   LANDSCAPE IS THE ONE EXCEPTION, AND IT IS A REPORTED CONFLICT, NOT A LEAK.
+   The client ruled landscape's photoOnly window "1.6x bigger" and "centralized
+   vertically" (2026-08-18). At 16:9 that bleeds off the top AND the bottom, so
+   the silhouette is at its widest exactly where the mark sits. The number was
+   honoured as given rather than quietly shrunk, and the collision is measured
+   and reported for a ruling — see the header of
+   scripts/tools/verify-template-two.mjs for the numbers and the options. This
+   exclusion is named here so it cannot spread to another dimension unnoticed,
+   and it is deleted the moment the client rules. */
+const MARK_CONFLICT_PENDING_RULING = new Set(['landscape']);
+
+test('THE MARK IS CLEAR OF THE PETAL IN THE photoOnly STATE TOO', () => {
+  for (const dimId of Object.keys(T.dimensions)) {
+    if (MARK_CONFLICT_PENDING_RULING.has(dimId)) continue;
+    const dim = DIMENSIONS[dimId];
+    const p = slotConstraint(T, 'photo', dimId, 'photoOnly').box;
+    const l = slotConstraint(T, 'logo', dimId, 'photoOnly');
+    // The mark is deliberately UNCHANGED between the states — same corner, same
+    // size — so it is the one fixed thing the eye holds across the switch.
+    assert.deepEqual(l, slotConstraint(T, 'logo', dimId), `${dimId}: the mark moved between states`);
+    for (const position of T.allowedLogoPositions) {
+      const pad = (l.pad ?? 0.05) * dim.w;
+      const lw = (l.widthFrac ?? 0.12) * dim.w;
+      const lh = lw * 0.8333;
+      const x = position.endsWith('left') ? pad : dim.w - pad - lw;
+      const y = dim.h - pad - lh;
+      const m = { x: x / dim.w, y: y / dim.h, r: (x + lw) / dim.w, b: (y + lh) / dim.h };
+      const hit = !(m.r <= p.x || p.x + p.w <= m.x || m.b <= p.y || p.y + p.h <= m.y);
+      assert.equal(hit, false, `${dimId}/${position}: the bigger photoOnly petal runs under the mark`);
+    }
+  }
+  // …and the exclusion is exactly one dimension, so it cannot quietly grow.
+  assert.deepEqual([...MARK_CONFLICT_PENDING_RULING], ['landscape']);
+});
+
+test('the state SWITCH is her CHOICE — generic, binary, and never inferred from copy', () => {
+  const one = templateById('label_headline');
+  // A template with no second state cannot branch — template one by construction.
+  assert.equal(resolveTemplateState(one, {}), null);
+  assert.equal(resolveTemplateState(one, { showText: false }), null);
+  assert.equal(templateOffersTextToggle(one), false, 'Classic must never show the toggle');
+  assert.equal(templateOffersTextToggle(T), true, 'the toggle is offered by the DATA, not by an id check');
+
+  assert.equal(resolveTemplateState(T, { showText: false }), 'photoOnly');
+  assert.equal(resolveTemplateState(T, { showText: true }), 'withHeading');
+  assert.equal(resolveTemplateState(T, {}), 'withHeading', 'text is ON until she turns it off');
+
+  /* THE COPY IS NEVER CONSULTED (client ruling 2026-08-18, amending the first).
+     Inferring the layout from an empty heading meant that clearing a line to
+     retype it flipped the whole composition and flipped it back. Text ON with
+     no words is an empty band — honest and stable — and text OFF with a full
+     heading is still the photo-only layout, with her words kept. */
+  assert.equal(resolveTemplateState(T, { heading: '' }), 'withHeading', 'an empty heading must NOT flip the layout');
+  assert.equal(resolveTemplateState(T, { heading: 'a'.repeat(T.slots.heading.charBudget) }), 'withHeading');
+  assert.equal(
+    resolveTemplateState(T, { showText: false, heading: 'words she keeps' }), 'photoOnly',
+    'text off hides the words; it never has to inspect them',
+  );
+});
+
+test('the heading field is labelled "Text" here, and Classic keeps its own label', () => {
+  assert.equal(T.slotLabels.heading.label, 'Text');
+  // The two templates' labels are INDEPENDENT — changing one cannot move the
+  // other, which is what let this land without touching Classic.
+  const one = templateById('label_headline');
+  assert.equal(one.slotLabels, undefined, 'Classic takes the surface default');
+  // A label for a slot the template does not paint is refused (M4).
+  const bad = JSON.parse(JSON.stringify({ ...T, slotLabels: { body: { label: 'Nope' } } }));
+  assert.ok(validateTemplate(bad).errors.some((e) => /a label for nothing/.test(e)));
 });

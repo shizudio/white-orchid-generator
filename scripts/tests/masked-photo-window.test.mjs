@@ -24,6 +24,9 @@ function stubCtx(readback = [200, 210, 190]) {
   let size = 10;
   const calls = {
     drawImage: 0, fillRect: 0, fillText: [], composites: [], alphas: [], fills: [], scratches: 0,
+    // The SOURCE rects actually asked for — how the crop is proven rather than
+    // trusted (the render truth reports the transform; this reports the pixels).
+    drawRects: [],
   };
   const make = () => ({
     calls,
@@ -45,7 +48,7 @@ function stubCtx(readback = [200, 210, 190]) {
       calls.fills.push(this.fillStyle);
       calls.composites.push(this.globalCompositeOperation);
     },
-    drawImage() { calls.drawImage += 1; },
+    drawImage(...a) { calls.drawImage += 1; if (a.length === 9) calls.drawRects.push({ sx: a[1], sy: a[2], sw: a[3], sh: a[4] }); },
     getImageData(x, y, w, h) {
       const data = new Uint8ClampedArray(w * h * 4);
       for (let i = 0; i < w * h; i += 1) {
@@ -161,4 +164,111 @@ test('the masked path still MEASURES the backdrop, and the band/corner pass on f
   assert.ok(truth.backdrop.slots.heading.ok, `the band is flat pre-verified field: ${truth.backdrop.slots.heading.ratio}`);
   assert.ok(truth.backdrop.logo?.ok, 'the mark sits on flat field too');
   assert.deepEqual(truth.contrastFailures, []);
+});
+
+
+/* ── HER CROP INSIDE THE FIXED WINDOW (client ruling 2026-08-18) ─────────────
+   "i want to still shift around the image and resize the image. this only
+    applies to petal window template."
+
+   The guarantee that matters is that the window can NEVER show empty field, and
+   it is structural rather than defensive: the transform is expressed in units of
+   the slack the zoom creates, so there is no unclamped quantity to get around.
+   These tests take it to every extreme and check the SOURCE RECT, which is what
+   actually decides whether the picture covers the mask. */
+const photoOf = (ctx) => ctx.calls.drawRects[0];
+
+test('the crop is offered ONLY where the template declares the photo adjustable', () => {
+  assert.equal(TWO.slots.photo.adjustable, true, 'Petal Window: the photo IS the design');
+  assert.equal(ONE.slots.photo.adjustable, false, 'Classic: a scrimmed texture behind type has no framing decision');
+
+  // Classic IGNORES a transform entirely — a value that arrives from anywhere
+  // must not be able to crop a template that did not opt in.
+  const plain = stubCtx();
+  renderTemplate(plain, ONE, 'portrait', { heading: 'A line', colourPairId: 'ivory', photoImage: fakeImage }, opts(plain));
+  const untouched = stubCtx();
+  renderTemplate(untouched, ONE, 'portrait', {
+    heading: 'A line', colourPairId: 'ivory', photoImage: fakeImage,
+    photoTransform: { x: 1, y: 1, zoom: 3 },
+  }, opts(untouched));
+  assert.deepEqual(photoOf(untouched), photoOf(plain), 'a transform reached a template that never declared one adjustable');
+});
+
+test('the window is ALWAYS fully covered — at every extreme of pan and zoom', () => {
+  const iw = fakeImage.naturalWidth;
+  const ih = fakeImage.naturalHeight;
+  const extremes = [];
+  for (const zoom of [1, 1.0001, 1.5, 2, 3, 9, 0, -4, NaN, undefined]) {
+    for (const x of [-1, 0, 1, -9, 9, NaN, undefined]) {
+      for (const y of [-1, 0, 1, -9, 9]) extremes.push({ x, y, zoom });
+    }
+  }
+  for (const dimId of Object.keys(TWO.dimensions)) {
+    for (const t of extremes) {
+      const ctx = stubCtx();
+      renderTemplate(ctx, TWO, dimId, {
+        heading: 'Where the day begins', colourPairId: 'sage',
+        photoImage: fakeImage, maskImage: fakeMask, photoTransform: t,
+      }, opts(ctx));
+      const r = photoOf(ctx);
+      const at = `${dimId} ${JSON.stringify(t)}`;
+      // THE SOURCE RECT MUST LIE INSIDE THE IMAGE. Anything else means the
+      // window is showing something that is not the photograph.
+      assert.ok(r.sx >= -1e-6, `${at}: source starts left of the image (sx=${r.sx})`);
+      assert.ok(r.sy >= -1e-6, `${at}: source starts above the image (sy=${r.sy})`);
+      assert.ok(r.sx + r.sw <= iw + 1e-6, `${at}: source runs past the right edge`);
+      assert.ok(r.sy + r.sh <= ih + 1e-6, `${at}: source runs past the bottom edge`);
+      assert.ok(r.sw > 0 && r.sh > 0, `${at}: empty source rect`);
+    }
+  }
+});
+
+test('pan and zoom really move the picture — and reset returns to the default fit', () => {
+  const shot = (photoTransform) => {
+    const ctx = stubCtx();
+    renderTemplate(ctx, TWO, 'portrait', {
+      heading: 'x', colourPairId: 'sage', photoImage: fakeImage, maskImage: fakeMask, photoTransform,
+    }, opts(ctx));
+    return photoOf(ctx);
+  };
+  const base = shot(undefined);
+  const reset = shot({ x: 0, y: 0, zoom: 1 });
+  assert.deepEqual(reset, base, 'reset must land exactly on the default fit');
+
+  const zoomed = shot({ x: 0, y: 0, zoom: 2 });
+  assert.ok(zoomed.sw < base.sw && zoomed.sh < base.sh, 'zooming in must take LESS of the photo, not more');
+
+  /* AT THE DEFAULT FIT, ONE AXIS IS ALREADY EXACTLY FILLED. A `cover` fit makes
+     one dimension of the photo match the window exactly, so that axis has zero
+     slack and cannot pan — correctly, because there is nothing there to reveal.
+     The other axis is the one the cover already cropped, and panning it chooses
+     which part of the picture that crop keeps. Both halves are asserted, so a
+     regression that made panning move nothing at all would be caught. */
+  const movedX = shot({ x: 1, y: 0, zoom: 1 }).sx !== base.sx;
+  const movedY = shot({ x: 0, y: 1, zoom: 1 }).sy !== base.sy;
+  assert.notEqual(movedX, movedY, 'at the default fit exactly one axis has slack to pan into');
+
+  // Zoomed in, both axes move, and the two ends of the range are different
+  // pictures.
+  const left = shot({ x: -1, y: 0, zoom: 2 });
+  const right = shot({ x: 1, y: 0, zoom: 2 });
+  const up = shot({ x: 0, y: -1, zoom: 2 });
+  const down = shot({ x: 0, y: 1, zoom: 2 });
+  assert.ok(right.sx > left.sx, 'panning right must show a later part of the picture');
+  assert.ok(down.sy > up.sy, 'panning down must show a lower part of the picture');
+  assert.equal(left.sx, 0, 'the left extreme is the left edge of the photo, exactly');
+  assert.equal(Math.round(right.sx + right.sw), fakeImage.naturalWidth, 'the right extreme is the right edge, exactly');
+});
+
+test('the truth REPORTS the crop it actually applied, already clamped', () => {
+  const ctx = stubCtx();
+  const truth = renderTemplate(ctx, TWO, 'square', {
+    heading: 'x', colourPairId: 'sage', photoImage: fakeImage, maskImage: fakeMask,
+    photoTransform: { x: 12, y: -12, zoom: 99 },
+  }, opts(ctx));
+  assert.deepEqual(truth.photo.transform, { x: 1, y: -1, zoom: 3 }, 'the truth must say what landed, not what was asked for');
+  const plain = renderTemplate(stubCtx(), ONE, 'portrait', {
+    heading: 'x', colourPairId: 'ivory', photoImage: fakeImage,
+  }, {});
+  assert.equal(plain.photo.transform, null, 'a template with no crop reports none');
 });

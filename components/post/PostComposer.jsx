@@ -43,8 +43,10 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DIMENSIONS, TEXT_SLOTS, slotConstraint } from '@/lib/templates/template-contract.mjs';
-import { renderTemplate } from '@/lib/render-core/render-template.mjs';
+import {
+  DIMENSIONS, TEXT_SLOTS, slotConstraint, PHOTO_ZOOM_MIN, PHOTO_ZOOM_MAX,
+} from '@/lib/templates/template-contract.mjs';
+import { renderTemplate, templateOffersTextToggle } from '@/lib/render-core/render-template.mjs';
 import { TEMPLATES, DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates/index.mjs';
 import { resolveLogoAsset, templateLogoVariants } from '@/lib/templates/logo-assets.mjs';
 import { resolveMaskAsset, templateMaskShapes } from '@/lib/templates/mask-assets.mjs';
@@ -181,6 +183,30 @@ export default function PostComposer() {
   // (client ruling 2026-08-18) WHICH window silhouette. null === the template's
   // own default; an explicit pick out of `allowedMaskShapes` is honoured as made.
   const [maskShapeId, setMaskShapeId] = useState(null);
+  /* ── TEXT ON / OFF (client ruling 2026-08-18) ────────────────────────────
+     "ideally i should have a deactive text toggle next to the line that
+      carries the post."
+     A SLOT VALUE, not a rule: which of the template's two authored layouts she
+     wants. It is never inferred from whether she has typed anything — a layout
+     that flips while she is clearing a line to retype it is exactly the kind of
+     surprise this app exists to remove. §6.3 rule 1 holds: turning text OFF
+     keeps every word, hidden, and turning it back on returns them untouched. */
+  const [showText, setShowText] = useState(true);
+  /* ── HER CROP INSIDE THE FIXED WINDOW (client ruling 2026-08-18) ─────────
+     "i want to still shift around the image and resize the image. this only
+      applies to petal window template."
+     The ONE narrow exception to §3's no-pan/zoom, and the line is that this
+     moves the PICTURE INSIDE the window, never the window: no template
+     geometry changes, so nothing about the layout becomes negotiable. The
+     units are the slack the zoom creates (pan ±1, zoom 1–3), so the window can
+     never show empty field — see lib/render-core/render-template.mjs.
+     ONE transform for all four dimensions: staff crop once, not four times. */
+  const [photoTransform, setPhotoTransform] = useState({ x: 0, y: 0, zoom: 1 });
+  const panFrom = useRef(null);
+  const photoAdjustable = TEMPLATE.slots.photo?.adjustable === true;
+  // WHICH templates offer the choice is DATA — a template that declares the
+  // second layout gets the toggle, one that does not never shows it.
+  const textToggle = templateOffersTextToggle(TEMPLATE);
   const [truths, setTruths] = useState({});
   const [logoImage, setLogoImage] = useState(null);
   const [maskImage, setMaskImage] = useState(null);
@@ -243,6 +269,33 @@ export default function PostComposer() {
     rememberPanel(w);
   }
 
+  /* THE PAN. A pointer drag ON A PREVIEW, and the only one in this app: it
+     writes `photoTransform` and nothing else — no slot value, no template
+     geometry, no canvas element. A full-width drag sweeps the whole available
+     range, so it feels the same on every preview whatever size it is drawn at.
+     Clamping is not done here: the render core expresses the transform in units
+     of the slack, so ±1 IS the edge. */
+  function startPhotoPan(event) {
+    if (!photoAdjustable || !photoImage) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    panFrom.current = { px: event.clientX, py: event.clientY, rect, x: photoTransform.x, y: photoTransform.y };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function movePhotoPan(event) {
+    const from = panFrom.current;
+    if (!from) return;
+    event.preventDefault();
+    const nx = from.x - ((event.clientX - from.px) / from.rect.width) * 2;
+    const ny = from.y - ((event.clientY - from.py) / from.rect.height) * 2;
+    setPhotoTransform((t) => ({ ...t, x: Math.max(-1, Math.min(1, nx)), y: Math.max(-1, Math.min(1, ny)) }));
+  }
+  function endPhotoPan(event) {
+    if (!panFrom.current) return;
+    panFrom.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }
+  function resetPhotoTransform() { setPhotoTransform({ x: 0, y: 0, zoom: 1 }); }
+
   // ── THE PHOTO (client amendment). Library pick or upload — never generated.
   const [photo, setPhoto] = useState(null);          // { src, filename, origin }
   const [photoImage, setPhotoImage] = useState(null);
@@ -303,7 +356,7 @@ export default function PostComposer() {
 
     setChoiceMemory((m) => ({
       ...m,
-      [TEMPLATE.id]: { colourPairId, logoPosition, logoVariantId },
+      [TEMPLATE.id]: { colourPairId, logoPosition, logoVariantId, showText },
     }));
     const remembered = choiceMemory[next.id];
     const carriedPair = next.colourPairs.some((p) => p.id === colourPairId) ? colourPairId : null;
@@ -313,6 +366,9 @@ export default function PostComposer() {
     setColourPairId(remembered?.colourPairId || carriedPair || next.colourPairs[0].id);
     setLogoPosition(remembered?.logoPosition || carriedPos || next.allowedLogoPositions[0]);
     setLogoVariantId(remembered ? remembered.logoVariantId : carriedVariant);
+    // Her text on/off choice is remembered per template too — it means nothing
+    // on a template with one layout, and everything on one with two.
+    setShowText(remembered && typeof remembered.showText === 'boolean' ? remembered.showText : true);
 
     // The honest line: which of her words this template does not show (kept),
     // and what it needs that she has not given it yet.
@@ -388,6 +444,8 @@ export default function PostComposer() {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       next[dimId] = renderTemplate(ctx, TEMPLATE, dimId, {
         ...values,
+        showText,
+        photoTransform,
         colourPairId,
         logoPosition,
         logoImage,
@@ -398,7 +456,7 @@ export default function PostComposer() {
       });
     }
     setTruths(next);
-  }, [TEMPLATE, dimOrder, values, colourPairId, logoPosition, logoImage, logoChoice, photoImage, maskImage, maskAsset]);
+  }, [TEMPLATE, dimOrder, values, showText, photoTransform, colourPairId, logoPosition, logoImage, logoChoice, photoImage, maskImage, maskAsset]);
 
   useEffect(() => { paint(); }, [paint, fontsReady]);
 
@@ -497,6 +555,9 @@ export default function PostComposer() {
     setLibraryOpen(false);
     if (!img?.url) { setPhotoNote('That library image has no file behind it.'); return; }
     setPhotoNote(null);
+    // A new picture is a new framing decision — her old crop would be a crop of
+    // something else.
+    resetPhotoTransform();
     setPhoto({ src: img.url, filename: img.filename || 'library photo', origin: 'library' });
   }
 
@@ -508,6 +569,7 @@ export default function PostComposer() {
     // keeps the canvas readable for the backdrop check.
     const localSrc = URL.createObjectURL(file);
     setPhotoNote(null);
+    resetPhotoTransform();
     setPhoto({ src: localSrc, filename: file.name, origin: 'upload' });
 
     // Then persist it to the library, fire-and-forget, in the 'uploaded'
@@ -537,6 +599,7 @@ export default function PostComposer() {
   function removePhoto() {
     setPhoto(null);
     setPhotoNote(null);
+    resetPhotoTransform();
   }
 
   // ── EXPORT ────────────────────────────────────────────────────────────────
@@ -557,6 +620,289 @@ export default function PostComposer() {
   // Does the ACTIVE template insist on a photo? Read off the contract, never
   // hardcoded per template (§3: the surface may only consume the contract).
   const photoRequired = dimOrder.some((d) => slotConstraint(TEMPLATE, 'photo', d)?.required);
+
+
+  /* ── WHAT A SECTION IS ───────────────────────────────────────────────────
+     One entry per id in PANEL_SECTION_IDS. The template says WHICH of these
+     it has and in WHAT ORDER (`panelSections`); this table says what each one
+     looks like. Nothing here inspects a template id — swap the two templates'
+     declarations and the panel rearranges itself with no edit to this file.
+
+     Two of them are the client's 2026-08-18 groupings:
+       · `background` — the colour pair AND the photo, one section. On Classic
+         both are "what sits behind the words".
+       · `window`     — the silhouette AND the photo, one section. On Petal
+         Window both are "the picture".
+     The photo control itself is ONE piece of JSX used by both: its holds, its
+     refusal copy and its required/optional line are unchanged and unmoved in
+     behaviour — only which heading it sits under has changed.               */
+  const photoControl = (
+    <div style={S.subField}>
+      <span style={S.subLabel}>{photoRequired ? 'Photo (required)' : 'Photo (optional)'}</span>
+      {photo ? (
+        <div style={S.photoRow}>
+          <img src={photo.src} alt="" style={S.photoThumb} />
+          <div style={S.photoMeta}>
+            <span style={S.photoName}>{photo.filename}</span>
+            <button type="button" onClick={removePhoto} style={S.linkBtn}>Remove photo</button>
+          </div>
+        </div>
+      ) : (
+        <p style={photoRequired ? S.warn : S.hint}>
+          {photoRequired
+            ? 'This design is the photograph — choose one before you can download.'
+            : 'No photo — the tile stays a plain colour field.'}
+        </p>
+      )}
+      <div style={S.row}>
+        <button type="button" onClick={() => setLibraryOpen(true)} style={S.ghostBtn}>Choose from library</button>
+        <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} style={S.ghostBtn}>
+          {uploading ? 'Adding…' : 'Upload a photo'}
+        </button>
+        <input
+          ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload}
+          style={{ display: 'none' }} aria-hidden="true" tabIndex={-1}
+        />
+      </div>
+      {photoNote && <p role="status" style={S.note}>{photoNote}</p>}
+
+      {/* ── FRAME THE PICTURE (client ruling 2026-08-18). Offered only where the
+          TEMPLATE declares its photo adjustable, and only once there is a photo
+          to frame — a slider over nothing is a dead control (M4). */}
+      {photoAdjustable && photo && (
+        <div style={S.subField}>
+          <span style={S.subLabel}>Framing</span>
+          <p style={S.hint}>Drag any preview to move the picture inside the shape.</p>
+          <div style={S.zoomRow}>
+            <label htmlFor="photo-zoom" style={S.zoomLabel}>Size</label>
+            <input
+              id="photo-zoom"
+              type="range"
+              min={PHOTO_ZOOM_MIN}
+              max={PHOTO_ZOOM_MAX}
+              step={0.01}
+              value={photoTransform.zoom}
+              onChange={(e) => setPhotoTransform((t) => ({ ...t, zoom: Number(e.target.value) }))}
+              style={S.zoomInput}
+            />
+            <button type="button" onClick={resetPhotoTransform} style={S.linkBtn}>Reset</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  /* `data-section` is not styling — it is how the live verification reads the
+     ORDER the panel actually rendered, off the DOM, without depending on a
+     label string. The declaration and the surface can then be compared to each
+     other rather than both to a screenshot. */
+  const SECTIONS = {
+    words: (
+      <div key="words" data-section="words" style={S.sectionStack}>
+        {textSlots.map((slot) => {
+          const budget = TEMPLATE.slots[slot].charBudget;
+          const used = values[slot].length;
+          // The surface's default copy, which a template may override for a
+          // slot that honestly wants a different name (`slotLabels`).
+          const meta = { ...(FIELD_LABELS[slot] || { label: slot, hint: '' }), ...(TEMPLATE.slotLabels?.[slot] || {}) };
+          const breaksIn = blocked.perSlot[slot] || [];
+          const showImprove = improve.slot === slot;
+          return (
+            <div key={slot} style={S.field}>
+              <div style={S.fieldHead}>
+                <label htmlFor={`slot-${slot}`} style={S.label}>{meta.label}</label>
+                <div style={S.fieldHeadRight}>
+                  {/* THE TEXT TOGGLE. Beside the field it governs, in plain
+                      words — she never sees a state name. Only templates that
+                      declare a second layout show it at all. */}
+                  {textToggle && (
+                    <button
+                      type="button"
+                      onClick={() => setShowText((on) => !on)}
+                      aria-pressed={showText}
+                      title="Turn the words on this design off or on. Your words are kept either way."
+                      style={{ ...S.toggle, ...(showText ? S.toggleOn : null) }}
+                    >
+                      {showText ? 'Text on' : 'Text off'}
+                    </button>
+                  )}
+                  <span style={{ ...S.counter, color: used >= budget ? 'var(--tw-tangerine, #F6644E)' : 'var(--fg-muted, #6b6f6b)' }}>
+                    {used}/{budget}
+                  </span>
+                </div>
+              </div>
+              <textarea
+                id={`slot-${slot}`}
+                value={values[slot]}
+                maxLength={budget}
+                rows={slot === 'heading' ? 3 : 2}
+                onChange={(e) => setSlot(slot, e.target.value)}
+                style={{ ...S.input, borderColor: breaksIn.length ? 'var(--tw-tangerine, #F6644E)' : 'var(--line, rgba(37,78,72,0.18))' }}
+              />
+              <p style={S.hint}>{meta.hint}</p>
+              {/* §6.3 rule 2 — the choice SAYS what it is doing, in one line. */}
+              {textToggle && !showText && (
+                <p role="status" style={S.note}>
+                  Text is off, so this design is the picture on its own. Your words are kept and come back when you turn text on.
+                </p>
+              )}
+
+              {breaksIn.length > 0 && (
+                <p role="status" style={S.warn}>
+                  Your line breaks make this too tall for {breaksIn.map((d) => DIMENSIONS[d].label).join(' and ')}.
+                  Remove a break to download {breaksIn.length > 1 ? 'those sizes' : 'that size'}.
+                </p>
+              )}
+
+              <div style={S.row}>
+                <button type="button" onClick={() => runImprove(slot)} disabled={improve.busy || !values[slot].trim()} style={S.ghostBtn}>
+                  {improve.busy && improve.slot === slot ? 'Improving…' : 'Improve this line'}
+                </button>
+              </div>
+
+              {showImprove && !improve.busy && (
+                <div style={S.improve}>
+                  {improve.note && <p style={S.note}>{improve.note}</p>}
+                  <div style={S.compare}>
+                    <div style={S.compareCol}>
+                      <span style={S.compareLabel}>What you wrote</span>
+                      <p style={S.compareText}>{improve.original}</p>
+                    </div>
+                    {improve.improved && (
+                      <div style={S.compareCol}>
+                        <span style={S.compareLabel}>Suggested</span>
+                        <p style={S.compareText}>{improve.improved}</p>
+                      </div>
+                    )}
+                  </div>
+                  <div style={S.row}>
+                    {improve.improved && (
+                      <button type="button" onClick={acceptImprove} style={S.primaryBtn}>Use the suggestion</button>
+                    )}
+                    <button type="button" onClick={discardImprove} style={S.ghostBtn}>Keep my words</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    ),
+    colour: (
+      <div key="colour" data-section="colour" style={S.field}>
+        <span style={S.label}>Colour</span>
+        <div style={S.chips}>
+          {TEMPLATE.colourPairs.map((p) => (
+            <button
+              key={p.id} type="button" onClick={() => setColourPairId(p.id)}
+              aria-pressed={p.id === colourPairId}
+              title={`${p.label} — contrast ${p.contrast}:1`}
+              style={{ ...S.swatch, background: p.bg, color: p.ink, outline: p.id === colourPairId ? '2px solid var(--fg-strong, #254E48)' : '1px solid rgba(37,78,72,0.18)' }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    ),
+    /* "replace the edit colour for Background, and combine photo selection as
+       part of the edit section" — the pair picker and the photo, together. */
+    background: (
+      <div key="background" data-section="background" style={S.field}>
+        <span style={S.label}>Background</span>
+        <div style={S.chips}>
+          {TEMPLATE.colourPairs.map((p) => (
+            <button
+              key={p.id} type="button" onClick={() => setColourPairId(p.id)}
+              aria-pressed={p.id === colourPairId}
+              title={`${p.label} — contrast ${p.contrast}:1`}
+              style={{ ...S.swatch, background: p.bg, color: p.ink, outline: p.id === colourPairId ? '2px solid var(--fg-strong, #254E48)' : '1px solid rgba(37,78,72,0.18)' }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {TEMPLATE.slots.photo?.present && photoControl}
+      </div>
+    ),
+    /* "Make window shape and photo selection the same section, it should be
+       the first section" — FIRST is the template's declaration, not ours. */
+    window: (
+      <div key="window" data-section="window" style={S.field}>
+        <span style={S.label}>The window</span>
+        {maskShapes.length > 1 && (
+        <div style={S.marks}>
+          {maskShapes.map((shape) => (
+            <button
+              key={shape.id} type="button"
+              onClick={() => setMaskShapeId(shape.id)}
+              aria-pressed={maskAsset?.id === shape.id}
+              title={shape.label}
+              style={{ ...S.markTile, ...(maskAsset?.id === shape.id ? S.markTileOn : null) }}
+            >
+              {/* The src is carried in a data attribute too, so the live
+                  verification can read WHICH shape a tile offers without
+                  depending on how the thumbnail happens to be painted. */}
+              <span data-shape-src={shape.src} aria-hidden="true" style={{ display: 'contents' }}>
+                <ShapeThumb src={shape.src} ink={pair.klass === 'dark' ? '#254E48' : 'var(--fg-strong, #254E48)'} />
+              </span>
+              <span style={S.srOnly}>{shape.label}</span>
+            </button>
+          ))}
+        </div>
+        )}
+        {maskShapes.length > 1 && <p style={S.hint}>Your photo is cut to this shape.</p>}
+        {TEMPLATE.slots.photo?.present && photoControl}
+      </div>
+    ),
+    mark: (
+      <div key="mark" data-section="mark" style={S.field}>
+        <span style={S.label}>The mark</span>
+        <div style={S.marks}>
+          <button
+            type="button" onClick={() => setLogoVariantId(null)} aria-pressed={logoVariantId === null}
+            title="Whichever mark suits the colour you picked"
+            style={{ ...S.markTile, ...(logoVariantId === null ? S.markTileOn : null) }}
+          >
+            <span style={S.markAuto}>Auto</span>
+          </button>
+          {logoVariants.map((v) => (
+            <button
+              key={v.id} type="button" onClick={() => setLogoVariantId(v.id)} aria-pressed={logoVariantId === v.id}
+              title={`${v.label} · ${v.colour}`}
+              style={{
+                ...S.markTile,
+                ...(logoVariantId === v.id ? S.markTileOn : null),
+                background: v.colour === 'ivory' ? 'var(--fg-strong, #254E48)' : 'rgba(255,255,255,0.7)',
+              }}
+            >
+              <img src={v.src} alt={`${v.label}, ${v.colour}`} style={S.markImg} />
+            </button>
+          ))}
+        </div>
+        <p style={S.hint}>
+          {logoVariantId === null
+            ? `Auto uses the ${logoChoice?.label || 'brand'} mark that suits ${pair.label}.`
+            : 'Your pick is used as-is. If it disappears on this design, you will be told.'}
+        </p>
+      </div>
+    ),
+    markPosition: (
+      <div key="markPosition" data-section="markPosition" style={S.field}>
+        <span style={S.label}>Where the mark sits</span>
+        <div style={S.chips}>
+          {TEMPLATE.allowedLogoPositions.map((p) => (
+            <button
+              key={p} type="button" onClick={() => setLogoPosition(p)} aria-pressed={p === logoPosition}
+              style={{ ...S.chip, ...(p === logoPosition ? S.chipOn : null) }}
+            >
+              {LOGO_LABELS[p] || p}
+            </button>
+          ))}
+        </div>
+      </div>
+    ),
+  };
 
   return (
     <main style={S.page}>
@@ -697,196 +1043,16 @@ export default function PostComposer() {
               {swapNote && <p role="status" style={S.note}>{swapNote}</p>}
             </div>
 
-            {textSlots.map((slot) => {
-              const budget = TEMPLATE.slots[slot].charBudget;
-              const used = values[slot].length;
-              const meta = FIELD_LABELS[slot] || { label: slot, hint: '' };
-              const breaksIn = blocked.perSlot[slot] || [];
-              const showImprove = improve.slot === slot;
-              return (
-                <div key={slot} style={S.field}>
-                  <div style={S.fieldHead}>
-                    <label htmlFor={`slot-${slot}`} style={S.label}>{meta.label}</label>
-                    <span style={{ ...S.counter, color: used >= budget ? 'var(--tw-tangerine, #F6644E)' : 'var(--fg-muted, #6b6f6b)' }}>
-                      {used}/{budget}
-                    </span>
-                  </div>
-                  <textarea
-                    id={`slot-${slot}`}
-                    value={values[slot]}
-                    maxLength={budget}
-                    rows={slot === 'heading' ? 3 : 2}
-                    onChange={(e) => setSlot(slot, e.target.value)}
-                    style={{ ...S.input, borderColor: breaksIn.length ? 'var(--tw-tangerine, #F6644E)' : 'var(--line, rgba(37,78,72,0.18))' }}
-                  />
-                  <p style={S.hint}>{meta.hint}</p>
-
-                  {breaksIn.length > 0 && (
-                    <p role="status" style={S.warn}>
-                      Your line breaks make this too tall for {breaksIn.map((d) => DIMENSIONS[d].label).join(' and ')}.
-                      Remove a break to download {breaksIn.length > 1 ? 'those sizes' : 'that size'}.
-                    </p>
-                  )}
-
-                  <div style={S.row}>
-                    <button type="button" onClick={() => runImprove(slot)} disabled={improve.busy || !values[slot].trim()} style={S.ghostBtn}>
-                      {improve.busy && improve.slot === slot ? 'Improving…' : 'Improve this line'}
-                    </button>
-                  </div>
-
-                  {showImprove && !improve.busy && (
-                    <div style={S.improve}>
-                      {improve.note && <p style={S.note}>{improve.note}</p>}
-                      <div style={S.compare}>
-                        <div style={S.compareCol}>
-                          <span style={S.compareLabel}>What you wrote</span>
-                          <p style={S.compareText}>{improve.original}</p>
-                        </div>
-                        {improve.improved && (
-                          <div style={S.compareCol}>
-                            <span style={S.compareLabel}>Suggested</span>
-                            <p style={S.compareText}>{improve.improved}</p>
-                          </div>
-                        )}
-                      </div>
-                      <div style={S.row}>
-                        {improve.improved && (
-                          <button type="button" onClick={acceptImprove} style={S.primaryBtn}>Use the suggestion</button>
-                        )}
-                        <button type="button" onClick={discardImprove} style={S.ghostBtn}>Keep my words</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Pre-verified pairs ONLY — no colour picking (§3). */}
-            <div style={S.field}>
-              <span style={S.label}>Colour</span>
-              <div style={S.chips}>
-                {TEMPLATE.colourPairs.map((p) => (
-                  <button
-                    key={p.id} type="button" onClick={() => setColourPairId(p.id)}
-                    aria-pressed={p.id === colourPairId}
-                    title={`${p.label} — contrast ${p.contrast}:1`}
-                    style={{ ...S.swatch, background: p.bg, color: p.ink, outline: p.id === colourPairId ? '2px solid var(--fg-strong, #254E48)' : '1px solid rgba(37,78,72,0.18)' }}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── THE MARK: which one, and where. Both are slot values from the
-                template's own allowlists — never a drag, never an upload. */}
-            <div style={S.field}>
-              <span style={S.label}>The mark</span>
-              <div style={S.marks}>
-                <button
-                  type="button" onClick={() => setLogoVariantId(null)} aria-pressed={logoVariantId === null}
-                  title="Whichever mark suits the colour you picked"
-                  style={{ ...S.markTile, ...(logoVariantId === null ? S.markTileOn : null) }}
-                >
-                  <span style={S.markAuto}>Auto</span>
-                </button>
-                {logoVariants.map((v) => (
-                  <button
-                    key={v.id} type="button" onClick={() => setLogoVariantId(v.id)} aria-pressed={logoVariantId === v.id}
-                    title={`${v.label} · ${v.colour}`}
-                    style={{
-                      ...S.markTile,
-                      ...(logoVariantId === v.id ? S.markTileOn : null),
-                      background: v.colour === 'ivory' ? 'var(--fg-strong, #254E48)' : 'rgba(255,255,255,0.7)',
-                    }}
-                  >
-                    <img src={v.src} alt={`${v.label}, ${v.colour}`} style={S.markImg} />
-                  </button>
-                ))}
-              </div>
-              <p style={S.hint}>
-                {logoVariantId === null
-                  ? `Auto uses the ${logoChoice?.label || 'brand'} mark that suits ${pair.label}.`
-                  : 'Your pick is used as-is. If it disappears on this design, you will be told.'}
-              </p>
-            </div>
-
-            <div style={S.field}>
-              <span style={S.label}>Where the mark sits</span>
-              <div style={S.chips}>
-                {TEMPLATE.allowedLogoPositions.map((p) => (
-                  <button
-                    key={p} type="button" onClick={() => setLogoPosition(p)} aria-pressed={p === logoPosition}
-                    style={{ ...S.chip, ...(p === logoPosition ? S.chipOn : null) }}
-                  >
-                    {LOGO_LABELS[p] || p}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── PHOTO (optional). Pick one, or bring one in. Never generated. */}
-            {TEMPLATE.slots.photo?.present && (
-              <div style={S.field}>
-                <span style={S.label}>{photoRequired ? 'Photo (required)' : 'Photo (optional)'}</span>
-                {photo ? (
-                  <div style={S.photoRow}>
-                    <img src={photo.src} alt="" style={S.photoThumb} />
-                    <div style={S.photoMeta}>
-                      <span style={S.photoName}>{photo.filename}</span>
-                      <button type="button" onClick={removePhoto} style={S.linkBtn}>Remove photo</button>
-                    </div>
-                  </div>
-                ) : (
-                  <p style={photoRequired ? S.warn : S.hint}>
-                    {photoRequired
-                      ? 'This design is the photograph — choose one before you can download.'
-                      : 'No photo — the tile stays a plain colour field.'}
-                  </p>
-                )}
-                <div style={S.row}>
-                  <button type="button" onClick={() => setLibraryOpen(true)} style={S.ghostBtn}>Choose from library</button>
-                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} style={S.ghostBtn}>
-                    {uploading ? 'Adding…' : 'Upload a photo'}
-                  </button>
-                  <input
-                    ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload}
-                    style={{ display: 'none' }} aria-hidden="true" tabIndex={-1}
-                  />
-                </div>
-                {photoNote && <p role="status" style={S.note}>{photoNote}</p>}
-              </div>
-            )}
-
-            {/* ── THE WINDOW SHAPE (client ruling 2026-08-18) ───────────────
-                "i have a few petal shapes, can u make them as selections?"
-                The same affordance as the mark picker, offering exactly the
-                shapes THIS template sanctions — never the whole brand set. */}
-            {maskShapes.length > 1 && (
-              <div style={S.field}>
-                <span style={S.label}>The window shape</span>
-                <div style={S.marks}>
-                  {maskShapes.map((shape) => (
-                    <button
-                      key={shape.id} type="button"
-                      onClick={() => setMaskShapeId(shape.id)}
-                      aria-pressed={maskAsset?.id === shape.id}
-                      title={shape.label}
-                      style={{ ...S.markTile, ...(maskAsset?.id === shape.id ? S.markTileOn : null) }}
-                    >
-                      {/* The src is carried in a data attribute too, so the live
-                          verification can read WHICH shape a tile offers without
-                          depending on how the thumbnail happens to be painted. */}
-                      <span data-shape-src={shape.src} aria-hidden="true" style={{ display: 'contents' }}>
-                        <ShapeThumb src={shape.src} ink={pair.klass === 'dark' ? '#254E48' : 'var(--fg-strong, #254E48)'} />
-                      </span>
-                      <span style={S.srOnly}>{shape.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <p style={S.hint}>Your photo is cut to this shape.</p>
-              </div>
-            )}
+            {/* ── THE SECTIONS, IN THE TEMPLATE'S OWN ORDER ─────────────────
+                (client ruling 2026-08-18) Section order is TEMPLATE-SPECIFIC:
+                Classic leads with the words, Petal Window leads with the
+                window. That is DECLARED — `template.panelSections` — and this
+                is the whole of the surface's part in it: render the array in
+                sequence. There is no branch on a template id anywhere in this
+                file, and adding one would put the solver back in UI code.
+                What a section IS lives here; WHICH sections and in what order
+                lives on the template (lib/templates/template-contract.mjs). */}
+            {TEMPLATE.panelSections.map((sectionId) => SECTIONS[sectionId])}
           </div>
 
           {/* Anchored at the BOTTOM of the panel — never scrolls out of reach. */}
@@ -961,9 +1127,23 @@ export default function PostComposer() {
                 return (
                   <figure key={dimId} className={`wo-cell wo-cell-${dimId}`}>
                     <div className="wo-cell-frame">
+                      {/* The ONE pointer drag on a preview, and it is enabled
+                          only where the TEMPLATE declares the photo adjustable
+                          (never by a template-id check). touch-action:none is
+                          what makes a touch drag a drag instead of a page
+                          scroll. It writes photoTransform and nothing else. */}
                       <canvas
                         ref={(el) => { canvasRefs.current[dimId] = el; }}
-                        style={{ aspectRatio: `${dim.w} / ${dim.h}`, opacity: isBlocked ? 0.45 : 1 }}
+                        onPointerDown={photoAdjustable && photoImage ? startPhotoPan : undefined}
+                        onPointerMove={photoAdjustable && photoImage ? movePhotoPan : undefined}
+                        onPointerUp={photoAdjustable && photoImage ? endPhotoPan : undefined}
+                        onPointerCancel={photoAdjustable && photoImage ? endPhotoPan : undefined}
+                        style={{
+                          aspectRatio: `${dim.w} / ${dim.h}`,
+                          opacity: isBlocked ? 0.45 : 1,
+                          touchAction: photoAdjustable && photoImage ? 'none' : undefined,
+                          cursor: photoAdjustable && photoImage ? 'grab' : undefined,
+                        }}
                       />
                       <div className="wo-shot-anchor" style={{ aspectRatio: `${dim.w} / ${dim.h}` }}>
                         <button
@@ -979,7 +1159,11 @@ export default function PostComposer() {
                       {truth && (
                         <span className="wo-cap-line" style={S.truth}>
                           {truth.width}×{truth.height}
-                          {slotConstraint(TEMPLATE, 'heading', dimId) ? ` · heading ${truth.slots.heading?.paintedPx}px` : ''}
+                          {/* Read off the RENDER TRUTH, not the base contract:
+                              an authored state may not paint a heading at all,
+                              and reporting a size for type nobody can see would
+                              be the narration disagreeing with the canvas. */}
+                          {truth.slots.heading ? ` · heading ${truth.slots.heading.paintedPx}px` : ''}
                         </span>
                       )}
                     </figcaption>
@@ -1003,6 +1187,9 @@ const S = {
   page: { background: 'var(--bg, #F5F6E7)' },
   field: { display: 'flex', flexDirection: 'column', gap: 6 },
   fieldHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
+  fieldHeadRight: { display: 'flex', alignItems: 'baseline', gap: 10 },
+  toggle: { minHeight: 26, padding: '0 10px', borderRadius: 13, border: '1px solid var(--line, rgba(37,78,72,0.18))', background: 'transparent', color: 'var(--fg-muted, #6b6f6b)', fontFamily: 'var(--font-body)', fontSize: 12, cursor: 'pointer' },
+  toggleOn: { background: 'var(--fg-strong, #254E48)', color: '#F5F6E7', border: '1px solid var(--fg-strong, #254E48)' },
   label: { fontFamily: 'var(--font-syne)', fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-strong, #254E48)' },
   counter: { fontFamily: 'var(--font-body)', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
   input: { fontFamily: 'var(--font-body)', fontSize: 15, lineHeight: 1.5, color: 'var(--fg-strong, #254E48)', background: '#fff', border: '1.5px solid', borderRadius: 12, padding: '9px 11px', resize: 'vertical', outline: 'none' },
@@ -1015,6 +1202,16 @@ const S = {
   compareCol: { display: 'flex', flexDirection: 'column', gap: 2 },
   compareLabel: { fontFamily: 'var(--font-syne)', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted, #6b6f6b)' },
   compareText: { fontFamily: 'var(--font-body)', fontSize: 14, lineHeight: 1.5, color: 'var(--fg-strong, #254E48)', margin: 0, whiteSpace: 'pre-wrap' },
+  // A section that holds several fields (the words) keeps the panel's own
+  // rhythm, so grouping them changed no spacing.
+  sectionStack: { display: 'flex', flexDirection: 'column', gap: 20 },
+  // A MERGED section's second half — the photo inside Background / The window.
+  // Quieter than a section label, because it is not a section any more.
+  subField: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 },
+  subLabel: { fontFamily: 'var(--font-syne)', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted, #6b6f6b)' },
+  zoomRow: { display: 'flex', alignItems: 'center', gap: 10 },
+  zoomLabel: { fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--fg-muted, #6b6f6b)' },
+  zoomInput: { flex: '1 1 auto', minWidth: 0, accentColor: 'var(--fg-strong, #254E48)' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 8 },
   chip: { minHeight: 44, padding: '0 14px', borderRadius: 22, border: '1px solid var(--line, rgba(37,78,72,0.18))', background: 'transparent', fontFamily: 'var(--font-body)', fontSize: 13.5, color: 'var(--fg-strong, #254E48)', cursor: 'pointer' },
   chipOn: { background: 'var(--fg-strong, #254E48)', color: '#F5F6E7', border: '1px solid var(--fg-strong, #254E48)' },

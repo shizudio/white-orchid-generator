@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { DIMENSIONS } from '../../lib/templates/template-contract.mjs';
+import { DIMENSIONS, PANEL_SECTION_IDS } from '../../lib/templates/template-contract.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
@@ -50,36 +50,105 @@ test('§4 BUILD FRESH — the user app imports nothing from Generator.jsx or its
 // a second pointer handler appearing anywhere still fails this suite closed.
 const CHROME_GRIP = /onPointer(Down|Move|Up|Cancel)=\{(startPanelResize|movePanelResize|endPanelResize)\}/g;
 
+/* A SECOND NAMED EXCEPTION, and it is a real relaxation of a law-class guard
+   (client ruling 2026-08-18): "i want to still shift around the image and
+   resize the image. this only applies to petal window template."
+
+   §3 bans free drag/pan/zoom of ANYTHING. What is allowed here is narrower than
+   that ban was written for: the MASK never moves, the template's geometry never
+   changes, and the only thing the drag writes is WHICH PART OF HER PICTURE shows
+   through a fixed window. That is content, the same class of choice as which
+   photo — not layout. Every position on the canvas still has exactly one owner,
+   and it is the template.
+
+   Stripped BY EXACT HANDLER NAME and BY EXACT CONTROL ID, so a second pointer
+   handler or a second range input appearing anywhere still fails this suite
+   closed. The tests below re-tighten around it. */
+const PHOTO_PAN = /onPointer(Down|Move|Up|Cancel)=\{photoAdjustable && photoImage \? (startPhotoPan|movePhotoPan|endPhotoPan) : undefined\}/g;
+const PHOTO_ZOOM = /<input\s*\n\s*id="photo-zoom"[\s\S]*?\/>/g;
+
 test('§3 NON-GOALS are absent, permanently — no drag, zoom, size control, or free colour', () => {
   const banned = [
     [/onPointerDown|onMouseDown|onDragStart|draggable/, 'drag'],
-    [/onWheel|zoom|scale\s*[:=]\s*\d/i, 'zoom/scale'],
+    // (client ruling 2026-08-18) The bare word `zoom` can no longer be banned:
+    // the photo crop has a sanctioned one. What is still banned is the FREE
+    // kind — a wheel/pinch zoom of the design, or a numeric scale factor
+    // applied to anything. Every remaining mention of zoom is checked by name
+    // in the photo-crop test below, so this is narrowed rather than dropped.
+    [/onWheel|scale\s*[:=]\s*\d/i, 'a free zoom/scale of the design'],
     [/type=["']color["']/, 'a free colour picker'],
     [/fontSize.*slider|sizeStep|globalSizeStep|<input[^>]*type=["']range["']/, 'a size control'],
   ];
   for (const [name, src] of SOURCES) {
-    const scanned = src.replace(CHROME_GRIP, '');
+    const scanned = src.replace(CHROME_GRIP, '').replace(PHOTO_PAN, '').replace(PHOTO_ZOOM, '');
     for (const [re, what] of banned) {
       assert.ok(!re.test(scanned), `${name} introduces ${what} — a §3 non-goal, permanently out of scope`);
     }
   }
 });
 
-test('the ONE sanctioned pointer drag moves chrome only — never a preview', () => {
+test('the sanctioned pointer drags are exactly two: the panel grip, and the photo crop', () => {
   const composer = stripComments(readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8'));
-  // Every pointer handler in the file belongs to the grip.
-  const handlers = [...composer.matchAll(/onPointer[A-Za-z]+=\{([A-Za-z0-9_]+)\}/g)].map((m) => m[1]);
+  // Every pointer handler in the file belongs to one of the two.
+  const handlers = [...composer.matchAll(/onPointer[A-Za-z]+=\{(?:[^}]*\?\s*)?([A-Za-z0-9_]+)/g)].map((m) => m[1]);
   assert.ok(handlers.length > 0, 'the grip vanished — the panel is no longer resizable');
   for (const h of handlers) {
-    assert.match(h, /^(startPanelResize|movePanelResize|endPanelResize)$/, `pointer handler '${h}' is not the panel grip`);
+    assert.match(
+      h, /^(startPanelResize|movePanelResize|endPanelResize|startPhotoPan|movePhotoPan|endPhotoPan)$/,
+      `pointer handler '${h}' is neither the panel grip nor the photo crop`,
+    );
   }
-  // …and it only ever writes the panel width.
+  // The grip only ever writes the panel width.
   const body = composer.slice(composer.indexOf('function movePanelResize'), composer.indexOf('function endPanelResize'));
   assert.match(body, /setPanelWidth\(clampPanel\(/);
   assert.ok(!/setValues|setColourPairId|setLogoPosition|canvasRefs/.test(body), 'the grip reaches design state');
-  // The canvases carry no pointer/mouse handlers at all.
-  const canvasTag = composer.slice(composer.indexOf('<canvas'), composer.indexOf('</div>', composer.indexOf('<canvas')));
-  assert.ok(!/on(Pointer|Mouse|Touch|Drag)/.test(canvasTag), 'a preview canvas grew an input handler');
+});
+
+/* THE SECOND RELAXATION, RE-TIGHTENED (client ruling 2026-08-18). The canvas may
+   now carry a drag — for exactly one purpose, writing exactly one value, on
+   exactly the templates that declare it. */
+test('the photo crop moves the PICTURE inside a fixed window — never the window, never a slot', () => {
+  const composer = stripComments(readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8'));
+  // WHERE it is offered is DATA, on the slot — never a template-id check.
+  assert.match(composer, /const photoAdjustable = TEMPLATE\.slots\.photo\?\.adjustable === true/);
+  // The canvas handlers exist ONLY when the template allows it and a photo is there.
+  // The PREVIEW canvas, not the shape thumbnail's — found by the ref that only
+  // the preview carries.
+  const at = composer.indexOf('canvasRefs.current[dimId] = el');
+  const canvasTag = composer.slice(composer.lastIndexOf('<canvas', at), composer.indexOf('/>', at));
+  for (const ev of ['onPointerDown', 'onPointerMove', 'onPointerUp', 'onPointerCancel']) {
+    assert.ok(
+      new RegExp(ev + '=\\{photoAdjustable && photoImage \\?').test(canvasTag),
+      `${ev} is not gated on the template's declaration`,
+    );
+  }
+  assert.ok(!/onMouse|onTouch|onDrag/.test(canvasTag), 'a preview canvas grew a second kind of input handler');
+  assert.match(canvasTag, /touchAction: photoAdjustable && photoImage \? 'none' : undefined/, 'a touch drag must not turn into a page scroll');
+  // …and the drag writes the TRANSFORM and nothing else. Not a slot value, not
+  // a colour, not a position, not the template's geometry.
+  const pan = composer.slice(composer.indexOf('function movePhotoPan'), composer.indexOf('function endPhotoPan'));
+  assert.match(pan, /setPhotoTransform\(/);
+  assert.ok(!/setValues|setColourPairId|setLogoPosition|setMaskShapeId|setTemplateId|setShowText|canvasRefs/.test(pan), 'the crop reaches design state');
+  // The clamp is not the guarantee — the UNITS are (see the render core) — but
+  // the surface must not hand out a value outside the range either.
+  assert.match(pan, /Math\.max\(-1, Math\.min\(1, n[xy]\)\)/);
+  // A reset back to the default fit is mandatory: a crop with no way back is a
+  // trap, and this audience will find it.
+  assert.match(composer, /function resetPhotoTransform\(\) \{ setPhotoTransform\(\{ x: 0, y: 0, zoom: 1 \}\); \}/);
+  assert.match(composer, />Reset</);
+  // The zoom is the ONE range input in the app, and it is the photo's.
+  assert.equal([...composer.matchAll(/type="range"/g)].length, 1, 'a second slider appeared — §3 still bans size controls');
+  assert.match(composer, /id="photo-zoom"/);
+  /* EVERY remaining mention of `zoom` belongs to this one control. The §3
+     guard above used to ban the word outright; this is what replaces it, so
+     the ban is narrowed by enumeration rather than quietly dropped. */
+  const ZOOM_OK = /(PHOTO_ZOOM_(MIN|MAX)|photo-zoom|zoom: 1|\{ \.\.\.t, zoom: Number|photoTransform\.zoom|zoomRow|zoomLabel|zoomInput)/;
+  for (const line of composer.split('\n')) {
+    if (!/zoom/i.test(line)) continue;
+    assert.ok(ZOOM_OK.test(line), `an unaccounted-for zoom appeared: ${line.trim()}`);
+  }
+  // ONE transform for all four dimensions — she crops once, not four times.
+  assert.ok(!/photoTransform\[dimId\]|photoTransforms/.test(composer), 'the crop must not become per-dimension state');
 });
 
 test('the composer consumes ONLY the template contract + render core', () => {
@@ -242,4 +311,83 @@ test('the inline <style> block contains no character the server will entity-esca
   const css = composer.slice(open + '<style>{`'.length, close);
   const offenders = css.split('\n').map((l, i) => [i, l]).filter(([, l]) => /['"<>&]/.test(l));
   assert.deepEqual(offenders, [], `escapable characters inside <style>: ${JSON.stringify(offenders)}`);
+});
+
+/* ── SECTION ORDER IS DATA, NOT A BRANCH (client ruling 2026-08-18) ──────────
+   The order differs per template — Classic leads with the words, Petal Window
+   with the window. The tempting implementation is
+   `if (template.id === 'petal_window')` in the panel, which is the solver
+   returning as UI code. The contract's whole point is that a template DECLARES
+   and the surface OBEYS, so the surface is guarded in the source. */
+test('the panel RENDERS the declared order and never branches on a template id', () => {
+  // RAW source on purpose. `stripComments` is a blunt regex, and this file
+  // contains an image accept attribute ending in a star-slash pair, which that
+  // regex reads as the start of a comment and then swallows everything up to
+  // the next real comment close. Reading the raw file is the honest guard
+  // here; no comment in the user app names a template id, so nothing is being
+  // smuggled past it.
+  const composer = readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8');
+  const RAW = USER_APP.map((f) => [f.replace(root + '/', ''), readFileSync(f, 'utf8')]);
+  assert.match(composer, /TEMPLATE\.panelSections\.map\(/, 'the panel must render the template\'s declared section order');
+  // Not one comparison against a template id anywhere in the user app.
+  for (const [name, src] of RAW) {
+    assert.ok(!/label_headline|petal_window/.test(src), `${name} names a template id — the surface must consume the contract, not recognise templates`);
+    // Comparing two templates to each other is identity (which one is
+    // current); comparing one to a LITERAL is recognition, and that is the
+    // branch the contract exists to prevent.
+    assert.ok(
+      !/\.id\s*===\s*['"]|['"]\s*===\s*\w+\.id/.test(src),
+      `${name} compares a template id to a literal — the surface must consume the contract, not recognise templates`,
+    );
+  }
+  // Every section the template vocabulary allows has an entry, so a template
+  // declaring one can never render a hole.
+  for (const id of PANEL_SECTION_IDS) {
+    assert.match(composer, new RegExp(`\\n    ${id}: \\(`), `the panel has no '${id}' section to render`);
+  }
+});
+
+test('the merged sections are the client\'s groupings, with the photo control shared not duplicated', () => {
+  const composer = readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8');
+  // "replace the edit colour for Background"
+  assert.match(composer, /<span style=\{S\.label\}>Background<\/span>/, 'the COLOUR section is now labelled Background');
+  // …and the colour section that is NOT merged keeps its own label, because
+  // template two genuinely has two separate decisions.
+  assert.match(composer, /<span style=\{S\.label\}>Colour<\/span>/);
+  assert.match(composer, /<span style=\{S\.label\}>The window<\/span>/);
+  // ONE photo control, used by both merged sections — same holds, same refusal
+  // copy, same required/optional line, in either grouping.
+  assert.equal((composer.match(/const photoControl = \(/g) || []).length, 1);
+  assert.equal((composer.match(/&& photoControl\}/g) || []).length, 2, 'both merged sections must reuse the same control');
+  assert.equal((composer.match(/Choose from library/g) || []).length, 1, 'the photo control was duplicated, not shared');
+});
+
+
+/* ── THE TEXT TOGGLE (client ruling 2026-08-18) ──────────────────────────────
+   "ideally i should have a deactive text toggle next to the line that carries
+    the post." A stored CHOICE, offered by the data, never inferred from what
+   she has typed and never eating her words. */
+test('the text toggle is offered by the DATA and never inferred from the copy', () => {
+  const composer = stripComments(readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8'));
+  assert.match(composer, /templateOffersTextToggle\(TEMPLATE\)/, 'which templates show it must come from the template');
+  assert.match(composer, /const \[showText, setShowText\] = useState\(true\)/, 'text is on until she turns it off');
+  assert.match(composer, /aria-pressed=\{showText\}/);
+  assert.match(composer, /setShowText\(\(on\) => !on\)/, 'it turns off AND on');
+  // It reaches the render as a VALUE — the core inspects no copy to decide.
+  assert.match(composer, /renderTemplate\(ctx, TEMPLATE, dimId, \{\s*\n\s*\.\.\.values,\s*\n\s*showText,/);
+  // …and nothing anywhere decides the layout by looking at whether she typed.
+  assert.ok(!/showText\s*[:=]\s*[^;,)]*\.trim\(\)/.test(composer), 'the toggle must not be derived from the copy');
+  // §6.3 rule 1 — turning it off keeps her words, and says so.
+  assert.match(composer, /Your words are kept and come back when you turn text on/);
+  assert.ok(!/photoOnly|withHeading/.test(composer), 'she must never be shown a state name');
+  // …and it survives a template swap with the rest of her choices (§6.3 rule 3).
+  assert.match(composer, /\{ colourPairId, logoPosition, logoVariantId, showText \}/);
+});
+
+test('field labels are per-template data, not a map the surface keys by template', () => {
+  const composer = readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8');
+  assert.match(composer, /TEMPLATE\.slotLabels\?\.\[slot\]/, 'a template may override its own field copy');
+  // The surface still owns the DEFAULTS — the override is a merge, not a
+  // replacement, so a template that says nothing gets the shared wording.
+  assert.match(composer, /\.\.\.\(FIELD_LABELS\[slot\] \|\| \{ label: slot, hint: '' \}\)/);
 });

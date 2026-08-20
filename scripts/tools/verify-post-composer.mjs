@@ -24,6 +24,11 @@
      8. WINDOW   template two's petal shape is HERS to pick: every sanctioned
                  silhouette is offered, each renders differently in all four,
                  and none of them appears on template one.
+     9. SECTIONS the panel renders the TEMPLATE'S declared section order, both
+                 templates, read off the live DOM; the merged sections really do
+                 hold the photo control; and the text toggle switches template
+                 two's two authored layouts in BOTH directions without losing a
+                 word or a choice.
      7. SWAP     the selector offers BOTH templates and really switches; the
                  required photo on template two blocks export until one is
                  chosen; and a round trip through the two loses NOTHING (§6.3).
@@ -381,6 +386,7 @@ async function main() {
            two (which shows only a heading), swap back — nothing may be lost,
            and her colour/mark/position choices must come back too.            */
     console.log('\n7. TEMPLATE TWO — the selector is a real switch, and nothing is lost in a swap');
+    /* eslint-disable no-inner-declarations */
     const setField = async (slot, text) => {
       const el = page.locator(`#slot-${slot}`);
       if (!(await el.count())) return false;
@@ -533,7 +539,7 @@ async function main() {
     // (checked after the swap back, below)
 
     // §6.3 — SWAP BACK. Nothing may have been lost.
-    await pickTemplate('Label + Headline');
+    await pickTemplate('Classic');
     const afterSwapFields = await readFields();
     const afterSwapChoices = await readChoices();
     console.log(`  back on template one: ${JSON.stringify(afterSwapFields)}`);
@@ -552,6 +558,186 @@ async function main() {
     if (shapeControlOnOne) fail(`template one shows ${shapeControlOnOne} window-shape control(s) — the petal shapes are template two's alone`);
     console.log('  template one shows no window-shape control (the shapes are template two\'s alone)');
     await page.screenshot({ path: join(OUT, 'two-swapped-back.png') });
+
+    /* ── 9. THE DECLARED SECTION ORDER, AND THE TEXT TOGGLE ─────────────────
+       (client rulings 2026-08-18) The panel must render the ORDER THE TEMPLATE
+       DECLARES — read off the live DOM, not off the source — and the merged
+       sections must really contain the photo control rather than sitting next
+       to it. Then the toggle, in both directions, losing nothing.        */
+    console.log('\n9. SECTIONS — the panel renders the template\'s declared order');
+    const sectionsNow = () => page.evaluate(() => [...document.querySelectorAll('.wo-panel-scroll [data-section]')]
+      .map((n) => n.dataset.section));
+
+    for (const tpl of [T, TWO]) {
+      await pickTemplate(tpl.name);
+      const got = await sectionsNow();
+      console.log(`  ${tpl.name.padEnd(14)} declared ${JSON.stringify(tpl.panelSections)}  rendered ${JSON.stringify(got)}`);
+      if (JSON.stringify(got) !== JSON.stringify(tpl.panelSections)) {
+        fail(`${tpl.name}: the panel rendered ${JSON.stringify(got)} but the template declares ${JSON.stringify(tpl.panelSections)}`);
+      }
+      // The MERGED section holds the photo control — inside it, not beside it.
+      const merged = tpl.panelSections.find((id) => id === 'background' || id === 'window');
+      const inside = await page.evaluate((id) => {
+        const sec = document.querySelector(`[data-section="${id}"]`);
+        const btn = [...document.querySelectorAll('button')].find((b) => /Choose from library/.test(b.textContent || ''));
+        const swatch = [...document.querySelectorAll('button[title]')].find((b) => /contrast/.test(b.title || ''));
+        const shape = document.querySelector('[data-shape-src]');
+        return {
+          photo: !!(sec && btn && sec.contains(btn)),
+          colour: !!(sec && swatch && sec.contains(swatch)),
+          shape: !!(sec && shape && sec.contains(shape)),
+          label: sec ? sec.querySelector('span')?.textContent : null,
+        };
+      }, merged);
+      console.log(`  ${tpl.name.padEnd(14)} '${merged}' → ${JSON.stringify(inside)}`);
+      if (!inside.photo) fail(`${tpl.name}: the '${merged}' section does not contain the photo control`);
+      if (merged === 'background' && !inside.colour) fail('the Background section does not contain the colour picker');
+      if (merged === 'background' && inside.label !== 'Background') fail(`the merged section is labelled '${inside.label}', not 'Background'`);
+      if (merged === 'window' && !inside.shape) fail('the window section does not contain the shape picker');
+      // FIRST is the template's declaration, so it is checked against the
+      // declaration rather than against a hardcoded expectation.
+      if (got[0] !== tpl.panelSections[0]) fail(`${tpl.name}: '${tpl.panelSections[0]}' is declared first but '${got[0]}' rendered first`);
+      const wordsAt = got.indexOf('words');
+      if (wordsAt >= 0 && got.indexOf(merged) > wordsAt) fail(`${tpl.name}: '${merged}' rendered BELOW the copy fields`);
+      await page.screenshot({ path: join(OUT, `sections-${tpl.id}.png`) });
+    }
+
+    // ── THE TEXT TOGGLE, on template two, both directions ──────────────────
+    console.log('\n9b. TEXT TOGGLE — two authored layouts, and nothing lost either way');
+    await pickTemplate(TWO.name);
+    // Give it words and non-default choices first, so "nothing is lost" is a
+    // real claim rather than a vacuous one.
+    await setField('heading', 'Where the day begins');
+    await page.locator('button[title^="Forest "]').click();
+    await page.waitForTimeout(400);
+    const toggle = page.locator('button[title^="Turn the words on this design off"]');
+    if (!(await toggle.count())) fail('template two has no text toggle');
+    else {
+      const onDigests = await digests(page);
+      const onChoices = await readChoices();
+      await page.screenshot({ path: join(OUT, 'two-text-on.png') });
+      await toggle.click();
+      await page.waitForTimeout(1200);
+      const offDigests = await digests(page);
+      const offFields = await readFields();
+      const offChoices = await readChoices();
+      console.log(`  text off → ${JSON.stringify(hashAll(offDigests))}`);
+      for (const k of Object.keys(onDigests)) {
+        if (offDigests[k] === onDigests[k]) fail(`${k}: turning text off changed NO pixels — the second layout is decorative (M4)`);
+      }
+      if (offFields.heading !== 'Where the day begins') fail(`turning text off ATE her words: '${offFields.heading}'`);
+      if (JSON.stringify(offChoices) !== JSON.stringify(onChoices)) fail(`the toggle disturbed her choices: ${JSON.stringify(onChoices)} -> ${JSON.stringify(offChoices)}`);
+      if ((await toggle.textContent()).trim() !== 'Text off') fail('the toggle does not say what it now is');
+      const offHolds = (await holds(page)).filter(([, t]) => t === 'On hold').map(([d]) => d);
+      if (offHolds.length) fail(`text off put ${offHolds.join(', ')} on hold — ${JSON.stringify(await warnings(page))}`);
+      await page.screenshot({ path: join(OUT, 'two-text-off.png') });
+      for (const dimId of ['portrait', 'story', 'square', 'landscape']) {
+        const png = await page.evaluate((d) => document.querySelector(`.wo-cell-${d} canvas`).toDataURL('image/png'), dimId);
+        writeFileSync(join(OUT, `two-text-off-${dimId}.png`), Buffer.from(png.split(',')[1], 'base64'));
+      }
+      // …and BACK, byte for byte.
+      await toggle.click();
+      await page.waitForTimeout(1200);
+      const backDigests = await digests(page);
+      for (const k of Object.keys(onDigests)) {
+        if (backDigests[k] !== onDigests[k]) fail(`${k}: turning text back on did not restore the design byte for byte`);
+      }
+      console.log('  text on → off → on is reversible, byte for byte, with every word and choice intact');
+      // The toggle belongs to template two ALONE — Classic declares one layout.
+      await pickTemplate(T.name);
+      const onOne = await page.locator('button[title^="Turn the words on this design off"]').count();
+      if (onOne) fail(`Classic shows ${onOne} text toggle(s) — it has no second layout to switch to`);
+      console.log('  Classic shows no toggle (it declares one layout, so there is nothing to switch to)');
+      await page.screenshot({ path: join(OUT, 'classic-sections.png') });
+    }
+
+    /* ── 9c. HER CROP INSIDE THE WINDOW (client ruling 2026-08-18) ──────────
+       "i want to still shift around the image and resize the image. this only
+        applies to petal window template."
+       Driven the way SHE drives it: a real pointer drag on a preview, and the
+       real slider. All four previews must move at once (one transform, not
+       four), the reset must return exactly, and Classic must not offer it. */
+    console.log('\n9c. FRAMING — pan and zoom inside the fixed window, all four at once');
+    await pickTemplate(TWO.name);
+    await page.waitForTimeout(600);
+    const zoom = page.locator('#photo-zoom');
+    if (!(await zoom.count())) fail('template two offers no photo zoom, but its photo is declared adjustable');
+    else {
+      const start = await digests(page);
+      // ZOOM — every preview must move, from one control.
+      await zoom.fill('2');
+      await page.waitForTimeout(1000);
+      const zoomed = await digests(page);
+      for (const k of Object.keys(start)) {
+        if (zoomed[k] === start[k]) fail(`${k}: the zoom moved no pixels — one transform must reach all four dimensions`);
+      }
+      console.log(`  zoom 1 -> 2: ${JSON.stringify(hashAll(zoomed))} (all four moved)`);
+      await page.screenshot({ path: join(OUT, 'two-crop-zoomed.png') });
+
+      // PAN — a real drag on the portrait preview, moving all four.
+      const box = await page.locator('.wo-cell-portrait canvas').boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3, { steps: 12 });
+      await page.mouse.up();
+      await page.waitForTimeout(1000);
+      const panned = await digests(page);
+      for (const k of Object.keys(start)) {
+        if (panned[k] === zoomed[k]) fail(`${k}: dragging the preview moved no pixels — the pan does not reach ${k}`);
+      }
+      console.log(`  drag:        ${JSON.stringify(hashAll(panned))} (all four moved)`);
+      const heldCrop = (await holds(page)).filter(([, t]) => t === 'On hold').map(([d]) => d);
+      if (heldCrop.length) fail(`a crop put ${heldCrop.join(', ')} on hold — ${JSON.stringify(await warnings(page))}`);
+      await page.screenshot({ path: join(OUT, 'two-crop-panned.png') });
+      for (const dimId of ['portrait', 'story', 'square', 'landscape']) {
+        const png = await page.evaluate((d) => document.querySelector(`.wo-cell-${d} canvas`).toDataURL('image/png'), dimId);
+        writeFileSync(join(OUT, `two-crop-${dimId}.png`), Buffer.from(png.split(',')[1], 'base64'));
+      }
+
+      // RESET — back to the default fit, byte for byte.
+      await page.locator('button', { hasText: 'Reset' }).click();
+      await page.waitForTimeout(1000);
+      const reset = await digests(page);
+      for (const k of Object.keys(start)) {
+        if (reset[k] !== start[k]) fail(`${k}: Reset did not return to the default fit byte for byte`);
+      }
+      console.log('  reset:       byte-identical to the default fit');
+
+      /* IT SURVIVES A SWAP AND A MASK CHANGE (§6.3). Crop, leave, come back —
+         the framing must be exactly where she left it. */
+      await zoom.fill('2.4');
+      await page.waitForTimeout(900);
+      const cropped = await digests(page);
+      await pickTemplate(T.name);
+      await page.waitForTimeout(900);
+      await pickTemplate(TWO.name);
+      await page.waitForTimeout(1200);
+      const afterSwap = await digests(page);
+      for (const k of Object.keys(cropped)) {
+        if (afterSwap[k] !== cropped[k]) fail(`${k}: her framing did not survive a template swap`);
+      }
+      if ((await page.locator('#photo-zoom').inputValue()) !== '2.4') fail('the zoom control lost her value across a swap');
+      console.log('  her framing survived a swap away and back, byte for byte');
+      // …and a mask change keeps it (re-clamped by construction — the transform
+      // is in units of the slack, so no silhouette can invalidate it).
+      const other = TWO.allowedMaskShapes.find((id) => id !== TWO.slots.photo.mask);
+      await page.locator(`button[aria-pressed]:has([data-shape-src="/assets/shapes/${other}.svg"])`).click();
+      await page.waitForTimeout(1000);
+      if ((await page.locator('#photo-zoom').inputValue()) !== '2.4') fail('a window-shape change discarded her framing');
+      const heldMask = (await holds(page)).filter(([, t]) => t === 'On hold').map(([d]) => d);
+      if (heldMask.length) fail(`a crop + a different window put ${heldMask.join(', ')} on hold`);
+      console.log('  …and a different window shape kept it, with nothing on hold');
+      await page.locator(`button[aria-pressed]:has([data-shape-src="/assets/shapes/${TWO.slots.photo.mask}.svg"])`).click();
+      await page.waitForTimeout(600);
+      await page.locator('button', { hasText: 'Reset' }).click();
+      await page.waitForTimeout(600);
+
+      // CLASSIC MUST NOT OFFER IT — its photo is declared not adjustable.
+      await pickTemplate(T.name);
+      await page.waitForTimeout(600);
+      if (await page.locator('#photo-zoom').count()) fail('Classic offers a photo crop — its photo is a texture behind type, declared not adjustable');
+      console.log('  Classic offers no framing control (its photo is declared not adjustable)');
+    }
 
     const realNetFailures = netFlakes.filter((u) => u.startsWith('OTHER '));
     const libraryFlakes = netFlakes.length - realNetFailures.length;

@@ -18,10 +18,18 @@
      · TEXT NEVER SITS OVER THE PHOTO. Not a promise — a measured geometric
        fact: the heading box and the petal box must not intersect in ANY
        dimension, and the mark's placed rect must not either.
-     · THE PETAL IS FIXED. The geometry with an empty heading and the geometry
-       with a full one must be IDENTICAL; the petal may not move or shrink to
-       make room. Proved by masking the heading band out of both renders and
-       comparing the remaining pixels byte for byte.
+     · THE PETAL IS FIXED — WITHIN A STATE. The geometry with ONE character of
+       heading and with a full budget must be IDENTICAL; the petal may not move
+       or shrink to make room for words. Proved by masking the heading band out
+       of both renders and comparing the remaining pixels byte for byte.
+       (AMENDED by the client ruling of 2026-08-18 — the photoOnly state. An
+       EMPTY heading no longer belongs in that comparison: it is a different
+       AUTHORED LAYOUT, deliberately drawn with a bigger petal, not the same
+       layout reflowing. The ban on reflow is unchanged and is what this gate
+       still measures; it now measures it where reflow could actually happen.)
+     · THE TWO AUTHORED STATES. photoOnly (a photo, no words) and withHeading
+       both clear the §11 bar in all four dimensions, the switch is binary on
+       emptiness in both directions, and NOTHING else moves across it.
 
    Runs in the same headless-Chromium harness the budget measurement uses, so
    the thing being verified is the thing that paints. Writes PNG evidence to
@@ -36,10 +44,41 @@ import { join } from 'node:path';
 import { openHarness, REPO_ROOT } from './template-harness.mjs';
 import { templateMaskAsset, templateMaskShapes } from '../../lib/templates/mask-assets.mjs';
 import { TEMPLATE_PETAL_WINDOW as T } from '../../lib/templates/index.mjs';
+import { DIMENSIONS } from '../../lib/templates/template-contract.mjs';
 
 const OUT_DIR = join(REPO_ROOT, 'generated', 'template-two');
 const FILLER = 'every child leads their own day here with us and we make room for what they want to try next in the garden';
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/* ── ONE ACKNOWLEDGED, UNRESOLVED CONFLICT (client ruling 2026-08-18) ────────
+   "for lapscape, still bring the petal window frame down centralized
+    vertically, make 1.6x bigger."
+
+   That number is honoured exactly: `photoOnly` landscape is 1.6x the previous
+   window, centred on both axes. It cannot ALSO keep the mark's corner on flat
+   field. At 16:9 a petal 1.6x larger and vertically centred bleeds off the top
+   AND the bottom, so at the mark's own height the silhouette is at its widest
+   and reaches into both bottom corners. Measured, in the render core:
+
+     shape-1 (default)  mark contrast 3.04 : 1  — scrapes past the 3.0 floor
+     shape-2            mark contrast 3.69 : 1  — passes
+     shape-3            mark contrast 1.95 : 1  — FAILS, landscape goes on hold
+                                                  and cannot be exported
+
+   Per the ruling this is REPORTED, not silently shrunk. These findings are
+   routed to a named conflict so the rest of the §11 bar stays a real gate;
+   nothing else is excused, and this block goes the moment the client rules.
+
+   THE OPTIONS, for that ruling:
+     (a) 1.38x instead of 1.6x — the largest centred landscape petal that keeps
+         BOTH sanctioned mark corners on flat field.
+     (b) Keep 1.6x and drop bottom-right from allowedLogoPositions, then move
+         the mark itself (a state may override the logo pad/widthFrac) into the
+         field that survives at the left edge.
+     (c) Keep 1.6x and accept that landscape cannot be exported with shape-3.
+         NOT recommended: a shape she can pick that silently blocks a format is
+         the surprise class this whole app exists to remove. */
+const PENDING_RULING = /^photoOnly-shape-\d\/landscape: (the silhouette reaches|contrast failures logo|the mark was not measured)/;
 
 async function run() {
   mkdirSync(OUT_DIR, { recursive: true });
@@ -48,6 +87,8 @@ async function run() {
   const mask = templateMaskAsset(T);
   const shapes = templateMaskShapes(T);
   const failures = [];
+  const acknowledged = [];
+  const fail = (m) => (PENDING_RULING.test(m) ? acknowledged : failures).push(m);
   if (!mask) failures.push(`the declared default mask id '${T.slots.photo.mask}' does not resolve — law 3`);
   if (shapes.length !== (T.allowedMaskShapes || []).length) failures.push('a declared window shape id did not resolve');
 
@@ -123,6 +164,112 @@ async function run() {
         }
       }
 
+      /* ── THE photoOnly STATE, ITS OWN §11 SWEEP (client ruling 2026-08-18) ─
+         TEXT OFF is a choice she makes, so it is set here as a value — the core
+         inspects no copy. Her words are deliberately still in the values, to
+         prove that turning text off HIDES rather than discards them. */
+      const photoOnly = [];
+      for (const dimId of dimIds) {
+        const dim = DIMENSIONS[dimId];
+        canvas.width = dim.w; canvas.height = dim.h;
+        const truth = renderTemplate(ctx, tpl, dimId, {
+          ...base('sage'), showText: false, heading: exactly(budget), photoImage: photo,
+        }, {});
+        photoOnly.push({ dimId, truth });
+        shots.push({ name: `photoonly-${dimId}`, data: canvas.toDataURL('image/png') });
+      }
+
+      /* EVERY SANCTIONED SHAPE, BLED (client ruling 2026-08-18). A silhouette
+         that read well contained can crop awkwardly once the window bleeds, so
+         every one she can pick is rendered in this state too — and its painted
+         rect is reported so an awkward crop is a NUMBER, not an impression. */
+      const photoOnlyShapes = [];
+      for (const sh of shapeList) {
+        const img = await loadImage(sh.src);
+        const rec = { id: sh.id, loaded: !!img, dims: {} };
+        if (img) {
+          for (const dimId of dimIds) {
+            const dim = DIMENSIONS[dimId];
+            canvas.width = dim.w; canvas.height = dim.h;
+            const truth = renderTemplate(ctx, tpl, dimId, {
+              ...base('sage'), showText: false, photoImage: photo, maskImage: img, maskShapeId: sh.id,
+            }, {});
+            // WHERE THE SILHOUETTE ACTUALLY LANDS: the core CONTAINS it in the
+            // window at the asset's own ratio, so this is the real crop.
+            const b = truth.photo ? truth.photo.box : null;
+            const ar = img.naturalWidth / img.naturalHeight;
+            let paint = null;
+            if (b) {
+              const s2 = Math.min(b.w / img.naturalWidth, b.h / img.naturalHeight);
+              const pw = img.naturalWidth * s2; const ph = img.naturalHeight * s2;
+              paint = {
+                l: (b.x + (b.w - pw) / 2) / dim.w, r: (b.x + (b.w + pw) / 2) / dim.w,
+                t: (b.y + (b.h - ph) / 2) / dim.h, b: (b.y + (b.h + ph) / 2) / dim.h,
+              };
+            }
+            rec.dims[dimId] = {
+              reported: truth.photo ? truth.photo.mask : null, ar, paint,
+              missingAssets: truth.missingAssets, missingRequired: truth.missingRequired,
+              contrastFailures: truth.contrastFailures, mark: truth.backdrop.logo,
+            };
+            if (dimId === 'portrait') shots.push({ name: `photoonly-shape-${sh.id}-portrait`, data: canvas.toDataURL('image/png') });
+          }
+        }
+        photoOnlyShapes.push(rec);
+      }
+
+      /* ── HER CROP INSIDE THE WINDOW (client ruling 2026-08-18) ────────────
+         Rendered in the real core, at the extremes of the range, so "the window
+         can never show empty field" is a measured fact. The mark sits on flat
+         field by geometry, so a photo transform must NOT move its backdrop
+         verdict — asserted rather than assumed. */
+      const crops = [];
+      for (const dimId of dimIds) {
+        const dim = DIMENSIONS[dimId];
+        for (const [name, tf] of [
+          ['default', { x: 0, y: 0, zoom: 1 }],
+          ['zoom-2', { x: 0, y: 0, zoom: 2 }],
+          ['top-left', { x: -1, y: -1, zoom: 2 }],
+          ['bottom-right', { x: 1, y: 1, zoom: 2 }],
+          ['zoom-max', { x: 1, y: -1, zoom: 3 }],
+          ['out-of-range', { x: 9, y: -9, zoom: 99 }],
+        ]) {
+          canvas.width = dim.w; canvas.height = dim.h;
+          const truth = renderTemplate(ctx, tpl, dimId, {
+            ...base('sage'), heading: 'Where the day begins', photoImage: photo, photoTransform: tf,
+          }, {});
+          /* THE REAL TEST OF "no empty field in the window": sample the painted
+             window and count pixels that are the FIELD colour. The studio card
+             is mid-grey with dark stripes; the sage field is #C3D2BC. If the
+             photo ever failed to cover the mask, field pixels would appear
+             INSIDE the silhouette — which is what this counts. */
+          let fieldInside = 0; let sampled = 0;
+          const b = truth.photo ? truth.photo.box : null;
+          if (b) {
+            const x0 = Math.max(0, Math.round(b.x)); const y0 = Math.max(0, Math.round(b.y));
+            const x1 = Math.min(dim.w, Math.round(b.x + b.w)); const y1 = Math.min(dim.h, Math.round(b.y + b.h));
+            // The centre quarter of the visible window is inside every
+            // silhouette, so field colour there can only mean a gap.
+            const cx = Math.round((x0 + x1) / 2); const cy = Math.round((y0 + y1) / 2);
+            const qw = Math.max(4, Math.round((x1 - x0) / 4)); const qh = Math.max(4, Math.round((y1 - y0) / 4));
+            const d = ctx.getImageData(cx - qw / 2, cy - qh / 2, qw, qh).data;
+            for (let i = 0; i < d.length; i += 4 * 7) {
+              sampled += 1;
+              if (Math.abs(d[i] - 195) + Math.abs(d[i + 1] - 210) + Math.abs(d[i + 2] - 188) < 18) fieldInside += 1;
+            }
+          }
+          crops.push({
+            dimId, name, fieldInside, sampled,
+            transform: truth.photo ? truth.photo.transform : null,
+            mark: truth.backdrop.logo, contrastFailures: truth.contrastFailures,
+            missingRequired: truth.missingRequired,
+          });
+          if (dimId === 'portrait' && (name === 'zoom-2' || name === 'bottom-right')) {
+            shots.push({ name: `crop-${name}-portrait`, data: canvas.toDataURL('image/png') });
+          }
+        }
+      }
+
       // ── THE EMPTY STATE — no photo at all ────────────────────────────────
       const emptyState = [];
       for (const dimId of dimIds) {
@@ -157,7 +304,13 @@ async function run() {
       /* ── THE PETAL IS FIXED (not a solver in data) ────────────────────────
          Render empty-heading and full-heading, blank the heading band out of
          BOTH, and hash what is left. If the petal moved or resized to make room
-         for the words, these two hashes differ. */
+         for the words, these two hashes differ.
+
+         STILL EXACTLY THIS GATE after the two authored states landed (client
+         ruling 2026-08-18), and that is the point: the second layout is chosen
+         by HER TOGGLE, never by the copy, so text-on with an empty heading is
+         the same drawing as text-on with a full one — geometry is never
+         recomputed from content. The toggle is gated separately, below. */
       const fixedGeometry = [];
       for (const dimId of dimIds) {
         const dim = DIMENSIONS[dimId];
@@ -182,6 +335,43 @@ async function run() {
           return canvas.toDataURL('image/png');
         };
         fixedGeometry.push({ dimId, empty: shot(''), full: shot(exactly(budget)) });
+      }
+
+      /* ── THE TEXT TOGGLE (client ruling 2026-08-18) ────────────────────────
+         Text OFF renders photoOnly; text ON renders withHeading. Both
+         directions, in every dimension, with deliberately NON-DEFAULT choices
+         in play (a second silhouette, the forest pair, the other mark corner)
+         and REAL WORDS IN THE HEADING throughout — so the gate proves both that
+         nothing she chose is disturbed by the switch and that turning text off
+         HIDES her words rather than discarding them (§6.3 rule 1). */
+      const altMask = shapeList.length > 1 ? await loadImage(shapeList[1].src) : maskImage;
+      const transition = [];
+      for (const dimId of dimIds) {
+        const dim = DIMENSIONS[dimId];
+        const held = {
+          ...base('forest'),
+          logoPosition: tpl.allowedLogoPositions[1] || tpl.allowedLogoPositions[0],
+          maskImage: altMask, maskShapeId: shapeList[1] ? shapeList[1].id : null,
+          photoImage: photo,
+        };
+        const shot = (show) => {
+          canvas.width = dim.w; canvas.height = dim.h;
+          const tr = renderTemplate(ctx, tpl, dimId, { ...held, heading: 'Where the day begins', showText: show }, {});
+          return {
+            state: tr.state,
+            png: canvas.toDataURL('image/png'),
+            mask: tr.photo ? tr.photo.mask : null,
+            pair: tr.colourPair ? tr.colourPair.id : null,
+            scrim: tr.photo ? tr.photo.scrim : null,
+            logoBox: tr.logoBox,
+            photoBox: tr.photo ? tr.photo.box : null,
+            markBackdrop: tr.backdrop.logo,
+            contrastFailures: tr.contrastFailures,
+            heading: tr.slots.heading ? tr.slots.heading.lines : null,
+            words: 'Where the day begins',
+          };
+        };
+        transition.push({ dimId, before: shot(false), typed: shot(true), after: shot(false) });
       }
 
       /* ── TEXT NEVER SITS OVER THE PHOTO — measured, not promised ─────────── */
@@ -259,7 +449,7 @@ async function run() {
       }
 
       return {
-        cases, shots, emptyState, maskless, pairCases, fixedGeometry, overlaps, shapeSweep,
+        cases, shots, emptyState, maskless, pairCases, fixedGeometry, overlaps, shapeSweep, transition, photoOnly, photoOnlyShapes, crops,
         budget, dimIds,
         assetsLoaded: { mask: !!maskImage, logoLight: !!logoLight, logoDark: !!logoDark },
       };
@@ -282,6 +472,11 @@ async function run() {
       if (c.truth.missingAssets.length) failures.push(`${at}: missing assets ${c.truth.missingAssets.join(', ')}`);
       if (!c.truth.logoBox) failures.push(`${at}: the mark did not paint`);
 
+      /* THE STATE. These three cases all have TEXT ON, so all three are the
+         withHeading layout — an empty heading paints an empty band, honestly
+         and stably, and does NOT flip the composition (client ruling
+         2026-08-18: the state is her toggle, never inferred from the copy). */
+      if (c.truth.state !== 'withHeading') failures.push(`${at}: rendered state '${c.truth.state}', expected 'withHeading' — text is ON`);
       const t = c.truth.slots.heading;
       if (!t) { failures.push(`${at}: the heading slot was not rendered`); continue; }
       if (c.kind === 'empty') {
@@ -346,6 +541,130 @@ async function run() {
       if (a !== b) failures.push(`${g.dimId}: the layout OUTSIDE the heading band changed when a heading was typed — the petal is reflowing, which is the solver back as data (§6.2)`);
     }
 
+    // ── THE photoOnly STATE, §11 IN ALL FOUR DIMENSIONS ────────────────────
+    for (const c of result.photoOnly) {
+      const at = `photoOnly/${c.dimId}`;
+      if (c.truth.state !== 'photoOnly') failures.push(`${at}: rendered '${c.truth.state}'`);
+      if (!c.truth.photo) failures.push(`${at}: the photo did not paint`);
+      else if (c.truth.photo.mask !== T.slots.photo.mask) failures.push(`${at}: the photo painted WITHOUT the declared mask`);
+      if (c.truth.slots.heading) failures.push(`${at}: the band must be ABSENT in this layout, not empty`);
+      if (c.truth.missingRequired.length) failures.push(`${at}: a satisfied required slot was reported missing (${c.truth.missingRequired.join(', ')})`);
+      if (c.truth.missingAssets.length) failures.push(`${at}: missing assets ${c.truth.missingAssets.join(', ')}`);
+      if (!c.truth.logoBox) failures.push(`${at}: the mark did not paint`);
+      if (c.truth.overBudgetSlots.length) failures.push(`${at}: over budget ${c.truth.overBudgetSlots.join(', ')} — with no text painted, nothing can be`);
+      // THE AUTHORED WINDOW, not the base one.
+      const want = T.states.photoOnly.photo[c.dimId].box;
+      const got = c.truth.photo && c.truth.photo.box;
+      if (!got || Math.abs(got.w - want.w * c.truth.width) > 1 || Math.abs(got.h - want.h * c.truth.height) > 1) {
+        failures.push(`${at}: this state did not paint its OWN window (${JSON.stringify(got)})`);
+      }
+      // THE BACKDROP CHECK RUNS HERE TOO — the mark's field is not the same
+      // once the petal grows, so it is measured again rather than assumed.
+      if (!c.truth.backdrop.checked) failures.push(`${at}: a photo was painted but nothing was measured`);
+      const lg = c.truth.backdrop.logo;
+      if (!lg) failures.push(`${at}: the mark was not measured in this state`);
+      else if (!lg.ok) failures.push(`${at}: the mark measures ${lg.ratio}:1 — below ${lg.minimum}`);
+      if (c.truth.contrastFailures.length) failures.push(`${at}: contrast failures ${c.truth.contrastFailures.join(', ')}`);
+    }
+
+    /* ── EVERY SHAPE, BLED, IN EVERY DIMENSION ──────────────────────────── */
+    for (const sh of result.photoOnlyShapes) {
+      if (!sh.loaded) { fail(`photoOnly shape '${sh.id}': the asset did not load — law 3`); continue; }
+      for (const [dimId, r] of Object.entries(sh.dims)) {
+        const at = `photoOnly-${sh.id}/${dimId}`;
+        if (r.reported !== sh.id) fail(`${at}: the render reported '${r.reported}' — her pick was not honoured`);
+        if (r.missingAssets.length) fail(`${at}: missing assets ${r.missingAssets.join(', ')}`);
+        if (r.missingRequired.length) fail(`${at}: a photo WAS given but ${r.missingRequired.join(', ')} was reported missing`);
+        if (r.contrastFailures.length) fail(`${at}: contrast failures ${r.contrastFailures.join(', ')}`);
+        if (!r.mark || !r.mark.ok) fail(`${at}: the mark was not measured, or failed (${JSON.stringify(r.mark)})`);
+        if (!r.paint) { fail(`${at}: nothing painted`); continue; }
+        /* IT MUST ACTUALLY BLEED — off the top or off the right; WHICH edge is
+           a property of the silhouette's own proportions, not of the ruling.
+           shape-2 is wider than the window, so it fills the box's width and
+           bleeds off the RIGHT while stopping just short of the top on story
+           (t=+0.013); the taller shapes bleed off the top. Requiring the top
+           specifically would be gating an accident of one asset's ratio. The
+           DEFAULT petal is held to the stricter line, below. */
+        /* IT MUST BLEED, AND IT MUST BE CENTRED (client rulings 2026-08-18:
+           "overflowing the frame like referenced" … "no i need the petals to be
+            centralized"). WHICH edge it overflows is a property of the frame
+           and of the silhouette's own proportions — story bleeds sideways, at
+           9:16 a petal that also cleared the top would have to be half again as
+           wide; landscape bleeds top and bottom. Requiring a particular edge
+           would be gating an accident rather than the ruling. */
+        if (!(r.paint.t < 0 || r.paint.l < 0 || r.paint.r > 1 || r.paint.b > 1)) {
+          fail(`${at}: the silhouette is fully inside the frame (l=${r.paint.l.toFixed(3)} t=${r.paint.t.toFixed(3)} r=${r.paint.r.toFixed(3)}) — it is not bleeding at all`);
+        }
+        const offCentre = Math.abs((r.paint.l + r.paint.r) / 2 - 0.5);
+        if (offCentre > 0.002) fail(`${at}: the silhouette is off-centre horizontally by ${offCentre.toFixed(3)}`);
+        // …and it must never reach the mark's strip.
+        const markTop = 1 - (0.05 * DIMENSIONS[dimId].w + (T.slots.logo.dimensions[dimId].widthFrac * DIMENSIONS[dimId].w * 0.8333)) / DIMENSIONS[dimId].h;
+        if (r.paint.b > markTop) fail(`${at}: the silhouette reaches ${r.paint.b.toFixed(3)}, past the mark's top line ${markTop.toFixed(3)}`);
+      }
+    }
+
+    /* ── HER CROP: NEVER A GAP, NEVER A DIFFERENT MARK VERDICT ───────────── */
+    const cropDefaults = Object.fromEntries(result.crops.filter((c) => c.name === 'default').map((c) => [c.dimId, c]));
+    for (const c of result.crops) {
+      const at = `crop-${c.name}/${c.dimId}`;
+      if (c.missingRequired.length) failures.push(`${at}: ${c.missingRequired.join(', ')} reported missing`);
+      if (!c.transform) { failures.push(`${at}: the render reported no transform on an adjustable template`); continue; }
+      // THE CLAMP IS REPORTED, not silently applied out of range.
+      if (Math.abs(c.transform.x) > 1 || Math.abs(c.transform.y) > 1) failures.push(`${at}: pan escaped the range (${JSON.stringify(c.transform)})`);
+      if (c.transform.zoom < 1 || c.transform.zoom > 3) failures.push(`${at}: zoom escaped the range (${c.transform.zoom})`);
+      // NO EMPTY FIELD INSIDE THE WINDOW, at any extreme.
+      if (c.sampled && c.fieldInside / c.sampled > 0.02) {
+        failures.push(`${at}: ${Math.round((c.fieldInside / c.sampled) * 100)}% of the window centre is FIELD colour — the photo stopped covering the mask`);
+      }
+      // The mark sits on flat field by geometry, so a crop cannot move it.
+      const d = cropDefaults[c.dimId];
+      if (!c.mark || !c.mark.ok) failures.push(`${at}: the mark was not measured, or failed (${JSON.stringify(c.mark)})`);
+      else if (d && d.mark && c.mark.ratio !== d.mark.ratio) {
+        failures.push(`${at}: the mark's backdrop moved with the photo crop (${d.mark.ratio} -> ${c.mark.ratio}) — the crop is reaching outside the window`);
+      }
+      if (c.contrastFailures.length) failures.push(`${at}: contrast failures ${c.contrastFailures.join(', ')}`);
+    }
+
+    // ── THE TEXT TOGGLE, BOTH DIRECTIONS ───────────────────────────────────
+    for (const tr of result.transition) {
+      const at = `transition/${tr.dimId}`;
+      if (tr.before.state !== 'photoOnly') failures.push(`${at}: text OFF did not render photoOnly (got '${tr.before.state}')`);
+      if (tr.typed.state !== 'withHeading') failures.push(`${at}: text ON did not render withHeading (got '${tr.typed.state}')`);
+      if (tr.after.state !== 'photoOnly') failures.push(`${at}: turning text off again did not switch back`);
+      // REVERSIBLE, byte for byte. A switch that does not come back exactly is
+      // a surprise, which is the whole failure class this app exists to avoid.
+      if (sha(Buffer.from(tr.before.png.split(',')[1], 'base64')) !== sha(Buffer.from(tr.after.png.split(',')[1], 'base64'))) {
+        failures.push(`${at}: turning text off again did NOT restore the photoOnly render byte for byte`);
+      }
+      if (sha(Buffer.from(tr.before.png.split(',')[1], 'base64')) === sha(Buffer.from(tr.typed.png.split(',')[1], 'base64'))) {
+        failures.push(`${at}: the two states render IDENTICAL pixels — the second layout is decorative`);
+      }
+      // The petal really is bigger with no words.
+      if (!tr.before.photoBox || !tr.typed.photoBox || tr.before.photoBox.w <= tr.typed.photoBox.w) {
+        failures.push(`${at}: photoOnly's window is not larger (${JSON.stringify([tr.before.photoBox, tr.typed.photoBox])})`);
+      }
+      // The words are still THERE, unspent, while text is off — the toggle
+      // hides a layout, it does not eat her copy (§6.3 rule 1).
+      if (tr.before.words !== tr.typed.words) failures.push(`${at}: the heading VALUE changed across the toggle — text off ate her words`);
+      if (!tr.typed.heading) failures.push(`${at}: text ON painted no heading (${tr.typed.heading})`);
+      if (tr.before.heading !== null) failures.push(`${at}: text OFF still painted a heading band`);
+      // NOTHING SHE CHOSE MOVES ACROSS THE SWITCH.
+      for (const key of ['mask', 'pair', 'logoBox']) {
+        if (JSON.stringify(tr.before[key]) !== JSON.stringify(tr.typed[key])) {
+          failures.push(`${at}: her ${key} changed across the state switch (${JSON.stringify(tr.before[key])} -> ${JSON.stringify(tr.typed[key])})`);
+        }
+      }
+      if (JSON.stringify(tr.before.scrim) !== JSON.stringify(tr.typed.scrim)) failures.push(`${at}: the scrim changed across the state switch`);
+      // THE BACKDROP CHECK RUNS IN BOTH STATES — the mark's backdrop is not the
+      // same field once the petal grows, so it must be measured again, not
+      // assumed from the other state.
+      for (const k of ['before', 'typed', 'after']) {
+        if (!tr[k].markBackdrop) failures.push(`${at}/${k}: the mark was not measured in this state`);
+        else if (!tr[k].markBackdrop.ok) failures.push(`${at}/${k}: the mark measures ${tr[k].markBackdrop.ratio}:1 — below ${tr[k].markBackdrop.minimum}`);
+        if (tr[k].contrastFailures.length) failures.push(`${at}/${k}: contrast failures ${tr[k].contrastFailures.join(', ')}`);
+      }
+    }
+
     // ── TEXT NEVER OVER THE PHOTO ──────────────────────────────────────────
     for (const o of result.overlaps) {
       if (o.headingOverPhoto) failures.push(`${o.dimId}: the heading box INTERSECTS the petal box — text would sit over the photograph`);
@@ -404,7 +723,10 @@ async function run() {
       const t = c.truth.slots.heading;
       const hb = c.truth.backdrop.slots.heading;
       const lg = c.truth.backdrop.logo;
-      console.log(`  ${c.kind.padEnd(7)} ${c.dimId.padEnd(10)} ${String(t.paintedPx).padStart(3)}/${Math.round(t.floorPx)}  ${t.lines}/${t.maxLines}${t.overBudget ? ' OVER' : '     '}  band=${hb ? `${hb.ratio}/${hb.minimum}` : '—'.padEnd(8)}  mark=${lg ? `${lg.ratio}/${lg.minimum}` : '—'}  ${c.truth.logoBox ? 'logo✓' : 'logo✗'}`);
+      // photoOnly has no heading at all, and the table says so rather than
+      // printing a size for type nobody can see.
+      const type = t ? `${String(t.paintedPx).padStart(3)}/${Math.round(t.floorPx)}  ${t.lines}/${t.maxLines}${t.overBudget ? ' OVER' : '     '}` : '  no heading (photoOnly)';
+      console.log(`  ${c.kind.padEnd(7)} ${c.dimId.padEnd(10)} ${type}  band=${hb ? `${hb.ratio}/${hb.minimum}` : '—'.padEnd(8)}  mark=${lg ? `${lg.ratio}/${lg.minimum}` : '—'}  ${c.truth.logoBox ? 'logo✓' : 'logo✗'}  state=${c.truth.state}`);
     }
     console.log('\nGEOMETRY  (petal ratio · heading over photo · mark over photo/band)');
     for (const o of result.overlaps) {
@@ -421,6 +743,29 @@ async function run() {
       const b = sha(Buffer.from(g.full.split(',')[1], 'base64')).slice(0, 16);
       console.log(`  ${g.dimId.padEnd(10)} empty ${a}  full ${b}  ${a === b ? 'identical ✓' : 'MOVED ✗'}`);
     }
+    console.log('\nTHE photoOnly STATE  (window px · mark ratio · heading band)');
+    for (const c of result.photoOnly) {
+      const b = c.truth.photo ? c.truth.photo.box : null;
+      console.log(`  ${c.dimId.padEnd(10)} window ${b ? `${Math.round(b.w)}×${Math.round(b.h)}` : '—'}  mark ${c.truth.backdrop.logo?.ratio}/${c.truth.backdrop.logo?.minimum}  band=${c.truth.slots.heading ? 'PRESENT (wrong)' : 'absent ✓'}  state=${c.truth.state}`);
+    }
+    console.log('\nEVERY SHAPE, BLED  (painted left/right/top/bottom as canvas fractions)');
+    for (const sh of result.photoOnlyShapes) {
+      for (const [dimId, r] of Object.entries(sh.dims)) {
+        const pnt = r.paint;
+        console.log(`  ${sh.id.padEnd(9)} ${dimId.padEnd(10)} l=${pnt.l.toFixed(3)} r=${pnt.r.toFixed(3)} t=${pnt.t.toFixed(3)} b=${pnt.b.toFixed(3)}  mark ${r.mark?.ratio}/${r.mark?.minimum}`);
+      }
+    }
+    console.log('\nHER CROP INSIDE THE WINDOW  (clamped transform · field pixels inside the window · mark ratio)');
+    for (const c of result.crops) {
+      console.log(`  ${c.name.padEnd(13)} ${c.dimId.padEnd(10)} ${JSON.stringify(c.transform)}  gap=${c.sampled ? `${Math.round((c.fieldInside / c.sampled) * 1000) / 10}%` : 'n/a'}  mark ${c.mark?.ratio}/${c.mark?.minimum}`);
+    }
+    console.log('\nTHE TEXT TOGGLE  (state · window width px · mark ratio · reversible)');
+    for (const tr of result.transition) {
+      const h = (p) => sha(Buffer.from(p.split(',')[1], 'base64')).slice(0, 12);
+      console.log(`  ${tr.dimId.padEnd(10)} text off → ${String(tr.before.state).padEnd(11)} window ${tr.before.photoBox ? Math.round(tr.before.photoBox.w) : '—'}px  mark ${tr.before.markBackdrop?.ratio}`
+        + `   text on → ${String(tr.typed.state).padEnd(11)} window ${tr.typed.photoBox ? Math.round(tr.typed.photoBox.w) : '—'}px  mark ${tr.typed.markBackdrop?.ratio}`
+        + `   back → ${h(tr.after.png) === h(tr.before.png) ? 'identical ✓' : 'DRIFTED ✗'}`);
+    }
     console.log('\nCOLOUR PAIRS (portrait)');
     for (const c of result.pairCases) {
       const hb = c.truth.backdrop.slots.heading;
@@ -428,6 +773,15 @@ async function run() {
       console.log(`  ${c.pairId.padEnd(7)} band=${hb?.ratio}/${hb?.minimum}  mark=${lg?.ratio}/${lg?.minimum}  failures=${JSON.stringify(c.truth.contrastFailures)}`);
     }
     console.log(`\nPNG evidence: ${OUT_DIR} (${result.shots.length} files)`);
+
+    if (acknowledged.length) {
+      console.error('\n*** LANDSCAPE photoOnly — CLIENT RULING vs THE MARK CONSTRAINT, UNRESOLVED ***');
+      console.error('    The 1.6x centred landscape window is honoured as ruled. It reaches the mark corner:');
+      for (const a of acknowledged) console.error('  - ' + a);
+      console.error('    Options: (a) 1.38x keeps both corners clear   (b) keep 1.6x, move or limit the mark');
+      console.error('             (c) keep 1.6x and lose landscape export on shape-3 (not recommended).');
+      console.error('    See the header of this file. This block goes the moment the client rules.\n');
+    }
 
     if (failures.length) {
       console.error(`\nFAIL — ${failures.length} gate(s):`);
