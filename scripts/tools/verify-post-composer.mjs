@@ -44,7 +44,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { REPO_ROOT } from './template-harness.mjs';
-import { TEMPLATE_LABEL_HEADLINE as T, TEMPLATE_PETAL_WINDOW as TWO } from '../../lib/templates/index.mjs';
+import { TEMPLATE_LABEL_HEADLINE as T, TEMPLATE_PETAL_WINDOW as TWO, TEMPLATE_CAPTION_BAND as THREE, TEMPLATES } from '../../lib/templates/index.mjs';
 
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf('--port') + 1]) || 3100;
@@ -431,7 +431,9 @@ async function main() {
       selected: o.getAttribute('aria-selected'), name: o.textContent.split('✓')[0].trim().slice(0, 30),
     })));
     console.log(`  menu now lists: ${JSON.stringify(bothMenu)}`);
-    if (bothMenu.length !== 2) fail(`the selector offers ${bothMenu.length} template(s), the registry has 2`);
+    // Counted against the REGISTRY, not against a literal: a template added
+    // without reaching the selector is trap M6 wearing a new hat.
+    if (bothMenu.length !== TEMPLATES.length) fail(`the selector offers ${bothMenu.length} template(s), the registry has ${TEMPLATES.length}`);
     // Escape must close an open listbox — pressed here so the run FAILS if that
     // ever regresses, rather than the menu being dismissed by a stray click.
     await page.keyboard.press('Escape');
@@ -568,7 +570,7 @@ async function main() {
     const sectionsNow = () => page.evaluate(() => [...document.querySelectorAll('.wo-panel-scroll [data-section]')]
       .map((n) => n.dataset.section));
 
-    for (const tpl of [T, TWO]) {
+    for (const tpl of [T, TWO, THREE]) {
       await pickTemplate(tpl.name);
       const got = await sectionsNow();
       console.log(`  ${tpl.name.padEnd(14)} declared ${JSON.stringify(tpl.panelSections)}  rendered ${JSON.stringify(got)}`);
@@ -738,6 +740,139 @@ async function main() {
       if (await page.locator('#photo-zoom').count()) fail('Classic offers a photo crop — its photo is a texture behind type, declared not adjustable');
       console.log('  Classic offers no framing control (its photo is declared not adjustable)');
     }
+
+    /* ── 10. TEMPLATE THREE — "Caption Band" (client ruling 2026-08-20) ─────
+       Everything template three added, proved against the LIVE surface:
+         · the FIELD LABELS. The pill dominates the heading here, so the panel
+           must not be wearing Classic's copy — "the line that carries the post"
+           on a kicker is a control that says the opposite of what the render
+           shows (M4).
+         · the MOTIF IS FIXED. It paints, and there is NO picker for it — the
+           client ruled it the template's, not hers.
+         · the REQUIRED PHOTO blocks export honestly, and a real one releases it.
+         · the THREE-WAY SWAP. §6.3 rule 1 across all three templates: every
+           text slot in the closed vocabulary that any of them paints must
+           survive a full round trip through all three.                      */
+    console.log('\n10. TEMPLATE THREE — labels, the fixed motif, the required photo');
+    await pickTemplate(THREE.name);
+    await page.waitForTimeout(900);
+
+    const labelsNow = await page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('label[for^="slot-"]')].map((l) => [l.htmlFor.replace('slot-', ''), l.textContent.trim()]),
+    ));
+    console.log(`  field labels: ${JSON.stringify(labelsNow)}`);
+    for (const slot of ['heading', 'pill']) {
+      if (labelsNow[slot] !== THREE.slotLabels[slot].label) {
+        fail(`the ${slot} field is labelled '${labelsNow[slot]}', the template declares '${THREE.slotLabels[slot].label}'`);
+      }
+    }
+    if (/carries the post/i.test(Object.values(labelsNow).join(' '))) {
+      fail("Caption Band is wearing Classic's field copy — on this template the heading does NOT carry the post (M4)");
+    }
+    // NO MOTIF PICKER. The motif is the template's, so there is nothing to pick.
+    const motifControls = await page.evaluate(() => [...document.querySelectorAll('button[aria-pressed]')]
+      .filter((b) => /motif|petal/i.test(b.title || '')).length);
+    if (motifControls) fail(`Caption Band shows ${motifControls} motif control(s) — the client ruled the motif fixed`);
+    const shapeOnThree = await page.evaluate(() => [...document.querySelectorAll('[data-shape-src]')].length);
+    if (shapeOnThree) fail(`Caption Band shows ${shapeOnThree} window-shape control(s) — it has no window`);
+    console.log('  no motif picker and no window-shape control (both belong elsewhere)');
+
+    // The motif must really PAINT — proved by the pixels, not by the data.
+    const withMotif = await digests(page);
+    console.log(`  rendered: ${JSON.stringify(hashAll(withMotif))}`);
+    await page.screenshot({ path: join(OUT, 'three-panel.png') });
+    for (const dimId of ['portrait', 'story', 'square', 'landscape']) {
+      const png = await page.evaluate((d) => document.querySelector(`.wo-cell-${d} canvas`).toDataURL('image/png'), dimId);
+      writeFileSync(join(OUT, `three-${dimId}.png`), Buffer.from(png.split(',')[1], 'base64'));
+    }
+
+    // THE REQUIRED PHOTO — remove it and every dimension must go on hold.
+    const removeBtn = page.locator('button', { hasText: 'Remove photo' });
+    if (!(await removeBtn.count())) fail('Caption Band has no photo to remove — the earlier library pick did not carry across');
+    else {
+      await removeBtn.click();
+      await page.waitForTimeout(1200);
+      const heldThree = (await holds(page)).filter(([, t]) => t === 'On hold').map(([d]) => d);
+      const warnThree = await warnings(page);
+      console.log(`  no photo → holds ${JSON.stringify(heldThree)} · ${JSON.stringify(warnThree)}`);
+      if (heldThree.length !== 4) fail(`Caption Band requires a photo but only ${heldThree.length}/4 dimensions are on hold`);
+      if (!warnThree.join(' ').toLowerCase().includes('photo')) fail('the hold does not say a photo is what is missing');
+      if (!(await page.locator('button', { hasText: 'Download all sizes' }).isDisabled())) {
+        fail('"Download all sizes" is live on Caption Band while a required photo is missing');
+      }
+      await page.screenshot({ path: join(OUT, 'three-empty-state.png') });
+      const emptyThree = await page.evaluate(() => document.querySelector('.wo-cell-portrait canvas').toDataURL('image/png'));
+      writeFileSync(join(OUT, 'three-empty-portrait.png'), Buffer.from(emptyThree.split(',')[1], 'base64'));
+
+      await page.locator('button', { hasText: 'Choose from library' }).click();
+      await page.waitForTimeout(1800);
+      await page.locator('img[alt$=".png"], img[alt$=".jpg"], img[alt$=".jpeg"]').first().click();
+      let stillHeld = [];
+      for (let i = 0; i < 40; i += 1) {
+        await page.waitForTimeout(500);
+        stillHeld = (await holds(page)).filter(([, t]) => t === 'On hold').map(([d]) => d);
+        if (!stillHeld.length) break;
+      }
+      if (stillHeld.length) fail(`Caption Band stayed on hold with a real photo: ${stillHeld.join(', ')} — ${JSON.stringify(await warnings(page))}`);
+      console.log(`  with a library photo → holds ${stillHeld.length ? stillHeld.join(',') : 'none'}`);
+      await page.screenshot({ path: join(OUT, 'three-with-photo.png') });
+    }
+
+    /* ── 11. THE THREE-WAY SWAP (§6.3 rule 1) ───────────────────────────────
+       Copy in every text slot ANY of the three paints, all of it inside every
+       template's budget so the SWAP is what is under test and not the counter.
+       Then the full circuit — and back — with nothing lost anywhere. */
+    console.log('\n11. THREE-WAY SWAP — every word survives the whole circuit');
+    const ALL_COPY = {
+      eyebrow: 'OUR MORNING',        // Classic only
+      heading: 'The garden opened',  // all three
+      body: 'Tuesdays from nine',    // Classic only
+      pill: 'DOORS OPEN',            // Caption Band only
+    };
+    for (const [slot, text] of Object.entries(ALL_COPY)) {
+      const budgets = TEMPLATES.filter((t) => t.slots[slot]?.present).map((t) => t.slots[slot].charBudget);
+      if (text.length > Math.min(...budgets)) fail(`the swap fixture '${text}' (${text.length}) exceeds a template's ${slot} budget ${Math.min(...budgets)}`);
+    }
+    // Fill each slot on a template that actually shows it.
+    await pickTemplate(T.name);
+    for (const slot of ['eyebrow', 'heading', 'body']) {
+      if (!(await setField(slot, ALL_COPY[slot]))) fail(`Classic has no ${slot} field`);
+    }
+    await pickTemplate(THREE.name);
+    if (!(await setField('pill', ALL_COPY.pill))) fail('Caption Band has no pill field');
+    const onThree = await readFields();
+    if (onThree.heading !== ALL_COPY.heading) fail(`the heading did not carry Classic -> Caption Band: '${onThree.heading}'`);
+
+    const circuit = [TWO.name, T.name, THREE.name, TWO.name, T.name];
+    const seenAt = [];
+    for (const name of circuit) {
+      await pickTemplate(name);
+      const f = await readFields();
+      seenAt.push({ template: name, fields: f });
+      for (const [slot, text] of Object.entries(ALL_COPY)) {
+        // A template that does not PAINT a slot renders no field for it — that
+        // is §6.3's "kept, hidden", and the only honest way to see it is to come
+        // back. What must never happen is a field that IS shown holding
+        // something other than what she wrote.
+        if (f[slot] !== undefined && f[slot] !== text) {
+          fail(`§6.3 VIOLATED on ${name} — '${slot}' was '${text}' and is now '${f[slot]}'`);
+        }
+      }
+    }
+    console.log(`  circuit: ${circuit.join(' → ')}`);
+    for (const s of seenAt) console.log(`    ${s.template.padEnd(14)} shows ${JSON.stringify(s.fields)}`);
+    // …and the two slots that were HIDDEN for most of the circuit must be back.
+    await pickTemplate(T.name);
+    const finalOne = await readFields();
+    for (const slot of ['eyebrow', 'heading', 'body']) {
+      if (finalOne[slot] !== ALL_COPY[slot]) fail(`after the full circuit Classic's '${slot}' is '${finalOne[slot]}', not '${ALL_COPY[slot]}'`);
+    }
+    await pickTemplate(THREE.name);
+    const finalThree = await readFields();
+    if (finalThree.pill !== ALL_COPY.pill) fail(`after the full circuit Caption Band's pill is '${finalThree.pill}', not '${ALL_COPY.pill}'`);
+    if (finalThree.heading !== ALL_COPY.heading) fail(`after the full circuit Caption Band's heading is '${finalThree.heading}'`);
+    console.log('  every word survived all three templates and came back untouched');
+    await page.screenshot({ path: join(OUT, 'three-way-swap-final.png') });
 
     const realNetFailures = netFlakes.filter((u) => u.startsWith('OTHER '));
     const libraryFlakes = netFlakes.length - realNetFailures.length;

@@ -598,3 +598,154 @@ test('slotConstraint applies a state\'s geometry, and NOTHING without one', () =
   assert.equal(slotConstraint(t, 'heading', 'portrait', 'photoOnly'), null, 'a slot a state deactivates does not paint');
   assert.ok(slotConstraint(t, 'heading', 'portrait', 'withHeading'), 'and it does in the other state');
 });
+
+/* ── THE MOTIF SLOT (§9; client ruling 2026-08-20 — template three) ──────────
+   §9 turns a motif from a composable LAYER into a slot: the template declares
+   where it sits, at what size, in which treatment. Template three goes one step
+   further on an explicit ruling and fixes it — one asset id, no picker. These
+   prove the validator fails closed in BOTH directions, because both silent
+   failures are cheap to write and neither throws. */
+function withMotif(extra = {}) {
+  const t = baseline();
+  t.motif = ['petal-brand'];
+  t.slots.motif = {
+    present: true,
+    asset: 'petal-brand',
+    dimensions: {
+      portrait: { present: true, required: false, opacity: 0.1, box: { x: 0.6, y: 0.7, w: 0.3, h: 0.2 } },
+      square: { present: true, required: false, opacity: 0.1, box: { x: 0.6, y: 0.7, w: 0.3, h: 0.2 } },
+    },
+    ...extra,
+  };
+  return t;
+}
+
+test('a motif declared as pure DATA validates — an id, a box and an opacity per dimension', () => {
+  assert.deepEqual(validateTemplate(withMotif()).errors, []);
+});
+
+test('a present motif slot with motif:"none" is REFUSED — the set and the slot must agree', () => {
+  const t = withMotif();
+  t.motif = 'none';
+  const { errors } = validateTemplate(t);
+  assert.ok(errors.some((e) => e.includes('template.motif')), errors.join('\n'));
+});
+
+test('a motif SET with no slot to paint it is a dead declaration (M4)', () => {
+  const t = baseline();
+  t.motif = ['petal-brand'];
+  const { errors } = validateTemplate(t);
+  assert.ok(errors.some((e) => e.includes('dead declaration')), errors.join('\n'));
+});
+
+test('the motif is FIXED — a SECOND id is a choice she cannot make, and is refused', () => {
+  const t = withMotif();
+  t.motif = ['petal-brand', 'shape-1'];
+  const { errors } = validateTemplate(t);
+  assert.ok(errors.some((e) => e.includes('FIXED')), errors.join('\n'));
+});
+
+test('the motif asset must be a plain slug IN the sanctioned set — an id becomes a path (law 3)', () => {
+  for (const [asset, needle] of [
+    ['../../../etc/passwd', 'plain slug'],
+    ['shape-1', 'not in template.motif'],
+    ['', 'must name the ONE real brand asset'],
+  ]) {
+    const t = withMotif({ asset });
+    const { errors } = validateTemplate(t);
+    assert.ok(errors.some((e) => e.includes(needle)), `${asset}: ${errors.join('\n')}`);
+  }
+});
+
+test('a motif opacity must be a real, GHOSTED number — 0 and 1 are both refused', () => {
+  for (const opacity of [0, -0.1, 0.4, 1]) {
+    const t = withMotif();
+    t.slots.motif.dimensions.portrait.opacity = opacity;
+    const { errors } = validateTemplate(t);
+    assert.ok(errors.some((e) => e.includes('opacity')), `${opacity} should be refused: ${errors.join('\n')}`);
+  }
+  const t = withMotif();
+  t.slots.motif.dimensions.portrait.opacity = 0.25;
+  assert.deepEqual(validateTemplate(t).errors, [], 'the documented maximum must itself be allowed');
+});
+
+test('a motif still needs a box per dimension, and may NOT bleed like a photo window', () => {
+  const t = withMotif();
+  t.slots.motif.dimensions.portrait.box = { x: -0.2, y: 0.7, w: 0.3, h: 0.2 };
+  const { errors } = validateTemplate(t);
+  assert.ok(errors.some((e) => e.includes('only a photo window may bleed')), errors.join('\n'));
+});
+
+test('behaviour cannot be smuggled in through the motif', () => {
+  const t = withMotif();
+  t.slots.motif.dimensions.portrait.opacityRule = 'if dark then 0.2';
+  assert.ok(validateTemplate(t).errors.some((e) => e.includes('rule-shaped key')));
+});
+
+/* ── THE MARK PLATE (client ruling 2026-08-20 — template three) ──────────────
+   A fixed panel behind the mark, in the pair's own field colour. Same shape of
+   declaration as the photo scrim, and held to the same fail-closed rules — a
+   pair added later without a plate would put the mark back on an unmeasured
+   photograph, and an orphan row is a control for nothing. */
+function withPlate(plate) {
+  const t = baseline();
+  t.panelSections = ['words', 'mark', 'markPosition'];
+  t.slots.logo = {
+    present: true,
+    plate,
+    dimensions: {
+      portrait: { present: true, required: false, box: { x: 0.8, y: 0.05, w: 0.12, h: 0.08 }, widthFrac: 0.12, pad: 0.07 },
+      square: { present: true, required: false, box: { x: 0.8, y: 0.05, w: 0.12, h: 0.10 }, widthFrac: 0.12, pad: 0.07 },
+    },
+  };
+  return t;
+}
+const GOOD_PLATE = () => ({ pad: 0.26, radius: 0.5, fill: { a: { colour: '#FFFFFF', opacity: 1 }, b: { colour: '#254E48', opacity: 1 } } });
+
+test('a mark plate declared as pure DATA validates, and is optional', () => {
+  assert.deepEqual(validateTemplate(withPlate(GOOD_PLATE())).errors, []);
+  const noPlate = withPlate(GOOD_PLATE());
+  delete noPlate.slots.logo.plate;
+  assert.deepEqual(validateTemplate(noPlate).errors, [], 'a template with no plate is still valid');
+});
+
+test('the plate geometry is bounded — pad in [0,1], radius in [0,0.5]', () => {
+  for (const [key, value] of [['pad', -0.1], ['pad', 1.5], ['pad', 'wide'], ['radius', 0.9], ['radius', -1], ['radius', null]]) {
+    const p = GOOD_PLATE();
+    p[key] = value;
+    const { errors } = validateTemplate(withPlate(p));
+    assert.ok(errors.some((e) => e.includes(`.plate.${key}`)), `${key}=${value}: ${errors.join('\n')}`);
+  }
+});
+
+test('EVERY declared colour pair must declare its own plate — a pair added later fails closed', () => {
+  const p = GOOD_PLATE();
+  delete p.fill.b;
+  const { errors } = validateTemplate(withPlate(p));
+  assert.ok(errors.some((e) => e.includes('plate.fill.b')), errors.join('\n'));
+});
+
+test('a plate row naming no declared pair is a DEAD declaration (M4)', () => {
+  const p = GOOD_PLATE();
+  p.fill.blush = { colour: '#E7C9CC', opacity: 1 };
+  const { errors } = validateTemplate(withPlate(p));
+  assert.ok(errors.some((e) => e.includes('names no declared colour pair')), errors.join('\n'));
+});
+
+test('a plate that does nothing is refused — opacity 0 is a no-op, and the colour must be real', () => {
+  const zero = GOOD_PLATE();
+  zero.fill.a.opacity = 0;
+  assert.ok(validateTemplate(withPlate(zero)).errors.some((e) => e.includes('no-op')));
+  const bad = GOOD_PLATE();
+  bad.fill.a.colour = 'ivory-ish';
+  assert.ok(validateTemplate(withPlate(bad)).errors.some((e) => e.includes('#rrggbb')));
+});
+
+test('behaviour cannot be smuggled in through the plate', () => {
+  const p = GOOD_PLATE();
+  p.opacityWhen = 'photo';
+  assert.ok(validateTemplate(withPlate(p)).errors.some((e) => e.includes('rule-shaped key')));
+  const fn = GOOD_PLATE();
+  fn.pad = () => 0.2;
+  assert.ok(validateTemplate(withPlate(fn)).errors.some((e) => e.includes('FUNCTION')));
+});

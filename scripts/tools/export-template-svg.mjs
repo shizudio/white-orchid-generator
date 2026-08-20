@@ -57,6 +57,20 @@ export function svgSeedRefusal(template) {
   if (template.slots?.photo?.present && template.slots.photo.mask) {
     return `template '${template.id}' reveals its photo through the '${template.slots.photo.mask}' silhouette, and the Figma seed's round-trip truth is a plain box rect — a masked photo cannot survive that round trip, so no seed is emitted rather than one that silently drops the mask`;
   }
+  /* (client ruling 2026-08-20 — template three) THE SAME REFUSAL, FOR THE SAME
+     REASON, for the two things template three paints that a box rect cannot
+     carry: a brand silhouette STAMPED into the field at a declared opacity, and
+     a plate behind the mark. Both are load-bearing — the motif is part of the
+     drawing, and the plate is the entire reason the mark is legible on a
+     photograph. A seed that quietly omitted either would hand the designer a
+     Figma file that is not the template, and the round trip would then import
+     that difference back as truth (M4). */
+  if (template.slots?.motif?.present) {
+    return `template '${template.id}' stamps the '${template.slots.motif.asset}' motif into its field at a declared opacity, which the seed's plain box rects cannot carry — no seed is emitted rather than one that silently drops the motif`;
+  }
+  if (template.slots?.logo?.plate) {
+    return `template '${template.id}' paints a declared plate behind its mark, and that plate is what makes the mark legible on a photograph — a seed without it would show a design that does not exist`;
+  }
   return null;
 }
 

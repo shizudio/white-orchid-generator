@@ -27,11 +27,14 @@ test('template one is valid, registered, and the app default', () => {
   // §12 said "build ONE template, in all four dimensions, end to end" FIRST —
   // and it was, which is how the contract gaps template two needed (per-pair
   // scrims, a required slot with something to refuse with, a photo mask) were
-  // found while they were still cheap. Template two has now landed, so the
-  // registry holds two. It is asserted rather than left open: a template that
-  // appears in the registry without its own end-to-end verification run is the
-  // thing §12 actually warns against.
-  assert.deepEqual(TEMPLATES.map((t) => t.id), ['label_headline', 'petal_window']);
+  // found while they were still cheap. Template two then surfaced its own, and
+  // template three surfaced three more (a motif that is DATA, a slot whose
+  // floor register was wrong for its job, and the first ink this system paints
+  // on an unknown photograph). The registry now holds three, and this line is
+  // asserted rather than left open for the reason §12 actually warns about: a
+  // template appearing here without its own end-to-end verification run. Each
+  // of the three has one — scripts/tools/verify-template-{one,two,three}.mjs.
+  assert.deepEqual(TEMPLATES.map((t) => t.id), ['label_headline', 'petal_window', 'caption_band']);
 });
 
 test('SLOT MAPPING from today\'s archetype roles — microLabel→eyebrow, hero→heading, support→body, logo→logo', () => {

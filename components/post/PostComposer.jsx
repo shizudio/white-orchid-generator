@@ -50,6 +50,7 @@ import { renderTemplate, templateOffersTextToggle } from '@/lib/render-core/rend
 import { TEMPLATES, DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates/index.mjs';
 import { resolveLogoAsset, templateLogoVariants } from '@/lib/templates/logo-assets.mjs';
 import { resolveMaskAsset, templateMaskShapes } from '@/lib/templates/mask-assets.mjs';
+import { templateMotifAsset } from '@/lib/templates/motif-assets.mjs';
 import LibraryPicker from '@/components/LibraryPicker';
 
 const DIM_ORDER = ['portrait', 'story', 'square', 'landscape'];
@@ -210,6 +211,14 @@ export default function PostComposer() {
   const [truths, setTruths] = useState({});
   const [logoImage, setLogoImage] = useState(null);
   const [maskImage, setMaskImage] = useState(null);
+  /* ── THE MOTIF (client ruling 2026-08-20 — template three) ────────────────
+     A brand shape the TEMPLATE declares and paints into its own field. There
+     is deliberately NO state for WHICH one and no picker: the client ruled the
+     motif "fixed for now", so this is an asset the surface loads on the
+     template's behalf, exactly like the mask — not a choice she makes. When a
+     picker is ruled in it arrives as a `motifId` beside `maskShapeId`, and
+     nothing else here has to move. */
+  const [motifImage, setMotifImage] = useState(null);
   const [fontsReady, setFontsReady] = useState(false);
   const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
   // What each template was last set to, so a swap BACK restores her choices
@@ -344,6 +353,22 @@ export default function PostComposer() {
   // resets to the new template's own default rather than being carried across.
   useEffect(() => { setMaskShapeId(null); }, [TEMPLATE.id]);
 
+  /* The motif asset, resolved through the contract layer (law 3: an id with no
+     usable shape comes back as null and the render core REFUSES to paint
+     rather than dropping the watermark silently). A template that declares no
+     motif resolves to null and nothing is ever fetched. */
+  const motifAsset = useMemo(() => templateMotifAsset(TEMPLATE), [TEMPLATE]);
+  useEffect(() => {
+    let alive = true;
+    setMotifImage(null);
+    if (!motifAsset?.src) return undefined;
+    const img = new Image();
+    img.onload = () => { if (alive) setMotifImage(img); };
+    img.onerror = () => { if (alive) setMotifImage(null); };
+    img.src = motifAsset.src;
+    return () => { alive = false; };
+  }, [motifAsset?.src]);
+
   /* ── THE SWAP (§6.3). Three rules, all here:
        1. deactivating never DELETES — `values` already holds every text slot,
           so nothing is dropped; the new template simply reads fewer keys
@@ -453,10 +478,11 @@ export default function PostComposer() {
         photoImage,
         maskImage,
         maskShapeId: maskAsset?.id || null,
+        motifImage,
       });
     }
     setTruths(next);
-  }, [TEMPLATE, dimOrder, values, showText, photoTransform, colourPairId, logoPosition, logoImage, logoChoice, photoImage, maskImage, maskAsset]);
+  }, [TEMPLATE, dimOrder, values, showText, photoTransform, colourPairId, logoPosition, logoImage, logoChoice, photoImage, maskImage, maskAsset, motifImage]);
 
   useEffect(() => { paint(); }, [paint, fontsReady]);
 
