@@ -322,8 +322,45 @@ retired from the *user surface* and from *runtime*.
 - Most of the ~10 regex intent belts in `/api/assistant` (colour words, mood recipes,
   text substitution, contact add, font resize, full-image intent, band removal, layout
   variety, polish) — fewer expressible operations, less to disambiguate
-- Runtime contrast guards (colour pairs are pre-verified)
+- Runtime contrast guards (colour pairs are pre-verified) — **AMENDED
+  2026-08-18, see below**
 - The two parallel text systems (legacy roles + added elements) → one slot model
+
+### AMENDMENT (client ruling, 2026-08-18) — the backdrop check
+
+Retiring runtime contrast guards rests on one premise: **every colour pair was
+verified at authoring time.** That premise holds exactly as stated, and nothing
+in it is being re-opened. It stops applying the moment the field behind the ink
+is something that did not exist at authoring time:
+
+| New user freedom | Verifiable at bake time? |
+|---|---|
+| A photo she picks from the library, or uploads | **No** — the photo did not exist when the template was baked |
+| Which sanctioned brand mark she swaps to | **No** — only the colour-class DEFAULT was verified against each pair |
+
+So one check is reinstated, scoped to exactly that gap:
+
+- It runs **only** when a photo is painted (text and mark) or when the caller
+  names the mark's own ink (mark only). With no photo and the default mark, not
+  one pixel is sampled, and the render is **byte-identical** to before.
+- It **measures**; it never negotiates. The scrim is a fixed declared number —
+  no adaptive ladder, no auto-recolour, no relocation, no fabricated backing
+  (law 3), no substituted mark (M3).
+- Failing is a **refusal**, in the §7.2 idiom already built for over-budget: the
+  affected dimensions go on hold and their export is blocked, with one honest
+  line naming them. **No advisor dot, no ledger, no "apply fix" button** — §10A
+  stays deleted.
+
+Everything else in §10A is unchanged. `lib/render-core/backdrop-contrast.mjs`
+carries the same reasoning next to the code, and reuses the existing colour maths
+(`lib/surface-contrast-policy.mjs`) rather than growing a second copy.
+
+The template contract absorbs this as **data only** (§6.2): the `photo` slot
+declares a box and a `fit` enum per dimension, plus one fixed scrim
+(colour + opacity) per colour class — the same lookup shape `logoAssets` already
+had. `allowedLogoAssets` is likewise a plain array of brand asset ids.
+`assertValidTemplate` still rejects a function, accessor, RegExp, class instance
+or rule-shaped key anywhere in that new surface.
 
 ### (B) Moved to authoring time — run once, baked, inspectable
 

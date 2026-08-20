@@ -17,7 +17,8 @@
    Usage: node scripts/tools/verify-template-one.mjs
    ───────────────────────────────────────────────────────────────────────── */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openHarness, REPO_ROOT } from './template-harness.mjs';
 
@@ -27,8 +28,26 @@ const OUT_DIR = join(REPO_ROOT, 'generated', 'template-one');
 // character length. Never hits the network, never spends anything.
 const FILLER = 'every child leads their own day here with us and we make room for what they want to try next in the garden or at the table together';
 
+/* ── THE TEXT-ONLY IDENTITY GATE (client amendment 2026-08-18) ───────────────
+   Template one gained a PHOTO slot. "Absent photo = today's clean tile,
+   byte-identical" is the whole basis on which that was allowed, so it is
+   ASSERTED here rather than assumed: the four real-*.png are hashed BEFORE this
+   run and compared to what the run writes. A moved byte means the amendment
+   leaked into the no-photo path.                                             */
+const IDENTITY_SHOTS = ['real-portrait', 'real-story', 'real-square', 'real-landscape'];
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+function priorHashes() {
+  const out = {};
+  for (const name of IDENTITY_SHOTS) {
+    const f = join(OUT_DIR, `${name}.png`);
+    if (existsSync(f)) out[name] = sha(readFileSync(f));
+  }
+  return out;
+}
+
 async function run() {
   mkdirSync(OUT_DIR, { recursive: true });
+  const before = priorHashes();
   const h = await openHarness();
   try {
     const result = await h.page.evaluate(async ({ FILLER }) => {
@@ -122,8 +141,61 @@ async function run() {
         shots.push({ name: `real-${dimId}`, data: canvas.toDataURL('image/png') });
       }
 
+      /* ── THE BACKDROP CHECK, exercised on both extremes ──────────────────
+         Two FIXTURE backdrops, painted here rather than fetched: a near-black
+         field and a near-white one. They are not brand assets and never reach a
+         user — they are the two ends of the range the fixed scrim has to cope
+         with, which is exactly what a gate needs. The real-photo path is proven
+         separately in the live browser (generated/template-one/composer/).    */
+      const fixture = (rgb) => {
+        const c = document.createElement('canvas');
+        c.width = 1600; c.height = 1600;
+        const cx = c.getContext('2d');
+        cx.fillStyle = rgb; cx.fillRect(0, 0, 1600, 1600);
+        return c;
+      };
+      const photoCases = [];
+      for (const [name, rgb, pairId] of [['dark', '#0A0A0A', 'ivory'], ['light', '#FAFAFA', 'forest']]) {
+        const img = fixture(rgb);
+        for (const dimId of dimIds) {
+          const dim = DIMENSIONS[dimId];
+          canvas.width = dim.w; canvas.height = dim.h;
+          const truth = renderTemplate(ctx, tpl, dimId, {
+            eyebrow: 'OUR BELIEF',
+            heading: 'Every child is capable of leading their own day',
+            body: 'Enrolling now for the autumn term',
+            colourPairId: pairId, logoPosition: 'bottom-right',
+            logoImage: pairId === 'forest' ? logoDark : logoLight,
+            logoInk: pairId === 'forest' ? '#F5F6E7' : '#254E48',
+            photoImage: img,
+          }, {});
+          photoCases.push({ fixture: name, pairId, dimId, truth });
+          shots.push({ name: `photo-${name}-${pairId}-${dimId}`, data: canvas.toDataURL('image/png') });
+        }
+      }
+      // …and a photo that SHOULD pass: mid-grey, where the fixed scrim carries.
+      const midOk = [];
+      {
+        const img = fixture('#8A8A8A');
+        for (const dimId of dimIds) {
+          const dim = DIMENSIONS[dimId];
+          canvas.width = dim.w; canvas.height = dim.h;
+          midOk.push({
+            dimId,
+            truth: renderTemplate(ctx, tpl, dimId, {
+              eyebrow: 'OUR BELIEF',
+              heading: 'Every child is capable of leading their own day',
+              body: 'Enrolling now for the autumn term',
+              colourPairId: 'ivory', logoPosition: 'bottom-right',
+              logoImage: logoLight, logoInk: '#254E48', photoImage: img,
+            }, {}),
+          });
+          shots.push({ name: `photo-mid-ivory-${dimId}`, data: canvas.toDataURL('image/png') });
+        }
+      }
+
       return {
-        cases, shots,
+        cases, shots, photoCases, midOk,
         logoLoaded: { light: !!logoLight, dark: !!logoDark },
         budgets: Object.fromEntries(textSlots.map((s) => [s, tpl.slots[s].charBudget])),
       };
@@ -162,6 +234,32 @@ async function run() {
     // a check that never trips is not a check.
     const breaksFlagged = result.cases.filter((c) => c.kind === 'breaks' && c.truth.overBudgetSlots.length).length;
     if (!breaksFlagged) failures.push('breaks sweep flagged nothing — the §7.2 hard-break check is inert');
+
+    // ── the amendment's own gates ─────────────────────────────────────────
+    for (const c of result.cases) {
+      if (c.truth.photo !== null) failures.push(`${c.kind}/${c.dimId}: a no-photo render reported a photo`);
+      if (c.truth.backdrop.checked) failures.push(`${c.kind}/${c.dimId}: the backdrop check ran on the pre-verified path`);
+      if (c.truth.contrastFailures.length) failures.push(`${c.kind}/${c.dimId}: flat pre-verified pair flagged itself`);
+    }
+    for (const c of result.photoCases) {
+      const at = `photo-${c.fixture}/${c.pairId}/${c.dimId}`;
+      if (!c.truth.photo) failures.push(`${at}: the photo did not paint`);
+      else if (!c.truth.photo.scrim) failures.push(`${at}: NO SCRIM over the photo — the core must always apply it`);
+      if (!c.truth.backdrop.checked) failures.push(`${at}: a photo was painted but nothing was measured`);
+      for (const slot of ['eyebrow', 'heading', 'body']) {
+        const r = c.truth.backdrop.slots[slot];
+        if (!r) { failures.push(`${at}/${slot}: filled slot was not measured`); continue; }
+        if (r.unreadable) failures.push(`${at}/${slot}: backdrop could not be read`);
+        if (r.ok) failures.push(`${at}/${slot}: an extreme backdrop passed at ${r.ratio}:1 — the check is too soft to be a check`);
+      }
+      if (!c.truth.contrastFailures.length) failures.push(`${at}: nothing was blocked on an unreadable backdrop`);
+    }
+    for (const c of result.midOk) {
+      if (c.truth.contrastFailures.length) {
+        const detail = JSON.stringify(c.truth.backdrop.slots);
+        failures.push(`photo-mid/${c.dimId}: an ORDINARY photo was refused — the scrim is too weak to carry one ${detail}`);
+      }
+    }
     if (!result.logoLoaded.light || !result.logoLoaded.dark) failures.push(`logo assets failed to load: ${JSON.stringify(result.logoLoaded)}`);
     if (h.errors.length) failures.push(`console/page errors: ${JSON.stringify(h.errors)}`);
 
@@ -174,6 +272,22 @@ async function run() {
         .join('  ');
       console.log(`  ${c.kind.padEnd(7)} ${c.dimId.padEnd(10)} ${cells}${c.truth.logoBox ? '  logo✓' : '  logo✗'}`);
     }
+    // ── THE IDENTITY GATE, on the bytes that were just written ────────────
+    for (const name of IDENTITY_SHOTS) {
+      if (!before[name]) continue;
+      const after = sha(readFileSync(join(OUT_DIR, `${name}.png`)));
+      if (after !== before[name]) {
+        failures.push(`${name}.png MOVED — a text-only render is no longer byte-identical (${before[name].slice(0, 12)} -> ${after.slice(0, 12)})`);
+      }
+    }
+    console.log('\nBACKDROP CHECK  (ratio / floor · ok)');
+    for (const c of [...result.photoCases, ...result.midOk.map((m) => ({ fixture: 'mid', pairId: 'ivory', ...m }))]) {
+      const cells = Object.entries(c.truth.backdrop.slots)
+        .map(([s, r]) => `${s}=${r.ratio}/${r.minimum}${r.ok ? '' : ' FAIL'}`).join('  ');
+      const logo = c.truth.backdrop.logo ? ` logo=${c.truth.backdrop.logo.ratio}/${c.truth.backdrop.logo.minimum}${c.truth.backdrop.logo.ok ? '' : ' FAIL'}` : '';
+      console.log(`  ${String(c.fixture).padEnd(6)} ${c.pairId.padEnd(7)} ${c.dimId.padEnd(10)} ${cells}${logo}`);
+    }
+    console.log(`\nTEXT-ONLY IDENTITY: ${Object.keys(before).length} baseline PNG(s) re-hashed after the run`);
     console.log(`\nPNG evidence: ${OUT_DIR} (${result.shots.length} files)`);
     if (failures.length) {
       console.error(`\nFAIL — ${failures.length} gate(s):`);

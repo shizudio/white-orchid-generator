@@ -56,12 +56,21 @@ function layoutFor(dimensionId, { lineCount = null, size = null } = {}) {
       lines: Array.from({ length: n }, (_, i) => `${name} line ${i + 1} <&"'>`),
     });
   }
+  // (client amendment 2026-08-18) The photo box travels with the seed too: the
+  // designer must be able to move it in Figma and re-bake it like any other.
+  const photoPer = slotConstraint(T, 'photo', dimensionId);
+  const photo = photoPer ? {
+    frac: photoPer.box,
+    box: { x: photoPer.box.x * dim.w, y: photoPer.box.y * dim.h, w: photoPer.box.w * dim.w, h: photoPer.box.h * dim.h },
+    fit: photoPer.fit,
+    scrim: T.slots.photo.scrim[pair.klass],
+  } : null;
   return {
     templateId: T.id, templateVersion: T.version, dimensionId,
     width: dim.w, height: dim.h, bg: pair.bg, ink: pair.ink, pairId: pair.id,
     logoAsset: T.logoAssets.light,
     logoBox: { x: dim.w * 0.83, y: dim.h * 0.9, w: 128, h: 111.6, position: 'bottom-right' },
-    slots,
+    slots, photo,
   };
 }
 
@@ -175,4 +184,39 @@ test('the EMITTED artifacts satisfy every gate', { skip: !existsSync(svgPath('po
     }
     assert.ok(doc.logo.hasMarkGeometry, `${dimensionId}: the real brand mark is not inlined`);
   }
+});
+
+
+// ── THE PHOTO BOX IN THE SEED (client amendment 2026-08-18) ─────────────────
+test('the photo box is emitted as round-trip truth, with NO stand-in photo (law 3)', () => {
+  for (const dimId of DIM_IDS) {
+    const dim = DIMENSIONS[dimId];
+    const doc = parseSvg(buildSvg(layoutFor(dimId), STUB_MARK));
+    const per = slotConstraint(T, 'photo', dimId);
+    assert.ok(doc.photo, `${dimId}: no slot/photo group`);
+    assert.equal(doc.photo.box.w, per.box.w * dim.w);
+    assert.equal(doc.photo.box.h, per.box.h * dim.h);
+    // A seed that shipped a placeholder image would be a fabricated asset, and
+    // would also misrepresent the DEFAULT render (which has no photo at all).
+    assert.equal(doc.photo.lines.length, 0, 'the photo group must carry no text');
+    assert.equal(doc.photo.hasMarkGeometry, false, 'the photo group must carry no artwork');
+  }
+});
+
+test('the seed records the DECLARED treatment so the designer can see it', () => {
+  const svg = buildSvg(layoutFor('portrait'), STUB_MARK);
+  const scrim = T.slots.photo.scrim.light;
+  assert.match(svg, new RegExp(`fit=cover · scrim ${scrim.colour} @ ${scrim.opacity}`));
+  assert.match(svg, /optional: no photo renders the plain colour field/);
+});
+
+test('auditEmitted refuses a moved photo box and an unexpected photo group', () => {
+  const good = buildSvg(layoutFor('square'), STUB_MARK);
+  const ctx = { template: T, dimensionId: 'square', floorPxFor, slotConstraint, DIMENSIONS };
+  assert.deepEqual(auditEmitted(good, ctx), []);
+  const moved = good.replace('<rect id="box_photo" data-name="box" x="0"', '<rect id="box_photo" data-name="box" x="40"');
+  assert.ok(auditEmitted(moved, ctx).some((f) => /photo\.box\.x/.test(f)));
+  // …and a template with no photo slot must not receive one.
+  const noPhoto = { ...T, slots: { ...T.slots, photo: { present: false } } };
+  assert.ok(auditEmitted(good, { ...ctx, template: noPhoto }).some((f) => /does not declare/.test(f)));
 });

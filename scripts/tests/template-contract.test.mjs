@@ -189,3 +189,89 @@ test('slotConstraint returns null for a deactivated slot and the row for a live 
   assert.equal(slotConstraint(t, 'heading', 'story'), null, 'unsupported dimension');
   assert.equal(slotConstraint(t, 'heading', 'portrait').charBudget, 30);
 });
+
+// ── THE PHOTO SLOT + THE LOGO SET (client AMENDMENT 2026-08-18) ─────────────
+// Everything the amendment adds to a template is a number, an enum or a flag.
+// These prove the validator still FAILS CLOSED on the new surface area — the
+// point of the amendment is a photo, not a foothold for behaviour.
+function withPhoto(extra = {}) {
+  const t = baseline();
+  t.slots.photo = {
+    present: true,
+    scrim: { light: { colour: '#F5F6E7', opacity: 0.62 }, dark: { colour: '#254E48', opacity: 0.62 } },
+    dimensions: {
+      portrait: { present: true, required: false, fit: 'cover', box: { x: 0, y: 0, w: 1, h: 1 } },
+      square: { present: true, required: false, fit: 'cover', box: { x: 0, y: 0, w: 1, h: 1 } },
+    },
+    ...extra,
+  };
+  return t;
+}
+
+test('a photo slot declared as pure data VALIDATES', () => {
+  assert.deepEqual(validateTemplate(withPhoto()).errors, []);
+});
+
+test('REJECTS behaviour smuggled in through the photo treatment', () => {
+  const fn = withPhoto();
+  fn.slots.photo.scrim.light.opacity = () => 0.62;
+  assert.ok(validateTemplate(fn).errors.some((e) => /FUNCTION/.test(e)));
+
+  const ruled = withPhoto();
+  ruled.slots.photo.when = { darkPhoto: 'more scrim' };
+  assert.ok(validateTemplate(ruled).errors.some((e) => /rule-shaped/.test(e)));
+
+  const re = withPhoto();
+  re.slots.photo.dimensions.portrait.match = /dark/;
+  assert.ok(!validateTemplate(re).valid);
+});
+
+test('REJECTS a present photo with no scrim, or a scrim that does nothing', () => {
+  const none = withPhoto();
+  delete none.slots.photo.scrim;
+  assert.ok(validateTemplate(none).errors.some((e) => /must declare the fixed scrim/.test(e)));
+
+  const half = withPhoto();
+  delete half.slots.photo.scrim.dark;
+  assert.ok(validateTemplate(half).errors.some((e) => /scrim\.dark/.test(e)));
+
+  // A 0-opacity scrim would be a declaration the render core "always applies"
+  // while applying nothing — a dead control in data form (M4).
+  const zero = withPhoto();
+  zero.slots.photo.scrim.light.opacity = 0;
+  assert.ok(validateTemplate(zero).errors.some((e) => /cannot be a no-op/.test(e)));
+
+  const overOne = withPhoto();
+  overOne.slots.photo.scrim.dark.opacity = 1.4;
+  assert.ok(!validateTemplate(overOne).valid);
+
+  const notHex = withPhoto();
+  notHex.slots.photo.scrim.light.colour = 'ivory';
+  assert.ok(validateTemplate(notHex).errors.some((e) => /scrim\.light\.colour/.test(e)));
+});
+
+test('REJECTS a photo fit outside the enum (how it sits is an ENUM, never a computation)', () => {
+  const t = withPhoto();
+  t.slots.photo.dimensions.square.fit = 'smart';
+  assert.ok(validateTemplate(t).errors.some((e) => /fit: required one of cover \| contain/.test(e)));
+  const missing = withPhoto();
+  delete missing.slots.photo.dimensions.portrait.fit;
+  assert.ok(!validateTemplate(missing).valid);
+});
+
+test('allowedLogoAssets is an id TABLE — empty, duplicated or non-string is rejected', () => {
+  const ok = baseline(); ok.allowedLogoAssets = ['s1-green', 's1-ivory'];
+  assert.deepEqual(validateTemplate(ok).errors, []);
+
+  const empty = baseline(); empty.allowedLogoAssets = [];
+  assert.ok(validateTemplate(empty).errors.some((e) => /non-empty array/.test(e)));
+
+  const dup = baseline(); dup.allowedLogoAssets = ['s1-green', 's1-green'];
+  assert.ok(validateTemplate(dup).errors.some((e) => /duplicate id/.test(e)));
+
+  const notId = baseline(); notId.allowedLogoAssets = ['s1-green', 7];
+  assert.ok(!validateTemplate(notId).valid);
+
+  const behaviour = baseline(); behaviour.allowedLogoAssets = [() => 's1-green'];
+  assert.ok(validateTemplate(behaviour).errors.some((e) => /FUNCTION/.test(e)));
+});

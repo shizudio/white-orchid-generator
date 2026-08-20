@@ -98,7 +98,7 @@ function readMark(publicPath) {
 
 /** Serialises one dimension's measured layout into a Figma-importable SVG. */
 export function buildSvg(layout, mark) {
-  const { dimensionId, width, height, bg, ink, slots, logoBox } = layout;
+  const { dimensionId, width, height, bg, ink, slots, logoBox, photo } = layout;
   const parts = [];
   parts.push('<?xml version="1.0" encoding="UTF-8"?>');
   parts.push(
@@ -112,6 +112,25 @@ export function buildSvg(layout, mark) {
   parts.push(`  <g ${layerAttrs('background')}>`);
   parts.push(`    <rect ${layerAttrs('field')} x="0" y="0" width="${width}" height="${height}" fill="${bg}"/>`);
   parts.push('  </g>');
+
+  // ── the photo box (client amendment 2026-08-18) ───────────────────────────
+  // The seed carries NO photo: the template's photo slot is optional and the
+  // default render is the clean tile, so painting one here would be a picture of
+  // a design that does not exist. What IS emitted is the authored box — the same
+  // round-trip truth every other slot contributes — plus the declared treatment
+  // in a comment, so the designer can move the box in Figma and re-bake it.
+  if (photo) {
+    parts.push(`  <g ${layerAttrs('slot/photo')}>`);
+    parts.push(
+      `    <!-- authored box: x=${photo.frac.x} y=${photo.frac.y} w=${photo.frac.w} h=${photo.frac.h} of the frame · `
+      + `fit=${photo.fit} · scrim ${photo.scrim ? `${photo.scrim.colour} @ ${photo.scrim.opacity}` : 'none'} · `
+      + 'optional: no photo renders the plain colour field -->');
+    parts.push(
+      `    <rect id="box_photo" data-name="box" x="${r2(photo.box.x)}" y="${r2(photo.box.y)}" `
+      + `width="${r2(photo.box.w)}" height="${r2(photo.box.h)}" fill="none" `
+      + `stroke="${ink}" stroke-opacity="0.3" stroke-width="2" stroke-dasharray="12 8"/>`);
+    parts.push('  </g>');
+  }
 
   // ── one group per present text slot ───────────────────────────────────────
   for (const s of slots) {
@@ -166,7 +185,7 @@ export function parseSvg(svgText) {
   if (!root) throw new Error('parseSvg: no root <svg> with width/height/viewBox');
   const out = {
     width: Number(root[1]), height: Number(root[2]), viewBox: root[3],
-    background: null, slots: {}, logo: null,
+    background: null, slots: {}, logo: null, photo: null,
   };
   const bgRect = /<g id="background"[^>]*>\s*<rect\b([^>]*)\/>/.exec(svgText);
   if (bgRect) out.background = attrs(bgRect[1]);
@@ -188,7 +207,9 @@ export function parseSvg(svgText) {
       mark: nested ? { x: +nested[1], y: +nested[2], w: +nested[3], h: +nested[4] } : null,
       hasMarkGeometry: /<path\b|<circle\b|<polygon\b/.test(body),
     };
-    if (name === 'logo') out.logo = entry; else out.slots[name] = entry;
+    if (name === 'logo') out.logo = entry;
+    else if (name === 'photo') out.photo = entry;
+    else out.slots[name] = entry;
   }
   return out;
 }
@@ -235,6 +256,25 @@ export function auditEmitted(svgText, { template, dimensionId, floorPxFor, slotC
     for (const line of got.lines) {
       if (Number(line['font-size']) < floor) fails.push(`${at}/${name}: font-size ${line['font-size']} is BELOW the floor ${floor}`);
     }
+  }
+
+  // The photo box is round-trip truth too, and it must carry NO artwork — the
+  // seed shows where a photo would sit, it never ships a stand-in photo (law 3).
+  const photoPer = slotConstraint(template, 'photo', dimensionId);
+  if (photoPer) {
+    if (!doc.photo) fails.push(`${at}: no slot/photo group, but the template declares a photo box`);
+    else if (!doc.photo.box) fails.push(`${at}/photo: no 'box' rect — nothing to read back`);
+    else {
+      const want = { x: photoPer.box.x * dim.w, y: photoPer.box.y * dim.h, w: photoPer.box.w * dim.w, h: photoPer.box.h * dim.h };
+      for (const k of ['x', 'y', 'w', 'h']) {
+        if (Math.abs(doc.photo.box[k] - want[k]) > 0.01) {
+          fails.push(`${at}/photo.box.${k}: emitted ${doc.photo.box[k]} but the baked fraction is ${photoPer.box[k]} → ${want[k]}px`);
+        }
+      }
+      if (doc.photo.hasMarkGeometry || doc.photo.lines.length) fails.push(`${at}/photo: the seed must not carry stand-in artwork`);
+    }
+  } else if (doc.photo) {
+    fails.push(`${at}: emitted a slot/photo group the template does not declare`);
   }
 
   const logoPer = slotConstraint(template, 'logo', dimensionId);
@@ -314,10 +354,18 @@ export async function measureLayouts() {
           });
         }
 
+        const photoPer = slotConstraint(tpl, 'photo', dimensionId);
+        const photo = photoPer ? {
+          frac: photoPer.box,
+          box: { x: photoPer.box.x * dim.w, y: photoPer.box.y * dim.h, w: photoPer.box.w * dim.w, h: photoPer.box.h * dim.h },
+          fit: photoPer.fit,
+          scrim: tpl.slots.photo?.scrim?.[pair.klass] || null,
+        } : null;
+
         out.push({
           templateId: tpl.id, templateVersion: tpl.version, dimensionId,
           width: dim.w, height: dim.h, bg: pair.bg, ink: pair.ink, pairId: pair.id,
-          logoAsset, logoBox: truth.logoBox, slots,
+          logoAsset, logoBox: truth.logoBox, slots, photo,
           canvasPng: canvas.toDataURL('image/png'),
         });
       }

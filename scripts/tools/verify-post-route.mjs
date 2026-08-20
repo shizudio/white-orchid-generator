@@ -5,6 +5,7 @@
      · maxLength on every field equals the baked charBudget
      · a hard break that busts maxLines BLOCKS that dimension's export (§7.2)
      · improve degrades honestly with NO key and spends nothing (money law)
+     · the photo library degrades honestly with NO key ({configured:false}, 200)
    Screenshots land in generated/template-one/.
 
    Usage: WO_DIST_DIR=.next-s73 node scripts/tools/verify-post-route.mjs [--port 3458]
@@ -75,7 +76,7 @@ async function main() {
     if (inked.some((v) => !v)) failures.push(`a canvas painted no ink: ${JSON.stringify(inked)}`);
 
     // 4. §7.2 — hard breaks that bust maxLines put dimensions ON HOLD
-    const beforeHold = await page.evaluate(() => [...document.querySelectorAll('figcaption button')].map((b) => b.textContent.trim()));
+    const beforeHold = await page.evaluate(() => [...document.querySelectorAll('.wo-cell-dl')].map((b) => b.textContent.trim()));
     if (beforeHold.some((t) => t !== 'Download')) failures.push(`clean copy should have no holds: ${JSON.stringify(beforeHold)}`);
     await page.evaluate(() => {
       const ta = document.querySelector('#slot-heading');
@@ -84,7 +85,7 @@ async function main() {
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await page.waitForTimeout(400);
-    const afterHold = await page.evaluate(() => [...document.querySelectorAll('figcaption button')].map((b) => b.textContent.trim()));
+    const afterHold = await page.evaluate(() => [...document.querySelectorAll('.wo-cell-dl')].map((b) => b.textContent.trim()));
     if (!afterHold.includes('On hold')) failures.push(`five hard breaks did not block any export: ${JSON.stringify(afterHold)}`);
     await page.screenshot({ path: join(OUT, 'route-overbudget.png'), fullPage: true });
     console.log('export state with 4 hard breaks in the heading:', JSON.stringify(afterHold));
@@ -111,6 +112,21 @@ async function main() {
     if (improve.body.configured !== false) failures.push('improve claimed configured with no key');
     if (!improve.body.reason) failures.push('improve degraded without an honest reason');
     if (improve.body.fallback && improve.body.fallback.length > T.slots.heading.charBudget) failures.push('the offline fallback exceeded the budget');
+
+    // 5b. THE PHOTO LIBRARY with NO key — the graceful-degradation contract.
+    //     An unconfigured cloud must be a 200 with {configured:false}, never a
+    //     500, and the surface must still be usable without a photo.
+    const lib = await page.evaluate(async () => {
+      const res = await fetch('/api/images');
+      return { status: res.status, body: await res.json() };
+    });
+    console.log('GET /api/images (no key):', JSON.stringify(lib).slice(0, 120));
+    if (lib.status !== 200) failures.push(`/api/images returned HTTP ${lib.status} unconfigured — must be 200`);
+    if (lib.body?.configured !== false) failures.push('/api/images did not report itself unconfigured');
+    // …and with no photo, nothing is on hold: the amendment adds no noise to the
+    // pre-verified path (§10A still stands where it always did).
+    const cleanHolds = await page.evaluate(() => [...document.querySelectorAll('.wo-cell-dl')].map((b) => b.textContent.trim()));
+    if (cleanHolds.some((t) => t !== 'Download')) failures.push(`the clean text-only tile is on hold: ${JSON.stringify(cleanHolds)}`);
 
     // 6. mobile viewport sanity (M9 — measure BOTH)
     await page.setViewportSize({ width: 375, height: 812 });

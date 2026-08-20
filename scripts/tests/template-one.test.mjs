@@ -12,6 +12,8 @@ import { TEMPLATE_LABEL_HEADLINE as T, MEASURED_BUDGETS } from '../../lib/templa
 import { TEMPLATES, templateById, DEFAULT_TEMPLATE_ID } from '../../lib/templates/index.mjs';
 import { validateTemplate, DIMENSIONS } from '../../lib/templates/template-contract.mjs';
 import { floorPxFor } from '../../lib/render-core/floor.mjs';
+import { resolveLogoAsset, templateLogoVariants } from '../../lib/templates/logo-assets.mjs';
+import { DEFAULT_LOGO_VARIANTS } from '../../lib/brand-defaults.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -45,12 +47,41 @@ test('SLOT MAPPING from today\'s archetype roles — microLabel→eyebrow, hero�
   assert.equal(T.registers.body.face, 'body');
 });
 
-test('this template is TEXT-ONLY and says so honestly (§6.3 — deactivating never deletes)', () => {
-  for (const s of ['photo', 'motif', 'pill', 'attribution']) {
+test('the slots it does NOT use are declared absent, not omitted (§6.3 — deactivating never deletes)', () => {
+  for (const s of ['motif', 'pill', 'attribution']) {
     assert.equal(T.slots[s].present, false, `${s} must be declared absent, not omitted`);
   }
   assert.equal(T.motif, 'none');
-  assert.match(T.purpose, /text only/i, '§6.3 rule 3: the purpose text states the slots');
+});
+
+// ── THE PHOTO SLOT (client AMENDMENT 2026-08-18) ────────────────────────────
+test('the photo is OPTIONAL in every dimension, and the purpose text says so (§6.3 rule 3)', () => {
+  assert.equal(T.slots.photo.present, true);
+  for (const dimId of Object.keys(T.dimensions)) {
+    const per = T.slots.photo.dimensions[dimId];
+    assert.equal(per.present, true, `${dimId}: the photo must be declared for every supported dimension`);
+    assert.equal(per.required, false, `${dimId}: a required photo would make the clean tile unreachable`);
+    assert.equal(per.fit, 'cover');
+    assert.deepEqual(per.box, { x: 0, y: 0, w: 1, h: 1 }, `${dimId}: the photo is full-bleed`);
+  }
+  // The old text said "Text only — no photo". That stopped being true, so it
+  // had to stop being said (M4: never a claim the render cannot back).
+  assert.ok(!/text only/i.test(T.purpose), 'the purpose text still claims text-only');
+  assert.match(T.purpose, /photo/i, 'the purpose text must state the photo slot');
+  assert.match(T.purpose, /optional/i, 'and that it is optional');
+});
+
+test('the photo TREATMENT is data: one fixed scrim per colour class, no ladder (§6.2)', () => {
+  const scrim = T.slots.photo.scrim;
+  assert.deepEqual(Object.keys(scrim).sort(), ['dark', 'light']);
+  for (const klass of ['light', 'dark']) {
+    assert.match(scrim[klass].colour, /^#[0-9A-Fa-f]{6}$/);
+    assert.ok(scrim[klass].opacity > 0 && scrim[klass].opacity <= 1, `${klass}: opacity out of range`);
+  }
+  // The scrim must be the INK's opposite pole, or it darkens the very field the
+  // ink needs. This is the whole reason the table is keyed by colour class.
+  assert.equal(scrim.light.colour, T.colourPairs.find((p) => p.klass === 'light').bg);
+  assert.equal(scrim.dark.colour, T.colourPairs.find((p) => p.klass === 'dark').bg);
 });
 
 test('all four dimensions are AUTHORED — every text slot has its own box per dimension (§5)', () => {
@@ -116,6 +147,38 @@ test('every colour pair is pre-verified and both logo assets are real files (law
     const path = join(here, '..', '..', 'public', src.replace(/^\//, ''));
     assert.doesNotThrow(() => readFileSync(path), `logo asset missing: ${src}`);
   }
+});
+
+// ── LOGO SWAP (client ruling 2026-08-18) ────────────────────────────────────
+test('every sanctioned logo variant is a REAL brand asset with a real file (law 3)', () => {
+  const ids = T.allowedLogoAssets;
+  assert.ok(Array.isArray(ids) && ids.length >= 2, 'a swap needs something to swap to');
+  for (const id of ids) {
+    const v = DEFAULT_LOGO_VARIANTS.find((x) => x.id === id);
+    assert.ok(v, `allowedLogoAssets '${id}' is not in the brand catalog — a fabricated mark`);
+    assert.doesNotThrow(
+      () => readFileSync(join(here, '..', '..', 'public', v.src.replace(/^\//, ''))),
+      `allowedLogoAssets '${id}' points at a missing file: ${v.src}`,
+    );
+    assert.ok(templateLogoVariants(T).some((r) => r.id === id), `${id} was dropped by the resolver`);
+  }
+  // Both colour-class defaults must themselves be offerable, or "Auto" would
+  // show a mark the picker cannot get back to.
+  for (const src of Object.values(T.logoAssets)) {
+    const v = DEFAULT_LOGO_VARIANTS.find((x) => x.src === src);
+    assert.ok(v && ids.includes(v.id), `the default mark ${src} is not in allowedLogoAssets`);
+  }
+});
+
+test('the default mark is still whatever the colour class implies (nothing changed for her)', () => {
+  assert.equal(resolveLogoAsset(T, 'light', null).src, T.logoAssets.light);
+  assert.equal(resolveLogoAsset(T, 'dark', null).src, T.logoAssets.dark);
+  // An explicit pick is honoured AS MADE — including a poor one. Silently
+  // substituting the "right" mark is exactly trap M3.
+  assert.equal(resolveLogoAsset(T, 'light', 's1-ivory').src, '/assets/logos/secondary/secondary-1-ivory.svg');
+  assert.equal(resolveLogoAsset(T, 'light', 's1-ivory').explicit, true);
+  // An id the template never sanctioned falls back to the default, never draws.
+  assert.equal(resolveLogoAsset(T, 'light', 'p1-green').src, T.logoAssets.light);
 });
 
 test('allowedLogoPositions is a real subset — no free placement (§3 non-goals)', () => {
