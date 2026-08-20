@@ -332,9 +332,30 @@ test('photoOnly is a fully authored second layout — bigger petal, no band, in 
       Math.abs(alt.box.x - (1 - alt.box.w) / 2) < 0.001,
       `${dimId}: the photoOnly window is off-centre (x=${alt.box.x}, centred would be ${(1 - alt.box.w) / 2})`,
     );
-    // At the silhouette's TRUE proportions — never stretched.
+    /* THE BOX'S PROPORTIONS. Nothing is ever STRETCHED — the core contains a
+       silhouette at the asset's own ratio whatever the box is — so what the
+       box's ratio actually decides is which axis binds, i.e. how much of the
+       box a given shape fills.
+
+       Three of the four are near-square, matching the silhouettes, so the
+       window and the petal are close to the same thing. LANDSCAPE IS
+       DELIBERATELY TALLER THAN SQUARE (see the note on its box): narrow enough
+       that EVERY sanctioned shape is width-limited and therefore paints at the
+       same width, clear of both mark columns, and correspondingly taller so the
+       area is unchanged. That is the whole reason it can be centred on both
+       axes and still keep the mark on flat field. */
     const ratio = (alt.box.w * DIMENSIONS[dimId].w) / (alt.box.h * DIMENSIONS[dimId].h);
-    assert.ok(ratio > 0.99 && ratio < 1.02, `${dimId}: the photoOnly window is ${ratio.toFixed(4)}:1 — stretched`);
+    if (dimId === 'landscape') {
+      assert.ok(ratio < 0.75, `landscape's window must be taller than square so every shape is width-limited (got ${ratio.toFixed(4)}:1)`);
+      // The shape-agnostic guarantee, stated where the geometry is: the BOX —
+      // and so every shape contained in it — clears both sanctioned corners.
+      const l = slotConstraint(T, 'logo', 'landscape');
+      const markW = (l.pad + l.widthFrac);
+      assert.ok(alt.box.x > markW, `landscape's window reaches the bottom-left mark column (${alt.box.x} <= ${markW})`);
+      assert.ok(alt.box.x + alt.box.w < 1 - markW, 'landscape\'s window reaches the bottom-right mark column');
+    } else {
+      assert.ok(ratio > 0.99 && ratio < 1.02, `${dimId}: the photoOnly window is ${ratio.toFixed(4)}:1 — no longer near-square`);
+    }
     // The CONTRACT half is untouched: a state moves geometry and nothing else.
     assert.equal(alt.required, base.required);
     assert.equal(alt.fit, base.fit);
@@ -348,23 +369,21 @@ test('photoOnly is a fully authored second layout — bigger petal, no band, in 
 
 /* HARD CONSTRAINT (client ruling 2026-08-18): the petal may bleed anywhere
    EXCEPT under the mark. This template sanctions bottom-left AND bottom-right,
-   so the whole bottom strip stays flat field — which is why photoOnly takes its
-   overflow at the top and the sides rather than the bottom.
+   so BOTH corners must stay flat field, in every dimension, with NO exceptions
+   — the landscape one that stood while the 1.6x ruling was open is gone, and
+   the geometry now satisfies this outright.
 
-   LANDSCAPE IS THE ONE EXCEPTION, AND IT IS A REPORTED CONFLICT, NOT A LEAK.
-   The client ruled landscape's photoOnly window "1.6x bigger" and "centralized
-   vertically" (2026-08-18). At 16:9 that bleeds off the top AND the bottom, so
-   the silhouette is at its widest exactly where the mark sits. The number was
-   honoured as given rather than quietly shrunk, and the collision is measured
-   and reported for a ruling — see the header of
-   scripts/tools/verify-template-two.mjs for the numbers and the options. This
-   exclusion is named here so it cannot spread to another dimension unnoticed,
-   and it is deleted the moment the client rules. */
-const MARK_CONFLICT_PENDING_RULING = new Set(['landscape']);
+   IT IS ASSERTED ON THE BOX, NOT ON THE PAINTED SILHOUETTE, AND THAT IS THE
+   POINT. A shape is CONTAINED in the window at its own proportions, so how far
+   it insets from the box depends on which shape she picked. A naive 1.38x
+   landscape box let the DEFAULT petal clear the corner by ~9px while shape-2 —
+   wider than that box, so it fills the full width — ran straight under the
+   bottom-right mark (measured: 8/16 tone-appropriate combinations, field under
+   the mark 0.04). The box is the shape-agnostic guarantee; the painted rect is
+   whichever shape happens to be selected. Assert the box. */
 
 test('THE MARK IS CLEAR OF THE PETAL IN THE photoOnly STATE TOO', () => {
   for (const dimId of Object.keys(T.dimensions)) {
-    if (MARK_CONFLICT_PENDING_RULING.has(dimId)) continue;
     const dim = DIMENSIONS[dimId];
     const p = slotConstraint(T, 'photo', dimId, 'photoOnly').box;
     const l = slotConstraint(T, 'logo', dimId, 'photoOnly');
@@ -382,8 +401,11 @@ test('THE MARK IS CLEAR OF THE PETAL IN THE photoOnly STATE TOO', () => {
       assert.equal(hit, false, `${dimId}/${position}: the bigger photoOnly petal runs under the mark`);
     }
   }
-  // …and the exclusion is exactly one dimension, so it cannot quietly grow.
-  assert.deepEqual([...MARK_CONFLICT_PENDING_RULING], ['landscape']);
+  /* AND IT COVERS EVERY DIMENSION — no skips, no allowlist. This loop once
+     carried a named landscape exclusion while the 1.6x ruling was open;
+     asserting the count here means a future "just exclude this one" cannot be
+     slipped in by adding a `continue`. */
+  assert.equal(Object.keys(T.dimensions).length, 4);
 });
 
 test('the state SWITCH is her CHOICE — generic, binary, and never inferred from copy', () => {

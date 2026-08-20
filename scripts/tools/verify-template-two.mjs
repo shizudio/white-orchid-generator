@@ -50,35 +50,22 @@ const OUT_DIR = join(REPO_ROOT, 'generated', 'template-two');
 const FILLER = 'every child leads their own day here with us and we make room for what they want to try next in the garden';
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
-/* ── ONE ACKNOWLEDGED, UNRESOLVED CONFLICT (client ruling 2026-08-18) ────────
-   "for lapscape, still bring the petal window frame down centralized
-    vertically, make 1.6x bigger."
+/* ── THE LANDSCAPE photoOnly WINDOW, AND WHY IT IS GATED SHAPE-AGNOSTICALLY ──
+   RESOLVED (client ruling 2026-08-18). The first landscape ruling — "make 1.6x
+   bigger", centred — put the petal under the mark's corner: measured here over
+   11 library photos x 5 sanctioned marks x 2 sanctioned corners, only 2 of 30
+   combinations cleared all four dimensions, and sage (the default pair) and
+   forest had no clean mark at all. The client took the evidence and ruled
+   1.38x. There is no outstanding conflict and nothing in this file is excused.
 
-   That number is honoured exactly: `photoOnly` landscape is 1.6x the previous
-   window, centred on both axes. It cannot ALSO keep the mark's corner on flat
-   field. At 16:9 a petal 1.6x larger and vertically centred bleeds off the top
-   AND the bottom, so at the mark's own height the silhouette is at its widest
-   and reaches into both bottom corners. Measured, in the render core:
-
-     shape-1 (default)  mark contrast 3.04 : 1  — scrapes past the 3.0 floor
-     shape-2            mark contrast 3.69 : 1  — passes
-     shape-3            mark contrast 1.95 : 1  — FAILS, landscape goes on hold
-                                                  and cannot be exported
-
-   Per the ruling this is REPORTED, not silently shrunk. These findings are
-   routed to a named conflict so the rest of the §11 bar stays a real gate;
-   nothing else is excused, and this block goes the moment the client rules.
-
-   THE OPTIONS, for that ruling:
-     (a) 1.38x instead of 1.6x — the largest centred landscape petal that keeps
-         BOTH sanctioned mark corners on flat field.
-     (b) Keep 1.6x and drop bottom-right from allowedLogoPositions, then move
-         the mark itself (a state may override the logo pad/widthFrac) into the
-         field that survives at the left edge.
-     (c) Keep 1.6x and accept that landscape cannot be exported with shape-3.
-         NOT recommended: a shape she can pick that silently blocks a format is
-         the surprise class this whole app exists to remove. */
-const PENDING_RULING = /^photoOnly-shape-\d\/landscape: (the silhouette reaches|contrast failures logo|the mark was not measured)/;
+   ONE THING TO KEEP IN MIND WHEN TOUCHING THAT GEOMETRY: what must clear the
+   mark is the WINDOW BOX, not the painted silhouette. A shape is contained in
+   the box at its own proportions, so how far it insets depends on WHICH shape
+   she picked — a naive 1.38x box let the default petal clear by ~9px while
+   shape-2, which is wider than that box and therefore fills it, ran straight
+   under the bottom-right mark (8/16 combinations, field under the mark 0.04).
+   The gates below are on the box and on every sanctioned shape for exactly
+   that reason; a gate on the default shape alone would have shipped it. */
 
 async function run() {
   mkdirSync(OUT_DIR, { recursive: true });
@@ -87,8 +74,7 @@ async function run() {
   const mask = templateMaskAsset(T);
   const shapes = templateMaskShapes(T);
   const failures = [];
-  const acknowledged = [];
-  const fail = (m) => (PENDING_RULING.test(m) ? acknowledged : failures).push(m);
+  const fail = (m) => failures.push(m);
   if (!mask) failures.push(`the declared default mask id '${T.slots.photo.mask}' does not resolve — law 3`);
   if (shapes.length !== (T.allowedMaskShapes || []).length) failures.push('a declared window shape id did not resolve');
 
@@ -578,13 +564,6 @@ async function run() {
         if (r.contrastFailures.length) fail(`${at}: contrast failures ${r.contrastFailures.join(', ')}`);
         if (!r.mark || !r.mark.ok) fail(`${at}: the mark was not measured, or failed (${JSON.stringify(r.mark)})`);
         if (!r.paint) { fail(`${at}: nothing painted`); continue; }
-        /* IT MUST ACTUALLY BLEED — off the top or off the right; WHICH edge is
-           a property of the silhouette's own proportions, not of the ruling.
-           shape-2 is wider than the window, so it fills the box's width and
-           bleeds off the RIGHT while stopping just short of the top on story
-           (t=+0.013); the taller shapes bleed off the top. Requiring the top
-           specifically would be gating an accident of one asset's ratio. The
-           DEFAULT petal is held to the stricter line, below. */
         /* IT MUST BLEED, AND IT MUST BE CENTRED (client rulings 2026-08-18:
            "overflowing the frame like referenced" … "no i need the petals to be
             centralized"). WHICH edge it overflows is a property of the frame
@@ -597,9 +576,27 @@ async function run() {
         }
         const offCentre = Math.abs((r.paint.l + r.paint.r) / 2 - 0.5);
         if (offCentre > 0.002) fail(`${at}: the silhouette is off-centre horizontally by ${offCentre.toFixed(3)}`);
-        // …and it must never reach the mark's strip.
-        const markTop = 1 - (0.05 * DIMENSIONS[dimId].w + (T.slots.logo.dimensions[dimId].widthFrac * DIMENSIONS[dimId].w * 0.8333)) / DIMENSIONS[dimId].h;
-        if (r.paint.b > markTop) fail(`${at}: the silhouette reaches ${r.paint.b.toFixed(3)}, past the mark's top line ${markTop.toFixed(3)}`);
+        /* …AND IT MUST NEVER REACH EITHER MARK CORNER. A RECT test, not a
+           "stays above the mark's top line" one: how a dimension clears the
+           mark is its own business. The three tall frames clear it VERTICALLY
+           (the petal's bottom edge sits above the mark); landscape clears it
+           HORIZONTALLY (the petal passes between the two mark columns while
+           bleeding off the top and bottom). A vertical-only proxy would have
+           refused a composition that is measurably clean — the mark measures
+           the pair's own flat-field ratio there — so the gate tests what the
+           constraint actually is, in both axes, for BOTH sanctioned corners. */
+        const dim = DIMENSIONS[dimId];
+        const lg = T.slots.logo.dimensions[dimId];
+        const pad = (lg.pad ?? 0.05) * dim.w;
+        const lw = (lg.widthFrac ?? 0.12) * dim.w;
+        const lh = lw * 0.8333;
+        for (const position of T.allowedLogoPositions) {
+          const mx = position.endsWith('left') ? pad : dim.w - pad - lw;
+          const my = dim.h - pad - lh;
+          const m = { x: mx / dim.w, y: my / dim.h, r: (mx + lw) / dim.w, b: (my + lh) / dim.h };
+          const hit = !(m.r <= r.paint.l || r.paint.r <= m.x || m.b <= r.paint.t || r.paint.b <= m.y);
+          if (hit) fail(`${at}/${position}: the silhouette runs under the mark (petal ${r.paint.l.toFixed(3)}-${r.paint.r.toFixed(3)} x ${r.paint.t.toFixed(3)}-${r.paint.b.toFixed(3)}, mark ${m.x.toFixed(3)}-${m.r.toFixed(3)} x ${m.y.toFixed(3)}-${m.b.toFixed(3)})`);
+        }
       }
     }
 
@@ -773,15 +770,6 @@ async function run() {
       console.log(`  ${c.pairId.padEnd(7)} band=${hb?.ratio}/${hb?.minimum}  mark=${lg?.ratio}/${lg?.minimum}  failures=${JSON.stringify(c.truth.contrastFailures)}`);
     }
     console.log(`\nPNG evidence: ${OUT_DIR} (${result.shots.length} files)`);
-
-    if (acknowledged.length) {
-      console.error('\n*** LANDSCAPE photoOnly — CLIENT RULING vs THE MARK CONSTRAINT, UNRESOLVED ***');
-      console.error('    The 1.6x centred landscape window is honoured as ruled. It reaches the mark corner:');
-      for (const a of acknowledged) console.error('  - ' + a);
-      console.error('    Options: (a) 1.38x keeps both corners clear   (b) keep 1.6x, move or limit the mark');
-      console.error('             (c) keep 1.6x and lose landscape export on shape-3 (not recommended).');
-      console.error('    See the header of this file. This block goes the moment the client rules.\n');
-    }
 
     if (failures.length) {
       console.error(`\nFAIL — ${failures.length} gate(s):`);
