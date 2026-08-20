@@ -21,7 +21,14 @@ test('template one is valid, registered, and the app default', () => {
   assert.deepEqual(validateTemplate(T).errors, []);
   assert.equal(templateById('label_headline'), T);
   assert.equal(DEFAULT_TEMPLATE_ID, 'label_headline');
-  assert.equal(TEMPLATES.length, 1, '§12: build ONE template end to end first');
+  // §12 said "build ONE template, in all four dimensions, end to end" FIRST —
+  // and it was, which is how the contract gaps template two needed (per-pair
+  // scrims, a required slot with something to refuse with, a photo mask) were
+  // found while they were still cheap. Template two has now landed, so the
+  // registry holds two. It is asserted rather than left open: a template that
+  // appears in the registry without its own end-to-end verification run is the
+  // thing §12 actually warns against.
+  assert.deepEqual(TEMPLATES.map((t) => t.id), ['label_headline', 'petal_window']);
 });
 
 test('SLOT MAPPING from today\'s archetype roles — microLabel→eyebrow, hero→heading, support→body, logo→logo', () => {
@@ -71,17 +78,37 @@ test('the photo is OPTIONAL in every dimension, and the purpose text says so (§
   assert.match(T.purpose, /optional/i, 'and that it is optional');
 });
 
-test('the photo TREATMENT is data: one fixed scrim per colour class, no ladder (§6.2)', () => {
+test('the photo TREATMENT is data: one fixed scrim PER COLOUR PAIR, no ladder (§6.2)', () => {
   const scrim = T.slots.photo.scrim;
-  assert.deepEqual(Object.keys(scrim).sort(), ['dark', 'light']);
-  for (const klass of ['light', 'dark']) {
-    assert.match(scrim[klass].colour, /^#[0-9A-Fa-f]{6}$/);
-    assert.ok(scrim[klass].opacity > 0 && scrim[klass].opacity <= 1, `${klass}: opacity out of range`);
+  const pairIds = T.colourPairs.map((p) => p.id);
+  // (client ruling 2026-08-18) Keyed by PAIR, not by class. Keyed by class,
+  // ivory/sage/blush shared one wash and rendered byte-identical behind a photo.
+  assert.deepEqual(Object.keys(scrim).sort(), [...pairIds].sort());
+  for (const pair of T.colourPairs) {
+    const row = scrim[pair.id];
+    assert.match(row.colour, /^#[0-9A-Fa-f]{6}$/);
+    assert.ok(row.opacity > 0 && row.opacity <= 1, `${pair.id}: opacity out of range`);
+    // Each pair washes the photo in ITS OWN field colour, so a sage tile still
+    // reads sage. Anything else is the bug this ruling removed.
+    assert.equal(row.colour, pair.bg, `${pair.id}: the scrim must be that pair's own field colour`);
   }
-  // The scrim must be the INK's opposite pole, or it darkens the very field the
-  // ink needs. This is the whole reason the table is keyed by colour class.
-  assert.equal(scrim.light.colour, T.colourPairs.find((p) => p.klass === 'light').bg);
-  assert.equal(scrim.dark.colour, T.colourPairs.find((p) => p.klass === 'dark').bg);
+  // Every scrim colour is distinct, because every field colour is — the
+  // machine-checked form of "each pair still looks like itself".
+  assert.equal(new Set(Object.values(scrim).map((r) => r.colour)).size, pairIds.length);
+});
+
+test('the scrim opacities are the MEASURED ones, and the client ruling raised every one', () => {
+  const scrim = T.slots.photo.scrim;
+  // The shipped value before the ruling was 0.72 for both classes. The client
+  // asked for MORE opacity so the words read; the sweep says how much more.
+  for (const pair of T.colourPairs) {
+    assert.ok(scrim[pair.id].opacity > 0.72,
+      `${pair.id}: ${scrim[pair.id].opacity} is not an increase on the 0.72 the client asked to raise`);
+  }
+  // The two low-headroom pairs need the most wash — that is the finding, and it
+  // is asserted so a future retune cannot quietly invert it.
+  assert.ok(scrim.sage.opacity > scrim.ivory.opacity, 'sage/burnham starts with less headroom than ivory/burnham');
+  assert.ok(scrim.blush.opacity > scrim.forest.opacity);
 });
 
 test('all four dimensions are AUTHORED — every text slot has its own box per dimension (§5)', () => {

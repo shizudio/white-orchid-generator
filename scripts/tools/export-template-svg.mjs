@@ -35,6 +35,31 @@ export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..
 const OUT_DIR = join(REPO_ROOT, 'generated', 'template-one', 'figma');
 const TEMPLATE_ID = 'label_headline';
 
+/* ── SCOPE, STATED IN CODE (client ruling 2026-08-18 — template two) ─────────
+   THIS EXPORTER IS TEMPLATE-ONE-ONLY FOR NOW, DELIBERATELY.
+
+   Its whole contract is "the round-trip truth is the `box` rect inside each
+   slot group": the designer moves a RECTANGLE in Figma and the re-bake reads
+   that rectangle back. Template two's photo is not a rectangle. It is a
+   rectangle CUT BY A REAL BRAND SILHOUETTE (`slots.photo.mask`), and an SVG
+   rect cannot carry that relationship: a designer would move the rect, the
+   re-bake would read the new box, and the mask — the one thing that makes the
+   template what it is — would round-trip as a plain crop.
+
+   Emitting a seed that LOOKS authoritative but silently drops the mask is worse
+   than emitting nothing (M4 — never a claim the round trip cannot back). So a
+   masked template is REFUSED here, by name, until the seed format grows a way
+   to carry a silhouette. Reported as a gap, not patched over.
+
+   `isExportable` is exported so the refusal is testable rather than a comment. */
+export function svgSeedRefusal(template) {
+  if (!template) return 'no template';
+  if (template.slots?.photo?.present && template.slots.photo.mask) {
+    return `template '${template.id}' reveals its photo through the '${template.slots.photo.mask}' silhouette, and the Figma seed's round-trip truth is a plain box rect — a masked photo cannot survive that round trip, so no seed is emitted rather than one that silently drops the mask`;
+  }
+  return null;
+}
+
 /* The SAME realistic strings the `real-*.png` evidence renders use
    (scripts/tools/verify-template-one.mjs), so what the client sees in Figma is
    the post she already reviewed as a PNG. */
@@ -359,7 +384,7 @@ export async function measureLayouts() {
           frac: photoPer.box,
           box: { x: photoPer.box.x * dim.w, y: photoPer.box.y * dim.h, w: photoPer.box.w * dim.w, h: photoPer.box.h * dim.h },
           fit: photoPer.fit,
-          scrim: tpl.slots.photo?.scrim?.[pair.klass] || null,
+          scrim: tpl.slots.photo?.scrim?.[pair.id] || null,
         } : null;
 
         out.push({
@@ -410,6 +435,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       import('../../lib/render-core/floor.mjs'),
     ]);
     const template = templateById(TEMPLATE_ID);
+    const refusal = svgSeedRefusal(template);
+    if (refusal) throw new Error(`SVG seed refused: ${refusal}`);
     const failures = [];
     for (const w of written) {
       failures.push(...auditEmitted(readFileSync(w.file, 'utf8'), {

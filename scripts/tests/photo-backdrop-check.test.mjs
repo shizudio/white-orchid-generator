@@ -103,18 +103,32 @@ test('A PHOTO → the declared scrim is ALWAYS painted over it, at the declared 
   const truth = renderTemplate(ctx, T, 'portrait', { ...COPY, colourPairId: 'ivory', photoImage: fakeImage });
   assert.equal(ctx.calls.drawImage, 1);
   assert.equal(truth.photo.fit, 'cover');
-  assert.deepEqual(truth.photo.scrim, T.slots.photo.scrim.light);
+  assert.deepEqual(truth.photo.scrim, T.slots.photo.scrim.ivory);
   // field fill + scrim fill, and the scrim carries the template's own opacity —
   // not a value adapted to the photo (there is no ladder).
   assert.equal(ctx.calls.fillRect, 2);
-  assert.equal(ctx.calls.alphas[1], T.slots.photo.scrim.light.opacity);
-  assert.equal(ctx.calls.fills[1], T.slots.photo.scrim.light.colour);
+  assert.equal(ctx.calls.alphas[1], T.slots.photo.scrim.ivory.opacity);
+  assert.equal(ctx.calls.fills[1], T.slots.photo.scrim.ivory.colour);
+});
 
-  // The dark pair takes the DARK scrim — a lookup keyed by colour class, the
-  // same shape logoAssets has always had.
-  const dark = stubCtx([245, 246, 231]);
-  const dt = renderTemplate(dark, T, 'portrait', { ...COPY, colourPairId: 'forest', photoImage: fakeImage });
-  assert.deepEqual(dt.photo.scrim, T.slots.photo.scrim.dark);
+test('EVERY colour pair washes the photo in ITS OWN colour — the per-pair ruling', () => {
+  // (client ruling 2026-08-18) Before this, the scrim was keyed by colour CLASS.
+  // ivory, sage and blush are all `light`, so all three painted the ivory wash
+  // over a full-bleed photo and the three tiles came out identical — which is
+  // why the client could only use forest and ivory. Keyed by pair, each one
+  // paints its own field colour at its own measured opacity.
+  const seen = new Set();
+  for (const pair of T.colourPairs) {
+    const ctx = stubCtx([245, 246, 231]);
+    const truth = renderTemplate(ctx, T, 'portrait', { ...COPY, colourPairId: pair.id, photoImage: fakeImage });
+    assert.deepEqual(truth.photo.scrim, T.slots.photo.scrim[pair.id], `${pair.id}: wrong scrim row`);
+    assert.equal(ctx.calls.fills[1], pair.bg, `${pair.id}: the wash is not this pair's own field colour`);
+    assert.equal(ctx.calls.alphas[1], T.slots.photo.scrim[pair.id].opacity);
+    const signature = `${ctx.calls.fills[1]}@${ctx.calls.alphas[1]}`;
+    assert.ok(!seen.has(signature), `${pair.id} paints the same wash as an earlier pair — the class-keying bug is back`);
+    seen.add(signature);
+  }
+  assert.equal(seen.size, T.colourPairs.length);
 });
 
 test('A PHOTO → each filled text slot is measured, and a bad backdrop BLOCKS rather than adapts', () => {

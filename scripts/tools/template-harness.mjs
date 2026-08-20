@@ -50,10 +50,11 @@ body{margin:0;background:#fff;font-family:"Romie","Syne","Fira Sans"}
 import { renderTemplate, resolveColourPair } from "/lib/render-core/render-template.mjs";
 import { autofit, autofitTrackedCaps } from "/lib/render-core/text.mjs";
 import { floorPxFor } from "/lib/render-core/floor.mjs";
+import { checkInkOnBackdrop, sampleBackdropLuminance, TEXT_MIN_CONTRAST, MARK_MIN_CONTRAST } from "/lib/render-core/backdrop-contrast.mjs";
 import { DIMENSIONS, slotConstraint } from "/lib/templates/template-contract.mjs";
 import { templateById } from "/lib/templates/index.mjs";
 import { DEFAULT_FONTS } from "/lib/brand-defaults.js";
-window.__wo = { renderTemplate, resolveColourPair, autofit, autofitTrackedCaps, floorPxFor, DIMENSIONS, slotConstraint, templateById, DEFAULT_FONTS };
+window.__wo = { renderTemplate, resolveColourPair, autofit, autofitTrackedCaps, floorPxFor, DIMENSIONS, slotConstraint, templateById, DEFAULT_FONTS, checkInkOnBackdrop, sampleBackdropLuminance, TEXT_MIN_CONTRAST, MARK_MIN_CONTRAST };
 window.__woReady = true;
 </script></body></html>`;
 

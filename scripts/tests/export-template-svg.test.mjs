@@ -63,7 +63,7 @@ function layoutFor(dimensionId, { lineCount = null, size = null } = {}) {
     frac: photoPer.box,
     box: { x: photoPer.box.x * dim.w, y: photoPer.box.y * dim.h, w: photoPer.box.w * dim.w, h: photoPer.box.h * dim.h },
     fit: photoPer.fit,
-    scrim: T.slots.photo.scrim[pair.klass],
+    scrim: T.slots.photo.scrim[pair.id],
   } : null;
   return {
     templateId: T.id, templateVersion: T.version, dimensionId,
@@ -205,7 +205,7 @@ test('the photo box is emitted as round-trip truth, with NO stand-in photo (law 
 
 test('the seed records the DECLARED treatment so the designer can see it', () => {
   const svg = buildSvg(layoutFor('portrait'), STUB_MARK);
-  const scrim = T.slots.photo.scrim.light;
+  const scrim = T.slots.photo.scrim.ivory;
   assert.match(svg, new RegExp(`fit=cover · scrim ${scrim.colour} @ ${scrim.opacity}`));
   assert.match(svg, /optional: no photo renders the plain colour field/);
 });

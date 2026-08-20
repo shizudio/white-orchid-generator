@@ -43,13 +43,13 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DIMENSIONS, slotConstraint } from '@/lib/templates/template-contract.mjs';
+import { DIMENSIONS, TEXT_SLOTS, slotConstraint } from '@/lib/templates/template-contract.mjs';
 import { renderTemplate } from '@/lib/render-core/render-template.mjs';
-import { TEMPLATES, TEMPLATE_LABEL_HEADLINE } from '@/lib/templates/index.mjs';
+import { TEMPLATES, DEFAULT_TEMPLATE_ID, templateById } from '@/lib/templates/index.mjs';
 import { resolveLogoAsset, templateLogoVariants } from '@/lib/templates/logo-assets.mjs';
+import { resolveMaskAsset, templateMaskShapes } from '@/lib/templates/mask-assets.mjs';
 import LibraryPicker from '@/components/LibraryPicker';
 
-const TEMPLATE = TEMPLATE_LABEL_HEADLINE;
 const DIM_ORDER = ['portrait', 'story', 'square', 'landscape'];
 // The 3 + 1 split: the tall family share a row and a height baseline; the wide
 // one gets its own. Authored here, not derived — same discipline as the rest.
@@ -72,6 +72,14 @@ const FIELD_LABELS = {
   eyebrow: { label: 'Small label', hint: 'A few words in capitals, like OUR BELIEF' },
   heading: { label: 'The line that carries the post', hint: 'One sentence. This is the big serif type.' },
   body: { label: 'A short line underneath', hint: 'Optional — the practical detail.' },
+  pill: { label: 'A short label', hint: 'A few words, like NOW ENROLLING.' },
+  attribution: { label: 'Who said it', hint: 'A name, or a name and a role.' },
+};
+
+// The plain-English name of a slot, for the swap line (§6.3 rule 2).
+const SLOT_NOUN = {
+  eyebrow: 'small label', heading: 'headline', body: 'line underneath',
+  pill: 'label', attribution: 'attribution',
 };
 
 const LOGO_LABELS = {
@@ -88,6 +96,56 @@ const SEED = {
   body: 'Enrolling now for the autumn term',
 };
 
+/* ── THE WINDOW-SHAPE THUMBNAIL ───────────────────────────────────────────────
+   A plain <img> is the WRONG preview here. Several shape assets ship at
+   `fill-opacity="0.4"`, so they render as pale grey chips beside the opaque
+   ones, and the picker would show four shapes at four different weights when
+   the canvas draws all four identically — the render core saturates a mask's
+   alpha before cutting with it.
+
+   So the thumbnail does the SAME thing the core does: draw the silhouette over
+   itself until its alpha is solid, then key it to the ink colour. What she sees
+   in the picker is what the window will actually be (renderTruth in miniature).
+   A shape that fails to load paints nothing and is reported by `onError`. */
+function ShapeThumb({ src, ink, size = 34 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return undefined;
+    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+    canvas.width = Math.round(size * dpr);
+    canvas.height = Math.round(size * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      if (!alive) return;
+      const iw = img.naturalWidth || 1;
+      const ih = img.naturalHeight || 1;
+      const s = Math.min(canvas.width / iw, canvas.height / ih);
+      const dw = iw * s;
+      const dh = ih * s;
+      const dx = (canvas.width - dw) / 2;
+      const dy = (canvas.height - dh) / 2;
+      for (let i = 0; i < 16; i += 1) ctx.drawImage(img, dx, dy, dw, dh);
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.fillStyle = ink;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = 'source-over';
+    };
+    img.src = src;
+    return () => { alive = false; };
+  }, [src, ink, size]);
+  return <canvas ref={ref} width={size} height={size} style={{ width: size, height: size, display: 'block' }} />;
+}
+
+/** "the body", "the body and the label" — the same joiner, for slot nouns. */
+function listWords(words) {
+  if (words.length <= 1) return words[0] || '';
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
 /** "Story", "Story and Square", "Story, Square and Landscape". */
 function listNames(ids) {
   const names = ids.map((d) => DIM_SHORT[d] || d);
@@ -96,12 +154,23 @@ function listNames(ids) {
 }
 
 export default function PostComposer() {
+  /* ── WHICH TEMPLATE (client ruling 2026-08-18 — template two) ──────────────
+     The selector is a REAL switch now. Everything below reads the ACTIVE
+     template; nothing is hardcoded to template one any more. */
+  const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
+  const TEMPLATE = useMemo(() => templateById(templateId) || TEMPLATES[0], [templateId]);
   const textSlots = TEMPLATE.paintOrder;
-  const logoVariants = useMemo(() => templateLogoVariants(TEMPLATE), []);
+  const logoVariants = useMemo(() => templateLogoVariants(TEMPLATE), [TEMPLATE]);
+  const dimOrder = useMemo(() => DIM_ORDER.filter((d) => TEMPLATE.dimensions[d]), [TEMPLATE]);
 
+  /* §6.3 RULE 1 — DEACTIVATING NEVER DELETES. `values` holds the WHOLE closed
+     text vocabulary, not just the slots the active template paints. A template
+     that does not show her body copy simply does not read that key; swapping
+     back finds it exactly where she left it. Silent content loss is precisely
+     the surprise class that made her give up (§1). */
   const [values, setValues] = useState(() => {
     const v = {};
-    for (const s of textSlots) v[s] = SEED[s] ?? '';
+    for (const s of TEXT_SLOTS) v[s] = SEED[s] ?? '';
     return v;
   });
   const [colourPairId, setColourPairId] = useState(TEMPLATE.colourPairs[0].id);
@@ -109,10 +178,19 @@ export default function PostComposer() {
   // null === "whatever the colour class implies" — the default the template has
   // always drawn. An explicit pick is honoured as made, never substituted.
   const [logoVariantId, setLogoVariantId] = useState(null);
+  // (client ruling 2026-08-18) WHICH window silhouette. null === the template's
+  // own default; an explicit pick out of `allowedMaskShapes` is honoured as made.
+  const [maskShapeId, setMaskShapeId] = useState(null);
   const [truths, setTruths] = useState({});
   const [logoImage, setLogoImage] = useState(null);
+  const [maskImage, setMaskImage] = useState(null);
   const [fontsReady, setFontsReady] = useState(false);
   const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
+  // What each template was last set to, so a swap BACK restores her choices
+  // rather than resetting them to the template's defaults.
+  const [choiceMemory, setChoiceMemory] = useState({});
+  // §6.3 RULE 2 — the swap SAYS what it is doing, in one honest line. No dialog.
+  const [swapNote, setSwapNote] = useState(null);
 
   // ── THE RESIZABLE PANEL (client amendment 2026-08-18) ─────────────────────
   // Chrome, not design: this moves the boundary between the two panes and
@@ -180,7 +258,7 @@ export default function PostComposer() {
   const canvasRefs = useRef({});
   const pair = useMemo(
     () => TEMPLATE.colourPairs.find((p) => p.id === colourPairId) || TEMPLATE.colourPairs[0],
-    [colourPairId],
+    [TEMPLATE, colourPairId],
   );
 
   // The mark to draw: the template's sanctioned set, resolved through the
@@ -188,8 +266,67 @@ export default function PostComposer() {
   // there rather than drawn as a hole.
   const logoChoice = useMemo(
     () => resolveLogoAsset(TEMPLATE, pair.klass, logoVariantId),
-    [pair, logoVariantId],
+    [TEMPLATE, pair, logoVariantId],
   );
+
+  /* ── THE MASK (template two). The silhouette the photo is revealed through.
+     WHICH one is hers, out of the template's `allowedMaskShapes` — resolved
+     through the contract layer, never by reaching for a file. Law 3: an asset
+     that will not load comes back as no image and the render core REFUSES to
+     paint rather than showing an unmasked rectangle. */
+  const maskShapes = useMemo(() => templateMaskShapes(TEMPLATE), [TEMPLATE]);
+  const maskAsset = useMemo(() => resolveMaskAsset(TEMPLATE, maskShapeId), [TEMPLATE, maskShapeId]);
+  useEffect(() => {
+    let alive = true;
+    setMaskImage(null);
+    if (!maskAsset?.src) return undefined;
+    const img = new Image();
+    img.onload = () => { if (alive) setMaskImage(img); };
+    img.onerror = () => { if (alive) setMaskImage(null); };
+    img.src = maskAsset.src;
+    return () => { alive = false; };
+  }, [maskAsset?.src]);
+
+  // A shape she picked on one template is meaningless on another, so the pick
+  // resets to the new template's own default rather than being carried across.
+  useEffect(() => { setMaskShapeId(null); }, [TEMPLATE.id]);
+
+  /* ── THE SWAP (§6.3). Three rules, all here:
+       1. deactivating never DELETES — `values` already holds every text slot,
+          so nothing is dropped; the new template simply reads fewer keys
+       2. the swap SAYS what it is doing, in one line, no dialog
+       3. her colour / mark / position choices are REMEMBERED per template, so
+          swapping back restores what she had rather than a fresh default   */
+  function chooseTemplate(next) {
+    setTemplateMenuOpen(false);
+    if (!next || next.id === TEMPLATE.id) return;
+
+    setChoiceMemory((m) => ({
+      ...m,
+      [TEMPLATE.id]: { colourPairId, logoPosition, logoVariantId },
+    }));
+    const remembered = choiceMemory[next.id];
+    const carriedPair = next.colourPairs.some((p) => p.id === colourPairId) ? colourPairId : null;
+    const carriedPos = next.allowedLogoPositions.includes(logoPosition) ? logoPosition : null;
+    const carriedVariant = (next.allowedLogoAssets || []).includes(logoVariantId) ? logoVariantId : null;
+
+    setColourPairId(remembered?.colourPairId || carriedPair || next.colourPairs[0].id);
+    setLogoPosition(remembered?.logoPosition || carriedPos || next.allowedLogoPositions[0]);
+    setLogoVariantId(remembered ? remembered.logoVariantId : carriedVariant);
+
+    // The honest line: which of her words this template does not show (kept),
+    // and what it needs that she has not given it yet.
+    const hidden = TEXT_SLOTS
+      .filter((slot) => TEMPLATE.slots[slot]?.present && !next.slots[slot]?.present && String(values[slot] || '').trim())
+      .map((slot) => SLOT_NOUN[slot] || slot);
+    const parts = [];
+    if (hidden.length) parts.push(`This template doesn't show your ${listWords(hidden)} — it'll be kept for later.`);
+    if (next.slots.photo?.present && Object.keys(next.dimensions).some((d) => slotConstraint(next, 'photo', d)?.required) && !photo) {
+      parts.push('It needs a photo before you can download it.');
+    }
+    setSwapNote(parts.length ? parts.join(' ') : null);
+    setTemplateId(next.id);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -230,10 +367,20 @@ export default function PostComposer() {
     return () => { alive = false; };
   }, []);
 
+  // An open listbox must close on Escape. Without it the menu can only be
+  // dismissed by the chevron or the invisible backdrop, which is a trap for
+  // anyone driving this from the keyboard.
+  useEffect(() => {
+    if (!templateMenuOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setTemplateMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [templateMenuOpen]);
+
   // ── THE FOUR RENDERS. All four are shown together (§5). ───────────────────
   const paint = useCallback(() => {
     const next = {};
-    for (const dimId of DIM_ORDER) {
+    for (const dimId of dimOrder) {
       const canvas = canvasRefs.current[dimId];
       if (!canvas) continue;
       const dim = DIMENSIONS[dimId];
@@ -246,10 +393,12 @@ export default function PostComposer() {
         logoImage,
         logoInk: logoChoice?.ink || null,
         photoImage,
+        maskImage,
+        maskShapeId: maskAsset?.id || null,
       });
     }
     setTruths(next);
-  }, [values, colourPairId, logoPosition, logoImage, logoChoice, photoImage]);
+  }, [TEMPLATE, dimOrder, values, colourPairId, logoPosition, logoImage, logoChoice, photoImage, maskImage, maskAsset]);
 
   useEffect(() => { paint(); }, [paint, fontsReady]);
 
@@ -264,12 +413,18 @@ export default function PostComposer() {
     const contrastDims = [];
     const contrastTextDims = [];
     const contrastLogoDims = [];
+    const needPhotoDims = [];
+    const missingAssetDims = [];
     let unreadable = false;
-    for (const dimId of DIM_ORDER) {
+    for (const dimId of dimOrder) {
       const truth = truths[dimId];
       if (!truth) continue;
       const over = truth.overBudgetSlots || [];
       const failed = truth.contrastFailures || [];
+      const missing = truth.missingRequired || [];
+      const noAssets = truth.missingAssets || [];
+      if (missing.includes('photo')) needPhotoDims.push(dimId);
+      if (noAssets.length) missingAssetDims.push(dimId);
       if (over.length) for (const s of over) (perSlot[s] ||= []).push(dimId);
       if (failed.length) {
         contrastDims.push(dimId);
@@ -278,15 +433,18 @@ export default function PostComposer() {
         const rows = [...Object.values(truth.backdrop?.slots || {}), truth.backdrop?.logo].filter(Boolean);
         if (rows.some((r) => r.unreadable)) unreadable = true;
       }
-      if (over.length || failed.length) perDim[dimId] = { breaks: over, contrast: failed };
+      if (over.length || failed.length || missing.length || noAssets.length) {
+        perDim[dimId] = { breaks: over, contrast: failed, missing, noAssets };
+      }
     }
     return {
       perDim, perSlot,
       any: Object.keys(perDim).length > 0,
-      breakDims: DIM_ORDER.filter((d) => perDim[d]?.breaks.length),
+      breakDims: dimOrder.filter((d) => perDim[d]?.breaks.length),
       contrastDims, contrastTextDims, contrastLogoDims, unreadable,
+      needPhotoDims, missingAssetDims,
     };
-  }, [truths]);
+  }, [truths, dimOrder]);
 
   // The honest remedy, and it is honest in both directions: with a LIGHT field
   // the ink is dark, so a darker colour pair rescues it; with a DARK field the
@@ -392,10 +550,13 @@ export default function PostComposer() {
     a.click();
   }
   function downloadAll() {
-    for (const dimId of DIM_ORDER) if (!blocked.perDim[dimId]) download(dimId);
+    for (const dimId of dimOrder) if (!blocked.perDim[dimId]) download(dimId);
   }
 
-  const allBlocked = Object.keys(blocked.perDim).length === DIM_ORDER.length;
+  const allBlocked = Object.keys(blocked.perDim).length === dimOrder.length;
+  // Does the ACTIVE template insist on a photo? Read off the contract, never
+  // hardcoded per template (§3: the surface may only consume the contract).
+  const photoRequired = dimOrder.some((d) => slotConstraint(TEMPLATE, 'photo', d)?.required);
 
   return (
     <main style={S.page}>
@@ -494,10 +655,11 @@ export default function PostComposer() {
         {/* ── LEFT PANEL ─────────────────────────────────────────────────── */}
         <aside className="wo-panel" aria-label="Your words and choices">
           <div className="wo-panel-scroll">
-            {/* TEMPLATE SELECTOR. One template exists, so the menu lists one —
-                but the control is REAL: it opens, shows the current template as
-                selected, and closes. A chevron that does nothing would be a dead
-                control (M4); this is the affordance template two arrives into. */}
+            {/* TEMPLATE SELECTOR. A REAL switch now that there are two: it
+                opens, marks the current one, and picking the other one changes
+                the design. §6.3 — the swap keeps every word she has written,
+                remembers her colour/mark choices per template, and says in one
+                line what the new template does not show. */}
             <div style={S.field}>
               <span style={S.label}>Template</span>
               <div style={S.menuWrap}>
@@ -519,7 +681,7 @@ export default function PostComposer() {
                         <li key={t.id} role="option" aria-selected={t.id === TEMPLATE.id}>
                           <button
                             type="button"
-                            onClick={() => setTemplateMenuOpen(false)}
+                            onClick={() => chooseTemplate(t)}
                             style={{ ...S.menuItem, ...(t.id === TEMPLATE.id ? S.menuItemOn : null) }}
                           >
                             <span style={S.menuItemName}>{t.name}{t.id === TEMPLATE.id ? ' ✓' : ''}</span>
@@ -532,6 +694,7 @@ export default function PostComposer() {
                 )}
               </div>
               <p style={S.hint}>{TEMPLATE.purpose}</p>
+              {swapNote && <p role="status" style={S.note}>{swapNote}</p>}
             </div>
 
             {textSlots.map((slot) => {
@@ -665,7 +828,7 @@ export default function PostComposer() {
             {/* ── PHOTO (optional). Pick one, or bring one in. Never generated. */}
             {TEMPLATE.slots.photo?.present && (
               <div style={S.field}>
-                <span style={S.label}>Photo (optional)</span>
+                <span style={S.label}>{photoRequired ? 'Photo (required)' : 'Photo (optional)'}</span>
                 {photo ? (
                   <div style={S.photoRow}>
                     <img src={photo.src} alt="" style={S.photoThumb} />
@@ -675,7 +838,11 @@ export default function PostComposer() {
                     </div>
                   </div>
                 ) : (
-                  <p style={S.hint}>No photo — the tile stays a plain colour field.</p>
+                  <p style={photoRequired ? S.warn : S.hint}>
+                    {photoRequired
+                      ? 'This design is the photograph — choose one before you can download.'
+                      : 'No photo — the tile stays a plain colour field.'}
+                  </p>
                 )}
                 <div style={S.row}>
                   <button type="button" onClick={() => setLibraryOpen(true)} style={S.ghostBtn}>Choose from library</button>
@@ -690,6 +857,36 @@ export default function PostComposer() {
                 {photoNote && <p role="status" style={S.note}>{photoNote}</p>}
               </div>
             )}
+
+            {/* ── THE WINDOW SHAPE (client ruling 2026-08-18) ───────────────
+                "i have a few petal shapes, can u make them as selections?"
+                The same affordance as the mark picker, offering exactly the
+                shapes THIS template sanctions — never the whole brand set. */}
+            {maskShapes.length > 1 && (
+              <div style={S.field}>
+                <span style={S.label}>The window shape</span>
+                <div style={S.marks}>
+                  {maskShapes.map((shape) => (
+                    <button
+                      key={shape.id} type="button"
+                      onClick={() => setMaskShapeId(shape.id)}
+                      aria-pressed={maskAsset?.id === shape.id}
+                      title={shape.label}
+                      style={{ ...S.markTile, ...(maskAsset?.id === shape.id ? S.markTileOn : null) }}
+                    >
+                      {/* The src is carried in a data attribute too, so the live
+                          verification can read WHICH shape a tile offers without
+                          depending on how the thumbnail happens to be painted. */}
+                      <span data-shape-src={shape.src} aria-hidden="true" style={{ display: 'contents' }}>
+                        <ShapeThumb src={shape.src} ink={pair.klass === 'dark' ? '#254E48' : 'var(--fg-strong, #254E48)'} />
+                      </span>
+                      <span style={S.srOnly}>{shape.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <p style={S.hint}>Your photo is cut to this shape.</p>
+              </div>
+            )}
           </div>
 
           {/* Anchored at the BOTTOM of the panel — never scrolls out of reach. */}
@@ -697,6 +894,16 @@ export default function PostComposer() {
             <button type="button" onClick={downloadAll} disabled={allBlocked} style={{ ...S.primaryBtn, opacity: allBlocked ? 0.5 : 1 }}>
               Download all sizes
             </button>
+            {blocked.needPhotoDims.length > 0 && (
+              <p role="status" style={S.warn}>
+                {listNames(blocked.needPhotoDims)} {blocked.needPhotoDims.length > 1 ? 'are' : 'is'} on hold until you choose a photo — this template needs one.
+              </p>
+            )}
+            {blocked.missingAssetDims.length > 0 && (
+              <p role="status" style={S.warn}>
+                Part of this design could not be loaded, so it cannot be downloaded. Reload the page and try again.
+              </p>
+            )}
             {blocked.breakDims.length > 0 && (
               <p role="status" style={S.warn}>
                 {blocked.breakDims.map((d) => DIMENSIONS[d].label).join(', ')} {blocked.breakDims.length > 1 ? 'are' : 'is'} on hold until the line breaks fit.
@@ -745,7 +952,7 @@ export default function PostComposer() {
 
         {/* ── RIGHT: ALL FOUR DIMENSIONS, TOGETHER (§5). NEVER SCROLLS. ────── */}
         <section className="wo-stage" aria-label="Your post in all four sizes">
-          {[TALL_ROW, WIDE_ROW].map((row, i) => (
+          {[TALL_ROW.filter((d) => TEMPLATE.dimensions[d]), WIDE_ROW.filter((d) => TEMPLATE.dimensions[d])].map((row, i) => (
             <div key={i === 0 ? 'tall' : 'wide'} className={`wo-row ${i === 0 ? 'wo-row-tall' : 'wo-row-wide'}`}>
               {row.map((dimId) => {
                 const dim = DIMENSIONS[dimId];
@@ -840,6 +1047,10 @@ const S = {
   markTileOn: { border: '2px solid var(--fg-strong, #254E48)', boxShadow: '0 0 0 2px rgba(37,78,72,0.12)' },
   markImg: { maxWidth: '100%', maxHeight: '100%', display: 'block' },
   markAuto: { fontFamily: 'var(--font-syne)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-strong, #254E48)' },
+  // The shapes ship at fill-opacity 0.4; the thumbnail shows the SILHOUETTE, so
+  // the same alpha saturation the render core applies is faked here with a
+  // brightness/contrast filter rather than eight stacked <img> elements.
+  srOnly: { position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 },
 
   // Photo
   photoRow: { display: 'flex', gap: 10, alignItems: 'center' },
