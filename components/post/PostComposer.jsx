@@ -72,11 +72,11 @@ const clampPanel = (n) => Math.max(PANEL_MIN, Math.min(PANEL_MAX, Math.round(n))
 const DIM_SHORT = { portrait: 'Portrait', story: 'Story', square: 'Square', landscape: 'Landscape' };
 
 const FIELD_LABELS = {
-  eyebrow: { label: 'Small label', hint: 'A few words in capitals, like OUR BELIEF' },
-  heading: { label: 'The line that carries the post', hint: 'One sentence. This is the big serif type.' },
-  body: { label: 'A short line underneath', hint: 'Optional — the practical detail.' },
-  pill: { label: 'A short label', hint: 'A few words, like NOW ENROLLING.' },
-  attribution: { label: 'Who said it', hint: 'A name, or a name and a role.' },
+  eyebrow: { label: 'Caption', hint: 'A few words in capitals, like OUR BELIEF' },
+  heading: { label: 'Heading', hint: 'The main message of the post.' },
+  body: { label: 'Body', hint: 'Optional supporting detail.' },
+  pill: { label: 'Caption', hint: 'A short label, like NOW ENROLLING.' },
+  attribution: { label: 'Caption', hint: 'A name, or a name and a role.' },
 };
 
 // The plain-English name of a slot, for the swap line (§6.3 rule 2).
@@ -156,11 +156,11 @@ function listNames(ids) {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-export default function PostComposer() {
+export default function PostComposer({ initialTemplateId = DEFAULT_TEMPLATE_ID, onBrowseTemplates = null, onTemplateChange = null }) {
   /* ── WHICH TEMPLATE (client ruling 2026-08-18 — template two) ──────────────
      The selector is a REAL switch now. Everything below reads the ACTIVE
      template; nothing is hardcoded to template one any more. */
-  const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
+  const [templateId, setTemplateId] = useState(() => templateById(initialTemplateId)?.id || DEFAULT_TEMPLATE_ID);
   const TEMPLATE = useMemo(() => templateById(templateId) || TEMPLATES[0], [templateId]);
   const textSlots = TEMPLATE.paintOrder;
   const logoVariants = useMemo(() => templateLogoVariants(TEMPLATE), [TEMPLATE]);
@@ -407,6 +407,7 @@ export default function PostComposer() {
     }
     setSwapNote(parts.length ? parts.join(' ') : null);
     setTemplateId(next.id);
+    onTemplateChange?.(next.id);
   }
 
   useEffect(() => {
@@ -1027,6 +1028,11 @@ export default function PostComposer() {
         {/* ── LEFT PANEL ─────────────────────────────────────────────────── */}
         <aside className="wo-panel" aria-label="Your words and choices">
           <div className="wo-panel-scroll">
+            {onBrowseTemplates && (
+              <button type="button" onClick={onBrowseTemplates} style={S.browseBtn}>
+                <span aria-hidden="true">←</span> Browse templates
+              </button>
+            )}
             {/* TEMPLATE SELECTOR. A REAL switch now that there are two: it
                 opens, marks the current one, and picking the other one changes
                 the design. §6.3 — the swap keeps every word she has written,
@@ -1213,6 +1219,7 @@ const S = {
   // Client ruling 2026-08-18: the app's own page is white. --bg-raised is the
   // existing token for exactly this (globals.css), so nothing is invented here.
   page: { background: 'var(--bg-raised, #FFFFFF)' },
+  browseBtn: { alignSelf: 'flex-start', minHeight: 38, padding: '0 13px', display: 'inline-flex', alignItems: 'center', gap: 8, borderRadius: 999, border: '1px solid var(--line, rgba(37,78,72,0.18))', background: '#FFFFFF', color: 'var(--fg, #254E48)', fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 500 },
   field: { display: 'flex', flexDirection: 'column', gap: 6 },
   fieldHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   fieldHeadRight: { display: 'flex', alignItems: 'baseline', gap: 10 },

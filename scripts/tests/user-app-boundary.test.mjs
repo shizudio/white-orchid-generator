@@ -10,6 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { DIMENSIONS, PANEL_SECTION_IDS } from '../../lib/templates/template-contract.mjs';
+import { TEMPLATES } from '../../lib/templates/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
@@ -244,6 +245,34 @@ test('the template selector is a REAL control, not a dead chevron (M4)', () => {
   assert.match(composer, /aria-selected=\{t\.id === TEMPLATE\.id\}/, 'the current template shows as selected');
 });
 
+test('/post starts at the registry-backed gallery, then opens the chosen composer', () => {
+  const page = readFileSync(join(root, 'app', 'post', 'page.jsx'), 'utf8');
+  const flow = readFileSync(join(root, 'components', 'post', 'PostFlow.jsx'), 'utf8');
+  const gallery = readFileSync(join(root, 'components', 'post', 'TemplateGallery.jsx'), 'utf8');
+
+  assert.match(page, /import PostFlow from '@\/components\/post\/PostFlow'/, 'the route must enter through the gallery flow');
+  assert.match(page, /return <PostFlow \/>/);
+  assert.match(gallery, /import \{ TEMPLATES \} from '@\/lib\/templates\/index\.mjs'/, 'ready cards must import the published registry');
+  assert.match(gallery, /const existing = filter === 'carousel' \? \[\] : TEMPLATES/);
+  assert.match(gallery, /existing\.map/, 'ready cards must enumerate that registry');
+  assert.match(gallery, /onChoose\(template\.id\)/, 'a live card must open its real template, not a duplicated id');
+  assert.match(gallery, /template\.galleryPreview\.src/, 'ready cards must show the template\'s real sample post');
+  assert.ok(!/cardPurpose|formatList|SAMPLE_COPY/.test(gallery), 'ready cards must stay image-led, without descriptive copy');
+  for (const template of TEMPLATES) {
+    assert.match(template.galleryPreview?.src || '', /^\/assets\/post-template-samples\/[^/]+\.png$/);
+    const preview = readFileSync(join(root, 'public', template.galleryPreview.src));
+    const width = preview.readUInt32BE(16);
+    const height = preview.readUInt32BE(20);
+    assert.equal(width / height, 4 / 5, `${template.name} gallery preview must be Instagram portrait 4:5`);
+  }
+  assert.match(gallery, /Instagram Carousel/, 'the multi-slide roadmap is visible before it is executable');
+  assert.match(gallery, /Coming soon/, 'future work must be clearly labelled, never presented as a working button');
+  assert.match(flow, /if \(!templateId\) return <TemplateGallery onChoose=\{openTemplate\} \/>/);
+  assert.match(flow, /initialTemplateId=\{templateId\}/, 'the selected card must seed the composer');
+  assert.match(flow, /onBrowseTemplates=\{browseTemplates\}/, 'the canvas needs a visible route back to discovery');
+  assert.match(flow, /addEventListener\('popstate'/, 'browser Back must return to the gallery');
+});
+
 // ── LOGO SWAP (client ruling 2026-08-18) ────────────────────────────────────
 test('the mark picker offers the template\'s sanctioned set and defaults to the colour class', () => {
   const composer = readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8');
@@ -390,4 +419,12 @@ test('field labels are per-template data, not a map the surface keys by template
   // The surface still owns the DEFAULTS — the override is a merge, not a
   // replacement, so a template that says nothing gets the shared wording.
   assert.match(composer, /\.\.\.\(FIELD_LABELS\[slot\] \|\| \{ label: slot, hint: '' \}\)/);
+});
+
+test('text controls use Heading, Body, Caption — never positional design prose', () => {
+  const composer = readFileSync(join(root, 'components', 'post', 'PostComposer.jsx'), 'utf8');
+  assert.match(composer, /eyebrow: \{ label: 'Caption'/);
+  assert.match(composer, /heading: \{ label: 'Heading'/);
+  assert.match(composer, /body: \{ label: 'Body'/);
+  assert.ok(!/The line that carries the post|A short line underneath|Small label/.test(composer));
 });

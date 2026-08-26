@@ -434,8 +434,8 @@ test('the state SWITCH is her CHOICE — generic, binary, and never inferred fro
   );
 });
 
-test('the heading field is labelled "Text" here, and Classic keeps its own label', () => {
-  assert.equal(T.slotLabels.heading.label, 'Text');
+test('the heading field uses the shared semantic edit vocabulary', () => {
+  assert.equal(T.slotLabels.heading.label, 'Heading');
   // The two templates' labels are INDEPENDENT — changing one cannot move the
   // other, which is what let this land without touching Classic.
   const one = templateById('label_headline');

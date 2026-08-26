@@ -1,11 +1,10 @@
 /* The USER APP entry (docs/template-system-spec.md §8).
 
-   No gallery in v1 — one template makes a gallery meaningless, so the route
-   opens directly on template one's fill surface. When a second template lands,
-   the gallery goes HERE (purpose text + slot statement per §6.3 rule 3), not
-   inside the composer.                                                        */
+   `/post` opens on the template gallery. The gallery owns discovery and future
+   formats; the composer only opens after the user has chosen a published
+   template. A validated `?template=` query may deep-link back into the canvas. */
 
-import PostComposer from '@/components/post/PostComposer';
+import PostFlow from '@/components/post/PostFlow';
 
 export const metadata = {
   title: 'Make a post — The White Orchid',
@@ -13,5 +12,5 @@ export const metadata = {
 };
 
 export default function PostPage() {
-  return <PostComposer />;
+  return <PostFlow />;
 }

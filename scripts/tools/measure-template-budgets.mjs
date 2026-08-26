@@ -77,8 +77,8 @@ async function measure(page, templateId) {
         const floorBox = { ...box, h: per.maxLines * floorPx * reg.lineRatio };
 
         const fitFor = (text) => (reg.caps
-          ? autofitTrackedCaps(ctx, { text, font: family, weight: reg.weight, tracking: reg.tracking ?? 0.08, box: floorBox, maxLines: per.maxLines, floorPx, lineRatio: reg.lineRatio })
-          : autofit(ctx, { text, fontFor: (s) => `${reg.weight} ${s}px ${family}`, box: floorBox, maxLines: per.maxLines, floorPx, lineRatio: reg.lineRatio }));
+          ? autofitTrackedCaps(ctx, { text, font: family, weight: reg.weight, tracking: reg.tracking ?? 0.08, box: floorBox, maxLines: per.maxLines, floorPx, lineRatio: reg.lineRatio, ceilingPx: Number.isFinite(reg.ceilingScale) ? floorPx * reg.ceilingScale : Infinity })
+          : autofit(ctx, { text, fontFor: (s) => `${reg.weight} ${s}px ${family}`, box: floorBox, maxLines: per.maxLines, floorPx, lineRatio: reg.lineRatio, ceilingPx: Number.isFinite(reg.ceilingScale) ? floorPx * reg.ceilingScale : Infinity }));
 
         // Honest capacity: the copy fits within maxLines AND the type never fell
         // below the floor. Grown word by word, then refined CHARACTER by

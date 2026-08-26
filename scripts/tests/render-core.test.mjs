@@ -82,6 +82,16 @@ test('short copy renders large; longer copy renders smaller; nothing goes below 
   assert.ok(short.lines.length <= 2 && long.lines.length <= 2);
 });
 
+test('an authored ceiling lets a multi-line caption stay supporting at short lengths', () => {
+  const ctx = stubCtx();
+  const fit = autofit(ctx, {
+    text: 'hi', fontFor: (s) => `${s}px stub`, box: { x: 0, y: 0, w: 400, h: 200 },
+    maxLines: 2, floorPx: 20, lineRatio: 1, ceilingPx: 24,
+  });
+  assert.equal(fit.size, 24);
+  assert.equal(fit.overBudget, false);
+});
+
 test('copy that cannot fit at the floor stops AT the floor and reports over-budget', () => {
   const ctx = stubCtx();
   const fontFor = (s) => `${s}px stub`;

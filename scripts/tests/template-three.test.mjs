@@ -48,20 +48,19 @@ test('DECISION 1 — the PILL is the dominant line, and it is authored, not hope
     const head = T.slots.heading.dimensions[dimId];
     const pill = T.slots.pill.dimensions[dimId];
     const floor = floorPxFor('pill', dim.w, dim.h);
-    // The kicker's box is the house convention: ONE line at the floor.
-    const kickerLine = head.maxLines * floorPxFor('heading', dim.w, dim.h) * T.registers.heading.lineRatio;
-    assert.ok(Math.abs(head.box.h * dim.h - kickerLine * 1.02) < 2,
-      `${dimId}: the kicker box is ${(head.box.h * dim.h).toFixed(1)}px, not the ${(kickerLine * 1.02).toFixed(1)}px convention`);
+    // The caption has two honest lines at the floor — enough for useful copy,
+    // never a larger counter pasted over a one-line box.
+    const captionLines = head.maxLines * floorPxFor('heading', dim.w, dim.h) * T.registers.heading.lineRatio;
+    assert.ok(Math.abs(head.box.h * dim.h - captionLines * 1.02) < 2,
+      `${dimId}: the caption box is ${(head.box.h * dim.h).toFixed(1)}px, not the ${(captionLines * 1.02).toFixed(1)}px convention`);
     // The pill's box is deliberately taller, so short copy paints large (§7).
     const ratio = (pill.box.h * dim.h) / floor;
     assert.ok(ratio > 1.8 && ratio < 2.0,
       `${dimId}: the pill box is ${ratio.toFixed(3)}x its floor line — the authored value is 1.906x`);
-    assert.ok(pill.box.h > head.box.h, `${dimId}: the pill box must be taller than the kicker's`);
-    // Both are ONE line: a two-line pill leaves a dead line under short copy.
+    // The heading stays one line; the supporting caption gets two.
     assert.equal(pill.maxLines, 1, `${dimId}: the pill is one line`);
-    assert.equal(head.maxLines, 1, `${dimId}: the kicker is one line`);
-    // …and the pill sits BELOW the kicker.
-    assert.ok(pill.box.y > head.box.y, `${dimId}: the big words sit under the quiet line`);
+    assert.equal(head.maxLines, 2, `${dimId}: the caption is two lines`);
+    assert.ok(pill.box.y >= head.box.y + head.box.h, `${dimId}: heading and caption must never overlap`);
   }
   // Registers: a light sans kicker, a tracked serif caps pill.
   assert.equal(T.registers.heading.face, 'body');
@@ -72,21 +71,22 @@ test('DECISION 1 — the PILL is the dominant line, and it is authored, not hope
   assert.equal(T.paintOrder.join(','), 'heading,pill');
 });
 
-test('DECISION 1 — the FIELD LABELS must not lie about the hierarchy', () => {
-  // Both fields are renamed. Reusing the surface's Classic-shaped defaults here
-  // would tell her the heading carries the post, which is the opposite of what
-  // the picture shows (M4).
+test('DECISION 1 — field labels use the shared semantic edit vocabulary', () => {
   for (const slot of ['heading', 'pill']) {
     const row = T.slotLabels?.[slot];
     assert.ok(row && row.label && row.hint, `${slot}: this template must override the surface's default copy`);
   }
-  assert.ok(!/carries the post/i.test(T.slotLabels.heading.label),
-    "the heading is a KICKER here — Classic's label would be a lie");
+  assert.equal(T.slotLabels.heading.label, 'Caption');
+  assert.equal(T.slotLabels.pill.label, 'Heading');
   assert.match(T.slotLabels.pill.hint, /capital/i, 'the pill hint must say the words are set in capitals');
-  assert.match(T.slotLabels.pill.hint, /biggest/i, 'the pill hint must say it is the biggest type on the design');
   // The other two templates keep their own copy — the three are independent.
   assert.equal(TEMPLATE_LABEL_HEADLINE.slotLabels, undefined);
   assert.deepEqual(Object.keys(TEMPLATE_PETAL_WINDOW.slotLabels), ['heading']);
+});
+
+test('the Caption Band caption budget is useful and renderer-measured', () => {
+  assert.ok(T.slots.heading.charBudget >= 40, `caption budget ${T.slots.heading.charBudget} is below the 40-character product floor`);
+  assert.equal(T.slots.heading.charBudget, T.slots.heading.measured.min);
 });
 
 test('DECISION 2 — the photo is REQUIRED in every dimension, and the purpose text says so', () => {
@@ -353,4 +353,3 @@ test('the Figma SVG seed REFUSES this template rather than dropping the plate (M
   // …and it still emits for the template that has neither.
   assert.equal(svgSeedRefusal(TEMPLATE_LABEL_HEADLINE), null);
 });
-
