@@ -939,7 +939,7 @@ export default function PostComposer() {
           the page is allowed to scroll, because a phone has no second pane. */}
       <style>{`
         .wo-post-shell { display: grid; grid-template-columns: var(--wo-panel-w, 420px) minmax(0, 1fr); height: 100dvh; overflow: hidden; }
-        .wo-panel { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line, rgba(37,78,72,0.18)); background: var(--bg, #F5F6E7); }
+        .wo-panel { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line, rgba(37,78,72,0.18)); background: var(--bg-raised, #FFFFFF); }
 
         /* The resize grip. touch-action:none is what makes a touch drag a drag
            instead of a page scroll; it is focusable so the width is reachable
@@ -956,7 +956,7 @@ export default function PostComposer() {
         .wo-grip:hover .wo-grip-bar, .wo-grip:focus-visible .wo-grip-bar { background: var(--fg-strong, #254E48); }
         .wo-grip:focus-visible { outline: 2px solid var(--fg-strong, #254E48); outline-offset: -2px; }
         .wo-panel-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px 20px 12px; display: flex; flex-direction: column; gap: 20px; }
-        .wo-panel-foot { flex: 0 0 auto; padding: 14px 20px 18px; border-top: 1px solid var(--line, rgba(37,78,72,0.18)); background: var(--bg, #F5F6E7); display: flex; flex-direction: column; gap: 8px; }
+        .wo-panel-foot { flex: 0 0 auto; padding: 14px 20px 18px; border-top: 1px solid var(--line, rgba(37,78,72,0.18)); background: var(--bg-raised, #FFFFFF); display: flex; flex-direction: column; gap: 8px; }
 
         /* THREE + ONE. Two equal rows; the tall family shares the first. */
         .wo-stage { min-width: 0; min-height: 0; overflow: hidden;
