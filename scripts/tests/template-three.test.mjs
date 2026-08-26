@@ -94,7 +94,8 @@ test('DECISION 2 — the photo is REQUIRED in every dimension, and the purpose t
   for (const dimId of dimIds()) {
     assert.equal(T.slots.photo.dimensions[dimId].required, true, `${dimId}: a caption band with no picture is not this design`);
   }
-  assert.match(T.purpose, /photo is required/i);
+  assert.match(T.purpose, /required photograph|photo is required/i,
+    'the gallery card must state the photo requirement (§6.3 rule 3) — either phrasing, but the FACT is not optional');
 });
 
 test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () => {

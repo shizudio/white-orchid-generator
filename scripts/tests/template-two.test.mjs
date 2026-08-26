@@ -38,7 +38,8 @@ test('DECISION 1 — the photo is REQUIRED in every dimension, and the purpose t
   for (const dimId of Object.keys(T.dimensions)) {
     assert.equal(T.slots.photo.dimensions[dimId].required, true, `${dimId}: a petal window with no photo is not a design`);
   }
-  assert.match(T.purpose, /photo is required/i, 'the gallery card must say the photo is required (§6.3 rule 3)');
+  assert.match(T.purpose, /required photograph|photo is required/i,
+      'the gallery card must state the photo requirement (§6.3 rule 3) — either phrasing, but the FACT is not optional');
 });
 
 test('DECISION 2 — the heading is OPTIONAL and its box never touches the photo box', () => {
