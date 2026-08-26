@@ -1210,7 +1210,9 @@ export default function PostComposer() {
 
 /* ── Styles. Brand tokens from app/globals.css; nothing invented here. ────── */
 const S = {
-  page: { background: 'var(--bg, #F5F6E7)' },
+  // Client ruling 2026-08-18: the app's own page is white. --bg-raised is the
+  // existing token for exactly this (globals.css), so nothing is invented here.
+  page: { background: 'var(--bg-raised, #FFFFFF)' },
   field: { display: 'flex', flexDirection: 'column', gap: 6 },
   fieldHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   fieldHeadRight: { display: 'flex', alignItems: 'baseline', gap: 10 },
