@@ -1,4 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 import { classifyMoodboardImage } from '@/lib/moodboard-genes';
 
 export const runtime = 'nodejs';
@@ -29,18 +30,14 @@ function isRateLimited(request) {
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, items: [], ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 // Distinct from a missing TABLE/env: an un-migrated DB has the brand_moodboard
 // table but not the P1 `genes` column. A SELECT of the missing column surfaces as
 // Postgres 42703 (undefined_column); a missing column in an INSERT/UPDATE payload
 // surfaces as PostgREST PGRST204 ("Could not find the 'genes' column of
 // 'brand_moodboard' in the schema cache") — verified against the live un-migrated
 // DB 2026-07-12, where 42703-only matching made POST mis-degrade to
-// {configured:false} via isMissingConfig's /schema cache/ pattern instead of
-// retrying. Match BOTH, and always check isMissingColumn before isMissingConfig.
+// {configured:false} via isServiceUnavailable's /schema cache/ pattern instead of
+// retrying. Match BOTH, and always check isMissingColumn before isServiceUnavailable.
 // We retry the query WITHOUT genes so uploads + listing keep working before the
 // owner re-runs lib/schema.sql (graceful-degradation contract; docs §8 degraded path).
 function isMissingColumn(err) {
@@ -71,10 +68,10 @@ export async function GET() {
         .order('ts', { ascending: false })
         .limit(LIST_CAP));
     }
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, items: data || [] });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -126,10 +123,10 @@ export async function POST(request) {
         .select('id, image, note, ts')
         .single());
     }
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, item: data }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -147,10 +144,10 @@ export async function DELETE(request) {
       .eq('id', id.slice(0, 80))
       .eq('brand_id', BRAND_ID)
       .select('id');
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, deleted: Array.isArray(data) && data.length > 0 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

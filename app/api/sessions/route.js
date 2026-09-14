@@ -1,5 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
@@ -29,10 +30,6 @@ function isRateLimited(request) {
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, sessions: [], session: null, ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 // (WP-Y1a) The group_* columns are added by a later idempotent migration
 // (lib/schema.sql). Before it runs, writing/selecting them errors with 42703
 // (undefined_column) or a "column … does not exist" PostgREST message. We detect
@@ -43,7 +40,7 @@ function isMissingColumn(err) {
   // 42703 = Postgres undefined_column (SELECT); PGRST204 = PostgREST "Could not
   // find the 'X' column … in the schema cache" (INSERT/UPSERT payload against an
   // un-migrated DB). Both mean "retry without the newer columns", NOT unconfigured
-  // — check this BEFORE isMissingConfig (whose /schema cache/ would swallow it).
+  // — check this BEFORE isServiceUnavailable (whose /schema cache/ would swallow it).
   return err?.code === '42703' || err?.code === 'PGRST204'
     || /column .* does not exist|could not find the '.+' column|group_id|group_title|group_order|liked|exported_at/i.test(msg);
 }
@@ -75,7 +72,7 @@ export async function GET(request) {
       let { data, error } = await single(SINGLE_COLS + GROUP_COLS + LIKE_COLS);
       if (error && isMissingColumn(error)) ({ data, error } = await single(SINGLE_COLS + GROUP_COLS));
       if (error && isMissingColumn(error)) ({ data, error } = await single(SINGLE_COLS));
-      if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+      if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
       return Response.json({ session: data || null, configured: true });
     }
     // List view — omit the heavy `state`/`conversation` blobs; just enough for tiles.
@@ -89,10 +86,10 @@ export async function GET(request) {
     let { data, error } = await listQuery(LIST_COLS + GROUP_COLS + LIKE_COLS);
     if (error && isMissingColumn(error)) ({ data, error } = await listQuery(LIST_COLS + GROUP_COLS));
     if (error && isMissingColumn(error)) ({ data, error } = await listQuery(LIST_COLS));
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ sessions: data || [], configured: true });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -112,10 +109,10 @@ export async function DELETE(request) {
       .eq('id', id.slice(0, 80))
       .eq('brand_id', BRAND_ID)
       .select('id');
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, deleted: Array.isArray(data) && data.length > 0 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -187,7 +184,7 @@ export async function POST(request) {
         ({ data, error } = await upsert(base));
       }
     }
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
 
     // Auto-archive everything beyond the latest LIST_CAP unarchived rows. Fire-and-
     // forget: a failure here never fails the save (the user's work is already stored).
@@ -209,7 +206,7 @@ export async function POST(request) {
 
     return Response.json({ session: data, configured: true }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

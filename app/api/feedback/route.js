@@ -1,5 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
@@ -31,10 +32,6 @@ function isRateLimited(request) {
 
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, events: [], ...extra });
-}
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
 }
 
 function clip(v, n = MSG_MAX) { return typeof v === 'string' ? v.slice(0, n) : null; }
@@ -74,7 +71,7 @@ export async function POST(request) {
         .eq('brand_id', BRAND_ID)
         .eq('turn_id', turnId)
         .maybeSingle();
-      if (found.error && isMissingConfig(found.error)) return unconfigured();
+      if (found.error && isServiceUnavailable(found.error)) return unconfigured();
       const existing = found.data;
       if (existing?.id) {
         // Merge only the fields present in this enrichment call (don't clobber the
@@ -82,15 +79,15 @@ export async function POST(request) {
         const patch = {};
         for (const [k, v] of Object.entries(row)) if (v != null) patch[k] = v;
         const { error } = await supabase.from('ai_feedback_events').update(patch).eq('id', existing.id);
-        if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+        if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
         return Response.json({ configured: true, enriched: true });
       }
     }
     const { error } = await supabase.from('ai_feedback_events').insert(row);
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, logged: true }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -116,10 +113,10 @@ export async function GET(request) {
       .limit(limit);
     if (sessionId) q = q.eq('session_id', sessionId);
     const { data, error } = await q;
-    if (error) { if (isMissingConfig(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
+    if (error) { if (isServiceUnavailable(error)) return unconfigured(); return Response.json({ error: error.message }, { status: 500 }); }
     return Response.json({ configured: true, events: data || [] });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

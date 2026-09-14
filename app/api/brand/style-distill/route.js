@@ -23,6 +23,7 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 import { requireAdminKey } from '../../../../lib/admin-auth.js';
+import { isServiceUnavailable } from '../../../../lib/service-availability.mjs';
 import { getAdminClient } from '../../../../lib/supabase.js';
 import { sanitizeAnchorIds, distillStyle } from '../../../../lib/style-dna.mjs';
 
@@ -47,10 +48,6 @@ function isRateLimited(request) {
 
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, ...extra });
-}
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
 }
 
 export async function POST(request) {
@@ -81,7 +78,7 @@ export async function POST(request) {
       .select('id, storage_path, filename')
       .in('id', ids);
     if (dbError) {
-      if (isMissingConfig(dbError)) return unconfigured();
+      if (isServiceUnavailable(dbError)) return unconfigured();
       return Response.json({ failed: true, reason: 'The library could not be read just now.' });
     }
     if (!rows?.length) {
@@ -115,7 +112,7 @@ export async function POST(request) {
     if (result.failed) return Response.json({ failed: true, reason: result.reason });
     return Response.json({ draft: result.draft, perImageNotes: result.perImageNotes });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ failed: true, reason: 'Distilling hit a snag — please try again.' });
   }
 }

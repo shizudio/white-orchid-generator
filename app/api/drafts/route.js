@@ -1,5 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
@@ -21,10 +22,6 @@ function isRateLimited(request) {
 function unconfigured(extra = {}) {
   return Response.json({ draft: null, configured: false, ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 
 export async function GET(request) {
   let supabase;
@@ -38,12 +35,12 @@ export async function GET(request) {
       .eq('brand_id', BRAND_ID)
       .maybeSingle();
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ draft: data || null, configured: true });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -82,12 +79,12 @@ export async function POST(request) {
       .select('id, state, updated_at, device_label')
       .single();
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ draft: data, configured: true }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

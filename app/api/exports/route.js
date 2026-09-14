@@ -1,4 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 import {
   buildExportRow,
   legacyExportRow,
@@ -27,10 +28,6 @@ const FILE_MAX_BYTES = 8 * 1024 * 1024; // an exported poster PNG; generous
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, exports: [], ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 
 async function withSignedUrls(supabase, rows) {
   const presented = rows.map(presentExportRow);
@@ -55,12 +52,12 @@ export async function GET() {
       .order('created_at', { ascending: false })
       .limit(200);
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ configured: true, exports: await withSignedUrls(supabase, data || []) });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -100,7 +97,7 @@ export async function POST(request) {
         upsert: false,
       });
     if (uploadError) {
-      if (isMissingConfig(uploadError)) return unconfigured();
+      if (isServiceUnavailable(uploadError)) return unconfigured();
       return Response.json({ error: uploadError.message }, { status: 500 });
     }
 
@@ -122,7 +119,7 @@ export async function POST(request) {
     }
     if (dbError) {
       await supabase.storage.from('images').remove([storagePath]);
-      if (isMissingConfig(dbError)) return unconfigured();
+      if (isServiceUnavailable(dbError)) return unconfigured();
       return Response.json({ error: dbError.message }, { status: 500 });
     }
 
@@ -134,7 +131,7 @@ export async function POST(request) {
       { status: 201 },
     );
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -155,7 +152,7 @@ export async function DELETE(request) {
       .eq('id', id)
       .maybeSingle();
     if (readError) {
-      if (isMissingConfig(readError)) return unconfigured();
+      if (isServiceUnavailable(readError)) return unconfigured();
       return Response.json({ error: readError.message }, { status: 500 });
     }
     if (!row) return Response.json({ configured: true, deleted: false });
@@ -168,12 +165,12 @@ export async function DELETE(request) {
 
     const { error: delError } = await supabase.from('exports').delete().eq('id', id);
     if (delError) {
-      if (isMissingConfig(delError)) return unconfigured();
+      if (isServiceUnavailable(delError)) return unconfigured();
       return Response.json({ error: delError.message }, { status: 500 });
     }
     return Response.json({ configured: true, deleted: true, storageRemoved });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

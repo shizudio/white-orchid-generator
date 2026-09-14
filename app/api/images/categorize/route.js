@@ -20,6 +20,7 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 import { getAdminClient } from '@/lib/supabase';
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 import { requireAdminKey } from '@/lib/admin-auth';
 import {
   ACTIVITY_VISION_PROMPT,
@@ -50,10 +51,6 @@ function isRateLimited(request) {
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 
 export async function POST(request) {
   // Credit-spending endpoint — the gate comes FIRST (fail-closed 503 when
@@ -81,7 +78,7 @@ export async function POST(request) {
       .select('id, storage_path, filename, metadata')
       .order('created_at', { ascending: true });
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
 
@@ -125,7 +122,7 @@ export async function POST(request) {
     const result = await runCategorizeBatch({ rows, limit, labelImage, saveActivity });
     return Response.json({ configured: true, ...result });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

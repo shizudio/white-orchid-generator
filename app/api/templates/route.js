@@ -1,5 +1,6 @@
 import { getAdminClient } from '@/lib/supabase';
 
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
@@ -27,21 +28,13 @@ function isRateLimited(request) {
 function unconfigured(extra = {}) {
   return Response.json({ templates: [], configured: false, ...extra });
 }
-function isMissingConfig(err) {
-  // getAdminClient throws when env is absent; Postgres 42P01 = undefined_table.
-  const msg = String(err?.message || err || '');
-  return (
-    err?.code === '42P01' ||
-    /not set|not configured|does not exist|schema cache/i.test(msg)
-  );
-}
 // Distinct from a missing TABLE/env: an un-migrated DB has design_templates but not
 // the P2 `status`/`rationale`/`source_moodboard_ids` columns. A SELECT of a missing
 // column surfaces as Postgres 42703 (undefined_column); a missing column in an
 // UPDATE/INSERT payload surfaces as PostgREST PGRST204 ("Could not find the 'status'
 // column of 'design_templates' in the schema cache") — verified against the live
 // un-migrated DB 2026-07-12; 42703-only matching let PGRST204 fall through to
-// isMissingConfig's /schema cache/ pattern and mis-degrade PATCH to
+// isServiceUnavailable's /schema cache/ pattern and mis-degrade PATCH to
 // {configured:false}. Match BOTH, and always check isMissingColumn first. We then
 // fall back to the legacy status-less query so the gallery keeps working before the
 // owner re-runs lib/schema.sql (graceful-degradation contract; docs §8 degraded path).
@@ -89,12 +82,12 @@ export async function GET(request) {
         .limit(LIST_CAP));
     }
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ templates: data || [], configured: true });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -138,12 +131,12 @@ export async function POST(request) {
       .select('id, name, thumb, state, created_at, updated_at')
       .single();
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ template: data, configured: true }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -212,7 +205,7 @@ export async function PATCH(request) {
         .select('id, name, updated_at'));
     }
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     if (!Array.isArray(data) || data.length === 0) {
@@ -222,7 +215,7 @@ export async function PATCH(request) {
     }
     return Response.json({ ok: true, configured: true, template: data[0] });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -239,12 +232,12 @@ export async function DELETE(request) {
       .update({ deleted: true, updated_at: new Date().toISOString() })
       .eq('id', id);
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json({ ok: true, configured: true });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

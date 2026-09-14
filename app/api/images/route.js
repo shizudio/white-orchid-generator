@@ -1,4 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 import {
   normalizeSourceType,
   legacySourceType,
@@ -27,13 +28,9 @@ export const maxDuration = 30;
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 // 42703 / PGRST204 = the session_id column has not been migrated in yet —
 // retry the write without it rather than failing the upload (same pattern as
-// /api/sessions' isMissingColumn ladder). Checked BEFORE isMissingConfig,
+// /api/sessions' isMissingColumn ladder). Checked BEFORE isServiceUnavailable,
 // whose /schema cache/ match would swallow PGRST204.
 function isMissingColumn(err) {
   const msg = String(err?.message || err || '');
@@ -51,7 +48,7 @@ export async function GET() {
       .select('*')
       .order('created_at', { ascending: false });
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
 
@@ -73,7 +70,7 @@ export async function GET() {
 
     return Response.json(rows);
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -118,7 +115,7 @@ export async function POST(request) {
       });
 
     if (uploadError) {
-      if (isMissingConfig(uploadError)) return unconfigured();
+      if (isServiceUnavailable(uploadError)) return unconfigured();
       return Response.json({ error: uploadError.message }, { status: 500 });
     }
 
@@ -162,7 +159,7 @@ export async function POST(request) {
     if (dbError) {
       // Clean up storage if DB insert fails
       await supabase.storage.from('images').remove([storagePath]);
-      if (isMissingConfig(dbError)) return unconfigured();
+      if (isServiceUnavailable(dbError)) return unconfigured();
       return Response.json({ error: dbError.message }, { status: 500 });
     }
 
@@ -174,7 +171,7 @@ export async function POST(request) {
     // Even the legacy-fallback write answers in the new vocabulary.
     return Response.json({ ...presentImageRow(data), url: urlData?.signedUrl }, { status: 201 });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -204,7 +201,7 @@ export async function PATCH(request) {
       .eq('id', id)
       .maybeSingle();
     if (readError) {
-      if (isMissingConfig(readError)) return unconfigured();
+      if (isServiceUnavailable(readError)) return unconfigured();
       return Response.json({ error: readError.message }, { status: 500 });
     }
     if (!row) return Response.json({ error: 'Image not found.' }, { status: 404 });
@@ -225,12 +222,12 @@ export async function PATCH(request) {
       .select()
       .single();
     if (upErr) {
-      if (isMissingConfig(upErr)) return unconfigured();
+      if (isServiceUnavailable(upErr)) return unconfigured();
       return Response.json({ error: upErr.message }, { status: 500 });
     }
     return Response.json({ configured: true, image: presentImageRow(updated) });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -254,7 +251,7 @@ export async function DELETE(request) {
       .eq('id', id)
       .maybeSingle();
     if (readError) {
-      if (isMissingConfig(readError)) return unconfigured();
+      if (isServiceUnavailable(readError)) return unconfigured();
       return Response.json({ error: readError.message }, { status: 500 });
     }
     if (!row) return Response.json({ configured: true, deleted: false });
@@ -269,13 +266,13 @@ export async function DELETE(request) {
 
     const { error: delError } = await supabase.from('images').delete().eq('id', id);
     if (delError) {
-      if (isMissingConfig(delError)) return unconfigured();
+      if (isServiceUnavailable(delError)) return unconfigured();
       return Response.json({ error: delError.message }, { status: 500 });
     }
 
     return Response.json({ configured: true, deleted: true, storageRemoved });
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }

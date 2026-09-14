@@ -1,4 +1,5 @@
 import { getAdminClient } from '@/lib/supabase';
+import { isServiceUnavailable } from '@/lib/service-availability.mjs';
 import { requireAdminKey } from '@/lib/admin-auth';
 import { sanitizeStyleDnaBlock, writeStyleDna } from '@/lib/style-dna.mjs';
 
@@ -15,10 +16,6 @@ const BRAND_ID = '00000000-0000-0000-0000-000000000001';
 function unconfigured(extra = {}) {
   return Response.json({ configured: false, ...extra });
 }
-function isMissingConfig(err) {
-  const msg = String(err?.message || err || '');
-  return err?.code === '42P01' || /not set|not configured|does not exist|schema cache/i.test(msg);
-}
 
 export async function GET() {
   let supabase;
@@ -30,12 +27,12 @@ export async function GET() {
       .eq('id', BRAND_ID)
       .single();
     if (error) {
-      if (isMissingConfig(error)) return unconfigured();
+      if (isServiceUnavailable(error)) return unconfigured();
       return Response.json({ error: error.message }, { status: 500 });
     }
     return Response.json(data);
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
@@ -71,7 +68,7 @@ export async function PATCH(request) {
         .select()
         .single();
       if (result.error) {
-        if (isMissingConfig(result.error)) return unconfigured();
+        if (isServiceUnavailable(result.error)) return unconfigured();
         return Response.json({ error: result.error.message }, { status: 500 });
       }
       data = result.data;
@@ -80,7 +77,7 @@ export async function PATCH(request) {
       const block = sanitizeStyleDnaBlock(rawStyleDna);
       const written = await writeStyleDna(supabase, BRAND_ID, block);
       if (written.error) {
-        if (isMissingConfig(written.error)) return unconfigured();
+        if (isServiceUnavailable(written.error)) return unconfigured();
         return Response.json({ error: String(written.error?.message || written.error) }, { status: 500 });
       }
       data = written.data;
@@ -88,7 +85,7 @@ export async function PATCH(request) {
     if (!data) return Response.json({ error: 'Nothing to update.' }, { status: 400 });
     return Response.json(data);
   } catch (err) {
-    if (isMissingConfig(err)) return unconfigured();
+    if (isServiceUnavailable(err)) return unconfigured();
     return Response.json({ error: String(err?.message || err) }, { status: 500 });
   }
 }
