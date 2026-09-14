@@ -101,10 +101,8 @@ test('DECISION 2 — the photo is REQUIRED in every dimension, and the purpose t
 test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () => {
   const p = T.slots.photo.dimensions.landscape.box;
   const dim = DIMENSIONS.landscape;
-  // Inset by the safe margin (client ruling 2026-09-14) — it is still the LEFT
-  // column, it just no longer runs into the frame's edges.
-  assert.ok(p.x > 0 && p.x < 0.1, 'starts at the safe margin, not the edge');
-  assert.ok(p.h > 0.85 && p.y + p.h < 1, 'runs nearly the full height, inside the margins');
+  assert.equal(p.x, 0, 'the photo column starts at the frame edge — full bleed');
+  assert.equal(p.h, 1, 'and runs the full height');
   assert.ok(p.w < 0.5, 'the photo takes the left column, not the frame');
   const ratio = (p.w * dim.w) / (p.h * dim.h);
   assert.ok(ratio < 0.9, `the landscape crop is ${ratio.toFixed(3)}:1 — the whole point is that it stays TALL`);
@@ -115,20 +113,13 @@ test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () =
   // …and the three tall frames are the other arrangement: full-bleed on top.
   for (const dimId of ['portrait', 'story', 'square']) {
     const b = T.slots.photo.dimensions[dimId].box;
-    // Client ruling 2026-09-14 — the photo is INSET by the safe margin, so it no
-    // longer starts at the canvas edge. What still matters is that it spans the
-    // frame between those margins and leaves the band its room.
-    assert.ok(b.x > 0 && b.x < 0.1, 'inset from the left edge by the safe margin');
-    // Square needs the deepest strip of the three: its frame is shortest, so
-    // the mark needs real clearance above the photo to keep its own field.
-    assert.ok(b.y > 0 && b.y < 0.3, 'inset from the top by the field strip that carries the mark');
-    assert.ok(b.w > 0.85 && b.x + b.w < 1, 'spans the frame, but never touches the right edge');
-    // What matters is where the photo ENDS (the band starts there), not its
-    // height — a top inset shortens the height without moving that edge.
+    // Client ruling 2026-09-14 — the photograph keeps the WHOLE frame. The
+    // safe margin belongs to the band at the bottom, not to the image.
+    assert.equal(b.x, 0, 'full bleed from the left edge');
+    assert.equal(b.y, 0, 'full bleed from the top edge');
+    assert.equal(b.w, 1, 'full bleed across the frame');
     const bottom = b.y + b.h;
-    assert.ok(bottom > 0.6 && bottom < 0.75, `${dimId}: the photo should end around the top ~70%, ends at ${bottom.toFixed(3)}`);
-    assert.ok(b.y > T.slots.logo.dimensions[dimId].box.y + T.slots.logo.dimensions[dimId].box.h,
-      `${dimId}: the photo must start BELOW the mark — the top strip is field, which is what retired the plate`);
+    assert.ok(bottom > 0.58 && bottom < 0.75, `${dimId}: the photo should end around the top ~65%, ends at ${bottom.toFixed(3)}`);
     assert.ok(bottom < T.slots.heading.dimensions[dimId].box.y, `${dimId}: the band must start below the photo`);
   }
 });
@@ -205,15 +196,18 @@ test('THE MARK HAS NO PLATE — the safe margin gave it field instead', () => {
 });
 
 
-test('the mark sits in the TOP-RIGHT — the bottom of every frame is the band', () => {
-  // top-left was retired with the plate: landscape's left column is the
-  // photograph, so there is no field there for a bare mark to sit on.
-  assert.deepEqual(T.allowedLogoPositions, ['top-right']);
-  for (const p of T.allowedLogoPositions) assert.ok(p.startsWith('top'));
-  // And the inset is bigger than the other two templates', because the plate
-  // grows outward from the mark and has to fit inside the frame.
+test('the mark sits IN THE BAND — the photograph carries nothing', () => {
+  // Client ruling 2026-09-14: the plate is retired and the photograph keeps
+  // the whole frame, so there is nowhere on an unknown image a mark can be
+  // trusted (measured 1.04-1.1:1 against a floor of 3). The band's flat brand
+  // colour is the one field that can carry it.
+  assert.deepEqual(T.allowedLogoPositions, ['bottom-right']);
   for (const dimId of dimIds()) {
-    assert.equal(T.slots.logo.dimensions[dimId].pad, 0.09);  // widened with the safe margin (2026-09-14)
+    assert.equal(T.slots.logo.dimensions[dimId].pad, 0.04);
+    const mark = T.slots.logo.dimensions[dimId].box;
+    const photo = T.slots.photo.dimensions[dimId].box;
+    const clearsPhoto = mark.y >= photo.y + photo.h || mark.x >= photo.x + photo.w;
+    assert.ok(clearsPhoto, `${dimId}: the mark must sit clear of the photograph`);
   }
 });
 
