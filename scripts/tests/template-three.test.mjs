@@ -101,8 +101,10 @@ test('DECISION 2 — the photo is REQUIRED in every dimension, and the purpose t
 test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () => {
   const p = T.slots.photo.dimensions.landscape.box;
   const dim = DIMENSIONS.landscape;
-  assert.equal(p.x, 0);
-  assert.equal(p.h, 1, 'the photo column runs the full height');
+  // Inset by the safe margin (client ruling 2026-09-14) — it is still the LEFT
+  // column, it just no longer runs into the frame's edges.
+  assert.ok(p.x > 0 && p.x < 0.1, 'starts at the safe margin, not the edge');
+  assert.ok(p.h > 0.85 && p.y + p.h < 1, 'runs nearly the full height, inside the margins');
   assert.ok(p.w < 0.5, 'the photo takes the left column, not the frame');
   const ratio = (p.w * dim.w) / (p.h * dim.h);
   assert.ok(ratio < 0.9, `the landscape crop is ${ratio.toFixed(3)}:1 — the whole point is that it stays TALL`);
@@ -113,8 +115,21 @@ test('DECISION 3 — landscape is photo-LEFT / text-RIGHT, at a TALL crop', () =
   // …and the three tall frames are the other arrangement: full-bleed on top.
   for (const dimId of ['portrait', 'story', 'square']) {
     const b = T.slots.photo.dimensions[dimId].box;
-    assert.equal(b.x, 0); assert.equal(b.y, 0); assert.equal(b.w, 1);
-    assert.ok(b.h > 0.6 && b.h < 0.8, `${dimId}: the photo is roughly the top 72%, not ${b.h}`);
+    // Client ruling 2026-09-14 — the photo is INSET by the safe margin, so it no
+    // longer starts at the canvas edge. What still matters is that it spans the
+    // frame between those margins and leaves the band its room.
+    assert.ok(b.x > 0 && b.x < 0.1, 'inset from the left edge by the safe margin');
+    // Square needs the deepest strip of the three: its frame is shortest, so
+    // the mark needs real clearance above the photo to keep its own field.
+    assert.ok(b.y > 0 && b.y < 0.3, 'inset from the top by the field strip that carries the mark');
+    assert.ok(b.w > 0.85 && b.x + b.w < 1, 'spans the frame, but never touches the right edge');
+    // What matters is where the photo ENDS (the band starts there), not its
+    // height — a top inset shortens the height without moving that edge.
+    const bottom = b.y + b.h;
+    assert.ok(bottom > 0.6 && bottom < 0.75, `${dimId}: the photo should end around the top ~70%, ends at ${bottom.toFixed(3)}`);
+    assert.ok(b.y > T.slots.logo.dimensions[dimId].box.y + T.slots.logo.dimensions[dimId].box.h,
+      `${dimId}: the photo must start BELOW the mark — the top strip is field, which is what retired the plate`);
+    assert.ok(bottom < T.slots.heading.dimensions[dimId].box.y, `${dimId}: the band must start below the photo`);
   }
 });
 
@@ -178,44 +193,27 @@ test('DECISION 5 — the photo is croppable, and Classic\'s still is not', () =>
   assert.equal(TEMPLATE_LABEL_HEADLINE.slots.photo.adjustable, false);
 });
 
-test('THE MARK PLATE — declared for every pair, opaque, and clear of the type', () => {
-  const plate = T.slots.logo.plate;
-  assert.ok(plate, 'the mark is on the photograph, so it must declare its own field');
-  assert.ok(plate.pad > 0 && plate.pad <= 1);
-  assert.equal(plate.radius, 0.5, 'a stadium');
-  for (const pair of T.colourPairs) {
-    const row = plate.fill[pair.id];
-    assert.ok(row, `${pair.id}: every pair needs its own plate`);
-    assert.equal(row.colour, pair.bg, `${pair.id}: the plate is the pair's OWN field colour, never a new one (law 7)`);
-    assert.equal(row.opacity, 1,
-      `${pair.id}: the plate is opaque on purpose — a translucent one leaves the mark's ratio a function of her photograph`);
-  }
-  // The plate is bigger than the mark, inside the frame, and never on the type.
-  for (const dimId of dimIds()) {
-    const dim = DIMENSIONS[dimId];
-    const l = T.slots.logo.dimensions[dimId];
-    const lw = l.widthFrac * dim.w;
-    const lh = lw * 0.8333;
-    const pp = plate.pad * lw;
-    for (const position of T.allowedLogoPositions) {
-      const x = position.endsWith('left') ? l.pad * dim.w : dim.w - l.pad * dim.w - lw;
-      const y = l.pad * dim.w;
-      const q = { x: (x - pp) / dim.w, y: (y - pp) / dim.h, r: (x + lw + pp) / dim.w, b: (y + lh + pp) / dim.h };
-      assert.ok(q.x >= 0 && q.y >= 0 && q.r <= 1 && q.b <= 1, `${dimId}/${position}: the plate falls outside the frame`);
-      for (const slot of ['heading', 'pill']) {
-        assert.equal(hit(q, rect(T.slots[slot].dimensions[dimId].box)), false, `${dimId}/${position}: the plate covers the ${slot}`);
-      }
-    }
-  }
+test('THE MARK HAS NO PLATE — the safe margin gave it field instead', () => {
+  // Client ruling 2026-09-14: "remove the overlay for the logo". The plate
+  // existed only because the photo bled to every edge, so the mark had nothing
+  // but photograph underneath it. The safe margin gives the frame a field
+  // border, which is the calm ground the plate was faking.
+  assert.equal(T.slots.logo.plate, undefined, 'no plate may be declared');
+  // The mechanism still EXISTS in the contract for a template that needs it —
+  // this template simply does not. (Asserted so nobody deletes the mechanism.)
+  assert.equal(typeof validateTemplate, 'function');
 });
 
-test('the mark sits in a TOP corner — the bottom of every frame is the band', () => {
-  assert.deepEqual(T.allowedLogoPositions, ['top-right', 'top-left']);
+
+test('the mark sits in the TOP-RIGHT — the bottom of every frame is the band', () => {
+  // top-left was retired with the plate: landscape's left column is the
+  // photograph, so there is no field there for a bare mark to sit on.
+  assert.deepEqual(T.allowedLogoPositions, ['top-right']);
   for (const p of T.allowedLogoPositions) assert.ok(p.startsWith('top'));
   // And the inset is bigger than the other two templates', because the plate
   // grows outward from the mark and has to fit inside the frame.
   for (const dimId of dimIds()) {
-    assert.equal(T.slots.logo.dimensions[dimId].pad, 0.07);
+    assert.equal(T.slots.logo.dimensions[dimId].pad, 0.09);  // widened with the safe margin (2026-09-14)
   }
 });
 
@@ -341,15 +339,14 @@ test('nothing about Classic or Petal Window moved', () => {
   }
 });
 
-test('the Figma SVG seed REFUSES this template rather than dropping the plate (M4)', () => {
-  // The seed's round-trip truth is a plain box rect. It cannot carry the plate
-  // that is the entire reason the mark is legible on a photograph. Handing the
-  // designer a Figma file that is not the template — and then importing that
-  // difference back as truth — is the failure this refusal exists to prevent.
-  // (The motif was retired by client ruling; the plate alone still refuses.)
-  const refusal = svgSeedRefusal(T);
-  assert.ok(refusal, 'a template with a plate must refuse the seed');
-  assert.match(refusal, /plate/i);
-  // …and it still emits for the template that has neither.
+test('the Figma SVG seed no longer refuses — neither reason survives', () => {
+  // It refused because a plain box rect cannot carry a motif or a plate. The
+  // client retired the motif (2026-08-18) and the plate (2026-09-14), so the
+  // refusal has nothing left to protect. If either ever returns, the refusal
+  // must return with it — that is what this asserts, from both ends.
+  assert.equal(T.slots.motif.present, false);
+  assert.equal(T.slots.logo.plate, undefined);
+  assert.equal(svgSeedRefusal(T), null, 'nothing left to refuse over');
   assert.equal(svgSeedRefusal(TEMPLATE_LABEL_HEADLINE), null);
 });
+

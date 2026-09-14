@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Albus — Interactive 3D Cartoon</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background:
+        radial-gradient(circle at 50% 48%, rgba(255,255,255,.96) 0 18%, transparent 50%),
+        linear-gradient(145deg, #f4f8ff 0%, #dceeff 48%, #b7dcff 100%);
+      font-family: Inter, ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #10214a;
+    }
+    #scene { position: fixed; inset: 0; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .intro {
+      position: fixed;
+      top: 28px;
+      left: 32px;
+      z-index: 2;
+      pointer-events: none;
+    }
+    .eyebrow {
+      margin: 0 0 5px;
+      color: rgba(16,33,74,.52);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 3vw, 44px);
+      letter-spacing: -.055em;
+      line-height: .95;
+    }
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 2;
+      transform: translateX(-50%);
+      padding: 10px 15px;
+      border: 1px solid rgba(16,33,74,.09);
+      border-radius: 999px;
+      background: rgba(255,255,255,.62);
+      box-shadow: 0 12px 35px rgba(48,105,166,.13);
+      backdrop-filter: blur(12px);
+      color: rgba(16,33,74,.68);
+      font-size: 12px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .status {
+      position: fixed;
+      top: 30px;
+      right: 32px;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 650;
+      color: rgba(16,33,74,.65);
+      pointer-events: none;
+    }
+    .status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #54c786;
+      box-shadow: 0 0 0 5px rgba(84,199,134,.15);
+      content: "";
+    }
+    @media (max-width: 640px) {
+      .intro { top: 20px; left: 20px; }
+      .status { top: 22px; right: 20px; }
+      .hint { bottom: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="scene" aria-label="Interactive 3D model of Albus"></div>
+  <div class="intro">
+    <p class="eyebrow">Interactive mascot study</p>
+    <h1>Meet Albus</h1>
+  </div>
+  <div class="status">awake</div>
+  <div class="hint">Move your cursor — Albus is watching</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+
+    const host = document.querySelector("#scene");
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(28, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(0, 0.35, 10.5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    host.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xf7fbff, 0x7aa8d6, 2.3));
+
+    const key = new THREE.DirectionalLight(0xffffff, 3.8);
+    key.position.set(-4, 6, 7);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.left = -6;
+    key.shadow.camera.right = 6;
+    key.shadow.camera.top = 6;
+    key.shadow.camera.bottom = -6;
+    scene.add(key);
+
+    const rim = new THREE.DirectionalLight(0x8ec8ff, 2.7);
+    rim.position.set(5, 2, -4);
+    scene.add(rim);
+
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(3.8, 96),
+      new THREE.ShadowMaterial({ color: 0x255889, opacity: 0.17 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -2.2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const albus = new THREE.Group();
+    const floatRig = new THREE.Group();
+    floatRig.add(albus);
+    scene.add(floatRig);
+
+    const white = new THREE.MeshPhysicalMaterial({
+      color: 0xfafcff,
+      roughness: 0.76,
+      metalness: 0,
+      clearcoat: 0.08,
+      clearcoatRoughness: 0.8,
+      sheen: 1,
+      sheenColor: new THREE.Color(0xc9e5ff),
+      sheenRoughness: 0.92
+    });
+    const navy = new THREE.MeshStandardMaterial({
+      color: 0x111d58,
+      roughness: 0.68
+    });
+    const highlight = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.42
+    });
+    const tongueBlue = new THREE.MeshStandardMaterial({
+      color: 0x65bff0,
+      roughness: 0.8
+    });
+
+    function mesh(geometry, material, position, scale, parent = albus) {
+      const object = new THREE.Mesh(geometry, material);
+      object.position.set(...position);
+      object.scale.set(...scale);
+      object.castShadow = true;
+      object.receiveShadow = true;
+      parent.add(object);
+      return object;
+    }
+
+    const sphere = new THREE.SphereGeometry(1, 64, 48);
+
+    // Overlapping volumes recreate the cloud/plush silhouette from the angle sheet.
+    const body = mesh(sphere, white, [0, -0.35, 0], [2.45, 1.62, 1.62]);
+    const crown = mesh(sphere, white, [0, 0.72, -0.12], [1.58, 1.48, 1.42]);
+    const leftCloud = mesh(sphere, white, [-1.55, 0.02, -0.02], [1.12, 1.16, 1.2]);
+    const rightCloud = mesh(sphere, white, [1.55, 0.02, -0.02], [1.12, 1.16, 1.2]);
+
+    const faceRig = new THREE.Group();
+    faceRig.position.set(0, 0, 1.48);
+    albus.add(faceRig);
+
+    const eyeGeometry = new THREE.SphereGeometry(1, 48, 32);
+    const leftEye = mesh(eyeGeometry, navy, [-0.68, 0.25, 0], [0.34, 0.48, 0.105], faceRig);
+    const rightEye = mesh(eyeGeometry, navy, [0.68, 0.25, 0], [0.34, 0.48, 0.105], faceRig);
+
+    const leftShine = mesh(sphere, highlight, [-0.77, 0.43, 0.105], [0.105, 0.14, 0.045], faceRig);
+    const rightShine = mesh(sphere, highlight, [0.59, 0.43, 0.105], [0.105, 0.14, 0.045], faceRig);
+
+    const mouth = mesh(sphere, navy, [0, -0.43, 0.03], [0.55, 0.38, 0.11], faceRig);
+    const tongue = mesh(sphere, tongueBlue, [0, -0.62, 0.145], [0.34, 0.115, 0.055], faceRig);
+
+    const flipperGeometry = new THREE.CapsuleGeometry(0.38, 0.7, 12, 24);
+    const leftFlipper = mesh(flipperGeometry, white, [-2.28, -0.54, 0.08], [0.72, 0.72, 0.6]);
+    leftFlipper.rotation.z = -0.78;
+    leftFlipper.rotation.x = -0.2;
+    const rightFlipper = mesh(flipperGeometry, white, [2.28, -0.54, 0.08], [0.72, 0.72, 0.6]);
+    rightFlipper.rotation.z = 0.78;
+    rightFlipper.rotation.x = -0.2;
+
+    // The embroidered rear X is included, even though the default camera faces forward.
+    const rearMark = new THREE.Group();
+    rearMark.position.set(0.55, -0.52, -1.57);
+    rearMark.rotation.y = Math.PI;
+    albus.add(rearMark);
+    const stitchGeometry = new THREE.CapsuleGeometry(0.085, 0.43, 8, 16);
+    const stitchA = mesh(stitchGeometry, navy, [0, 0, 0], [1, 1, 0.42], rearMark);
+    stitchA.rotation.z = Math.PI / 4;
+    const stitchB = mesh(stitchGeometry, navy, [0, 0, 0.01], [1, 1, 0.42], rearMark);
+    stitchB.rotation.z = -Math.PI / 4;
+
+    // A second, subtly larger shell softens intersections and suggests plush pile.
+    [body, crown, leftCloud, rightCloud, leftFlipper, rightFlipper].forEach((part) => {
+      const shellMaterial = white.clone();
+      shellMaterial.transparent = true;
+      shellMaterial.opacity = 0.13;
+      shellMaterial.side = THREE.BackSide;
+      const shell = new THREE.Mesh(part.geometry, shellMaterial);
+      shell.scale.copy(part.scale).multiplyScalar(1.018);
+      shell.position.copy(part.position);
+      shell.rotation.copy(part.rotation);
+      part.parent.add(shell);
+    });
+
+    const pointer = new THREE.Vector2();
+    const pointerTarget = new THREE.Vector2();
+    let lastPointerAt = performance.now();
+    let nextBlinkAt = performance.now() + 1400 + Math.random() * 2200;
+    let blinking = false;
+    let blinkStart = 0;
+    const eyeOpenScale = 0.48;
+
+    addEventListener("pointermove", (event) => {
+      pointerTarget.x = (event.clientX / innerWidth) * 2 - 1;
+      pointerTarget.y = -(event.clientY / innerHeight) * 2 + 1;
+      lastPointerAt = performance.now();
+    }, { passive: true });
+
+    document.documentElement.addEventListener("pointerleave", () => {
+      pointerTarget.set(0, 0);
+    });
+
+    function blink(time) {
+      if (!blinking && time >= nextBlinkAt) {
+        blinking = true;
+        blinkStart = time;
+      }
+      if (!blinking) return 1;
+      const progress = (time - blinkStart) / 190;
+      if (progress >= 1) {
+        blinking = false;
+        nextBlinkAt = time + 1700 + Math.random() * 3500;
+        return 1;
+      }
+      return Math.max(0.055, Math.abs(progress * 2 - 1));
+    }
+
+    const clock = new THREE.Clock();
+    function animate(time) {
+      requestAnimationFrame(animate);
+      const elapsed = clock.getElapsedTime();
+
+      if (time - lastPointerAt > 2600) {
+        pointerTarget.x = Math.sin(elapsed * 0.34) * 0.11;
+        pointerTarget.y = Math.sin(elapsed * 0.47) * 0.06;
+      }
+      pointer.lerp(pointerTarget, 0.065);
+
+      const hover = Math.sin(elapsed * 1.35);
+      const breathe = Math.sin(elapsed * 1.8);
+      floatRig.position.y = hover * 0.16;
+      floatRig.rotation.z = Math.sin(elapsed * 0.72) * 0.022;
+      albus.scale.set(1 + breathe * 0.006, 1 - breathe * 0.009, 1 + breathe * 0.006);
+
+      albus.rotation.y += (pointer.x * 0.22 - albus.rotation.y) * 0.055;
+      albus.rotation.x += (-pointer.y * 0.115 - albus.rotation.x) * 0.055;
+      faceRig.position.x += (pointer.x * 0.075 - faceRig.position.x) * 0.09;
+      faceRig.position.y += (pointer.y * 0.045 - faceRig.position.y) * 0.09;
+
+      const shineX = pointer.x * 0.055;
+      const shineY = pointer.y * 0.045;
+      leftShine.position.x = -0.77 + shineX;
+      rightShine.position.x = 0.59 + shineX;
+      leftShine.position.y = 0.43 + shineY;
+      rightShine.position.y = 0.43 + shineY;
+
+      const eyelid = blink(time);
+      leftEye.scale.y = eyeOpenScale * eyelid;
+      rightEye.scale.y = eyeOpenScale * eyelid;
+      leftShine.visible = eyelid > 0.42;
+      rightShine.visible = eyelid > 0.42;
+
+      leftFlipper.rotation.z = -0.78 - Math.sin(elapsed * 1.35) * 0.045 - pointer.x * 0.025;
+      rightFlipper.rotation.z = 0.78 + Math.sin(elapsed * 1.35 + 0.4) * 0.045 - pointer.x * 0.025;
+      floor.scale.setScalar(1 - hover * 0.035);
+
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+
+    function resize() {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      const compact = innerWidth < 640;
+      camera.position.z = compact ? 23.5 : 10.5;
+    }
+    addEventListener("resize", resize);
+    resize();
+  </script>
+</body>
+</html>

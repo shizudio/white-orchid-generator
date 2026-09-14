@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Albus — Interactive Clip Art</title>
+  <style>
+    :root {
+      --blue: #2fa8ef;
+      --blue-dark: #229ee8;
+      --navy: #17245f;
+      --rim: #9bd5f5;
+      --tongue: #8fd0f2;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background:
+        radial-gradient(circle at 50% 45%, rgba(255,255,255,.12), transparent 44%),
+        linear-gradient(145deg, #3bb5f4, var(--blue) 48%, var(--blue-dark));
+      color: #fff;
+      font-family: Inter, ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .intro {
+      position: fixed;
+      top: 28px;
+      left: 32px;
+      z-index: 4;
+      pointer-events: none;
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: rgba(255,255,255,.7);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 3vw, 44px);
+      line-height: .95;
+      letter-spacing: -.055em;
+    }
+    .status {
+      position: fixed;
+      top: 30px;
+      right: 32px;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,.84);
+      font-size: 12px;
+      font-weight: 650;
+      pointer-events: none;
+    }
+    .status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 0 0 5px rgba(255,255,255,.14);
+      content: "";
+    }
+    .hint {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      z-index: 4;
+      transform: translateX(-50%);
+      padding: 10px 15px;
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 999px;
+      background: rgba(13,85,144,.2);
+      box-shadow: 0 12px 35px rgba(0,74,133,.15);
+      backdrop-filter: blur(12px);
+      color: rgba(255,255,255,.9);
+      font-size: 12px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #albus {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 2;
+      width: clamp(150px, 22vw, 270px);
+      aspect-ratio: 1.18;
+      cursor: pointer;
+      filter: drop-shadow(0 20px 16px rgba(3,79,140,.2));
+      transform-origin: 50% 55%;
+      will-change: transform;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #albus::after {
+      position: absolute;
+      left: 20%;
+      bottom: 3%;
+      z-index: -1;
+      width: 60%;
+      height: 8%;
+      border-radius: 50%;
+      background: rgba(4,73,129,.18);
+      filter: blur(9px);
+      content: "";
+    }
+    svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .pose {
+      opacity: 0;
+      transform-origin: 400px 300px;
+      transition: opacity 100ms linear;
+    }
+    .pose.active { opacity: 1; }
+    .eye {
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+    .arm {
+      transform-box: fill-box;
+      transform-origin: top center;
+    }
+    @media (max-width: 640px) {
+      .intro { top: 20px; left: 20px; }
+      .status { top: 22px; right: 20px; }
+      .hint { bottom: 18px; }
+      #albus { width: clamp(135px, 43vw, 180px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #albus { transition: transform .2s ease; }
+    }
+  </style>
+</head>
+<body>
+  <header class="intro">
+    <p class="eyebrow">Interactive mascot study</p>
+    <h1>Meet Albus</h1>
+  </header>
+  <div class="status" id="status">following</div>
+
+  <div id="albus" role="button" tabindex="0" aria-label="Albus. Click to roll.">
+    <svg viewBox="0 0 800 680" role="img" aria-labelledby="title description">
+      <title id="title">Albus the cloud mascot</title>
+      <desc id="description">A small animated cloud that follows the cursor and rolls through different views.</desc>
+      <defs>
+        <linearGradient id="white-body" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#fff"/>
+          <stop offset=".84" stop-color="#fff"/>
+          <stop offset="1" stop-color="#f8fcff"/>
+        </linearGradient>
+        <clipPath id="front-mouth">
+          <path d="M352 354 C370 368 389 368 400 359 C411 368 430 368 448 354
+                   C449 395 429 420 400 420 C371 420 351 395 352 354Z"/>
+        </clipPath>
+        <clipPath id="side-mouth">
+          <path d="M289 361 C301 371 314 371 323 365 C326 393 312 411 292 411
+                   C280 411 271 405 266 397 C279 391 285 379 289 361Z"/>
+        </clipPath>
+      </defs>
+
+      <!-- FRONT -->
+      <g class="pose active" id="pose-front">
+        <path d="M151 427 C126 416 111 395 116 371 C121 344 139 328 166 318
+                 C161 277 183 239 220 222 C229 148 301 91 400 91
+                 C499 91 571 148 580 222 C617 239 639 277 634 318
+                 C661 328 679 344 684 371 C689 395 674 416 649 427
+                 C614 480 522 511 449 499 C432 507 416 511 400 511
+                 C384 511 368 507 351 499 C278 511 186 480 151 427Z"
+              fill="var(--rim)" transform="translate(0 18)"/>
+        <path d="M151 409 C120 415 94 398 96 371 C98 344 119 322 153 311
+                 C145 269 171 228 215 216 C221 139 298 76 400 76
+                 C502 76 579 139 585 216 C629 228 655 269 647 311
+                 C681 322 702 344 704 371 C706 398 680 415 649 409
+                 C617 463 530 488 447 478 C431 486 415 490 400 490
+                 C385 490 369 486 353 478 C270 488 183 463 151 409Z"
+              fill="url(#white-body)"/>
+        <path class="arm" id="front-left-arm"
+              d="M160 345 C122 353 94 384 93 413 C92 434 109 445 126 433
+                 C145 419 159 399 174 378Z" fill="#fff"/>
+        <path class="arm" id="front-right-arm"
+              d="M640 345 C678 353 706 384 707 413 C708 434 691 445 674 433
+                 C655 419 641 399 626 378Z" fill="#fff"/>
+        <g id="front-eyes">
+          <g class="eye" id="front-left-eye">
+            <ellipse cx="322" cy="308" rx="35" ry="55" fill="var(--navy)"/>
+            <ellipse cx="311" cy="287" rx="13" ry="18" fill="#fff"/>
+          </g>
+          <g class="eye" id="front-right-eye">
+            <ellipse cx="478" cy="308" rx="35" ry="55" fill="var(--navy)"/>
+            <ellipse cx="467" cy="287" rx="13" ry="18" fill="#fff"/>
+          </g>
+        </g>
+        <path d="M352 354 C370 368 389 368 400 359 C411 368 430 368 448 354
+                 C449 395 429 420 400 420 C371 420 351 395 352 354Z"
+              fill="var(--navy)"/>
+        <ellipse cx="400" cy="408" rx="38" ry="22" fill="var(--tongue)"
+                 clip-path="url(#front-mouth)"/>
+      </g>
+
+      <!-- RIGHT PROFILE: the round, tall side silhouette from the angle sheet. -->
+      <g class="pose" id="pose-right">
+        <path d="M207 451 C178 428 169 384 184 349 C168 282 196 210 252 178
+                 C286 111 381 80 474 109 C562 137 618 210 616 296
+                 C648 329 653 378 632 416 C597 478 517 512 398 510
+                 C310 510 243 492 207 451Z"
+              fill="var(--rim)" transform="translate(0 18)"/>
+        <path d="M207 432 C178 409 171 371 185 337 C168 274 197 205 251 174
+                 C290 111 381 82 470 108 C555 133 610 202 610 285
+                 C641 316 648 361 628 398 C596 458 516 490 399 489
+                 C311 489 243 473 207 432Z"
+              fill="url(#white-body)"/>
+        <path class="arm" id="right-arm"
+              d="M569 339 C616 348 650 380 651 418 C651 441 632 451 613 435
+                 C589 415 575 390 559 363Z" fill="#fff"/>
+        <g id="right-eye">
+          <ellipse cx="296" cy="316" rx="31" ry="51" fill="var(--navy)"/>
+          <ellipse cx="287" cy="296" rx="12" ry="17" fill="#fff"/>
+        </g>
+        <path d="M289 361 C301 371 314 371 323 365 C326 393 312 411 292 411
+                 C280 411 271 405 266 397 C279 391 285 379 289 361Z"
+              fill="var(--navy)"/>
+        <ellipse cx="293" cy="404" rx="25" ry="15" fill="var(--tongue)"
+                 clip-path="url(#side-mouth)"/>
+        <path d="M213 387 C211 421 226 444 252 447" fill="none"
+              stroke="var(--rim)" stroke-width="8" stroke-linecap="round"/>
+      </g>
+
+      <!-- LEFT PROFILE mirrors the actual right-facing artwork. -->
+      <g class="pose" id="pose-left" transform="translate(800 0) scale(-1 1)">
+        <path d="M207 451 C178 428 169 384 184 349 C168 282 196 210 252 178
+                 C286 111 381 80 474 109 C562 137 618 210 616 296
+                 C648 329 653 378 632 416 C597 478 517 512 398 510
+                 C310 510 243 492 207 451Z"
+              fill="var(--rim)" transform="translate(0 18)"/>
+        <path d="M207 432 C178 409 171 371 185 337 C168 274 197 205 251 174
+                 C290 111 381 82 470 108 C555 133 610 202 610 285
+                 C641 316 648 361 628 398 C596 458 516 490 399 489
+                 C311 489 243 473 207 432Z"
+              fill="url(#white-body)"/>
+        <path d="M569 339 C616 348 650 380 651 418 C651 441 632 451 613 435
+                 C589 415 575 390 559 363Z" fill="#fff"/>
+        <ellipse cx="296" cy="316" rx="31" ry="51" fill="var(--navy)"/>
+        <ellipse cx="287" cy="296" rx="12" ry="17" fill="#fff"/>
+        <path d="M289 361 C301 371 314 371 323 365 C326 393 312 411 292 411
+                 C280 411 271 405 266 397 C279 391 285 379 289 361Z"
+              fill="var(--navy)"/>
+        <ellipse cx="293" cy="404" rx="25" ry="15" fill="var(--tongue)"
+                 clip-path="url(#side-mouth)"/>
+        <path d="M213 387 C211 421 226 444 252 447" fill="none"
+              stroke="var(--rim)" stroke-width="8" stroke-linecap="round"/>
+      </g>
+
+      <!-- BACK -->
+      <g class="pose" id="pose-back">
+        <path d="M151 427 C126 416 111 395 116 371 C121 344 139 328 166 318
+                 C161 277 183 239 220 222 C229 148 301 91 400 91
+                 C499 91 571 148 580 222 C617 239 639 277 634 318
+                 C661 328 679 344 684 371 C689 395 674 416 649 427
+                 C614 480 522 511 449 499 C432 507 416 511 400 511
+                 C384 511 368 507 351 499 C278 511 186 480 151 427Z"
+              fill="var(--rim)" transform="translate(0 18)"/>
+        <path d="M151 409 C120 415 94 398 96 371 C98 344 119 322 153 311
+                 C145 269 171 228 215 216 C221 139 298 76 400 76
+                 C502 76 579 139 585 216 C629 228 655 269 647 311
+                 C681 322 702 344 704 371 C706 398 680 415 649 409
+                 C617 463 530 488 447 478 C431 486 415 490 400 490
+                 C385 490 369 486 353 478 C270 488 183 463 151 409Z"
+              fill="url(#white-body)"/>
+        <path d="M160 345 C122 353 94 384 93 413 C92 434 109 445 126 433
+                 C145 419 159 399 174 378Z" fill="#fff"/>
+        <path d="M640 345 C678 353 706 384 707 413 C708 434 691 445 674 433
+                 C655 419 641 399 626 378Z" fill="#fff"/>
+        <g transform="translate(475 390)" stroke="var(--navy)" stroke-width="24"
+           stroke-linecap="round">
+          <path d="M-22 -22 L22 22"/>
+          <path d="M22 -22 L-22 22"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+
+  <div class="hint">Move to guide Albus · click to roll</div>
+
+  <script>
+    const albus = document.querySelector("#albus");
+    const status = document.querySelector("#status");
+    const poses = {
+      front: document.querySelector("#pose-front"),
+      left: document.querySelector("#pose-left"),
+      right: document.querySelector("#pose-right"),
+      back: document.querySelector("#pose-back")
+    };
+    const frontEyes = document.querySelector("#front-eyes");
+    const leftEye = document.querySelector("#front-left-eye");
+    const rightEye = document.querySelector("#front-right-eye");
+    const frontLeftArm = document.querySelector("#front-left-arm");
+    const frontRightArm = document.querySelector("#front-right-arm");
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const position = { x: innerWidth / 2, y: innerHeight / 2 };
+    const target = { x: innerWidth / 2, y: innerHeight / 2 };
+    const velocity = { x: 0, y: 0 };
+    let currentPose = "front";
+    let lastPointerAt = performance.now();
+    let blinking = false;
+    let blinkStart = 0;
+    let nextBlink = performance.now() + 1300 + Math.random() * 2500;
+    let rolling = false;
+    let rollStart = 0;
+    let nextRoll = performance.now() + 7500;
+
+    function setPose(name) {
+      if (currentPose === name) return;
+      Object.values(poses).forEach(pose => pose.classList.remove("active"));
+      poses[name].classList.add("active");
+      currentPose = name;
+    }
+
+    function guide(event) {
+      target.x = event.clientX;
+      target.y = event.clientY;
+      lastPointerAt = performance.now();
+    }
+    addEventListener("pointermove", guide, { passive: true });
+
+    function startRoll() {
+      if (rolling || reduceMotion) return;
+      rolling = true;
+      rollStart = performance.now();
+      status.textContent = "rolling";
+    }
+    albus.addEventListener("click", startRoll);
+    albus.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") startRoll();
+    });
+
+    function blinkAmount(now) {
+      if (!blinking && now > nextBlink) {
+        blinking = true;
+        blinkStart = now;
+      }
+      if (!blinking) return 1;
+      const progress = (now - blinkStart) / 170;
+      if (progress >= 1) {
+        blinking = false;
+        nextBlink = now + 1700 + Math.random() * 3600;
+        return 1;
+      }
+      return Math.max(.07, Math.abs(progress * 2 - 1));
+    }
+
+    function rollState(now) {
+      if (!rolling && now > nextRoll) startRoll();
+      if (!rolling) return null;
+      const progress = (now - rollStart) / 1450;
+      if (progress >= 1) {
+        rolling = false;
+        nextRoll = now + 8500 + Math.random() * 4500;
+        status.textContent = "following";
+        return null;
+      }
+      if (progress < .22) return { pose: "right", rotation: progress * 360 };
+      if (progress < .55) return { pose: "back", rotation: progress * 360 };
+      if (progress < .8) return { pose: "left", rotation: progress * 360 };
+      return { pose: "front", rotation: progress * 360 };
+    }
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      const seconds = now / 1000;
+      const rect = albus.getBoundingClientRect();
+      const halfW = rect.width / 2;
+      const halfH = rect.height / 2;
+
+      if (now - lastPointerAt > 3200 && !rolling) {
+        target.x = innerWidth * .5 + Math.sin(seconds * .48) * innerWidth * .19;
+        target.y = innerHeight * .5 + Math.sin(seconds * .62) * innerHeight * .12;
+      }
+
+      const oldX = position.x;
+      const oldY = position.y;
+      position.x += (target.x - position.x) * (reduceMotion ? .18 : .035);
+      position.y += (target.y - position.y) * (reduceMotion ? .18 : .035);
+      position.x = Math.max(halfW + 12, Math.min(innerWidth - halfW - 12, position.x));
+      position.y = Math.max(halfH + 78, Math.min(innerHeight - halfH - 52, position.y));
+      velocity.x += ((position.x - oldX) - velocity.x) * .2;
+      velocity.y += ((position.y - oldY) - velocity.y) * .2;
+
+      const roll = rollState(now);
+      let rotation = Math.sin(seconds * .8) * 1.4;
+      let scaleX = 1;
+      let scaleY = 1;
+
+      if (roll) {
+        setPose(roll.pose);
+        rotation += roll.rotation;
+        scaleX = .96 + Math.abs(Math.cos(roll.rotation * Math.PI / 180)) * .04;
+        scaleY = 1.03 - Math.abs(Math.cos(roll.rotation * Math.PI / 180)) * .03;
+      } else {
+        if (Math.abs(target.x - position.x) > 105) {
+          setPose(target.x < position.x ? "left" : "right");
+        } else {
+          setPose("front");
+        }
+        const breathe = Math.sin(seconds * 1.75);
+        scaleX = 1 + breathe * .008;
+        scaleY = 1 - breathe * .011;
+      }
+
+      const floatY = Math.sin(seconds * 1.42) * 7;
+      albus.style.transform =
+        `translate3d(${position.x - halfW}px, ${position.y - halfH + floatY}px, 0) ` +
+        `rotate(${rotation}deg) scale(${scaleX}, ${scaleY})`;
+
+      const lookX = Math.max(-1, Math.min(1, (target.x - position.x) / 190));
+      const lookY = Math.max(-1, Math.min(1, (target.y - position.y) / 150));
+      frontEyes.style.transform = `translate(${lookX * 8}px, ${lookY * 6}px)`;
+      const blink = blinkAmount(now);
+      leftEye.style.transform = `scaleY(${blink})`;
+      rightEye.style.transform = `scaleY(${blink})`;
+      frontLeftArm.style.transform = `rotate(${Math.sin(seconds * 1.4) * -2.4}deg)`;
+      frontRightArm.style.transform = `rotate(${Math.sin(seconds * 1.4 + .4) * 2.4}deg)`;
+    }
+
+    addEventListener("resize", () => {
+      target.x = Math.min(target.x, innerWidth);
+      target.y = Math.min(target.y, innerHeight);
+    });
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

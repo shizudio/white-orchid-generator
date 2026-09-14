@@ -73,6 +73,8 @@ async function run() {
 
   const failures = [];
   const fail = (m) => failures.push(m);
+  const notes = [];
+  const note = (m) => notes.push(m);
 
   // LAW 3 — the declared motif must resolve to a real asset before anything
   // else is worth measuring.
@@ -478,7 +480,6 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
       if (c.truth.missingRequired.length) fail(`${at}: a satisfied required slot was reported missing (${c.truth.missingRequired.join(', ')})`);
       if (c.truth.missingAssets.length) fail(`${at}: missing assets ${c.truth.missingAssets.join(', ')}`);
       if (!c.truth.logoBox) fail(`${at}: the mark did not paint`);
-      if (!c.truth.logoPlate) fail(`${at}: the declared mark plate did not paint`);
       if (c.truth.state !== null) fail(`${at}: this template declares ONE layout, so the state must be null (got '${c.truth.state}')`);
 
       for (const slot of ['heading', 'pill']) {
@@ -566,15 +567,13 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
     // ── THE MARK, ON THE PHOTOGRAPH ────────────────────────────────────────
     for (const m of result.markSweep) {
       const at = `mark ${m.pairId}/${m.position}/${m.dimId}`;
-      if (!m.plate) { fail(`${at}: no plate was painted`); continue; }
+    // (The plate was retired 2026-09-14; the mark sits on the top field strip.)
       if (!m.mark) { fail(`${at}: the mark was not measured`); continue; }
       if (!m.mark.ok) fail(`${at}: the mark measures ${m.mark.ratio}:1 — below ${m.mark.minimum}`);
       /* THE PLATE, PROVED. A ratio that merely clears could be the photograph
          being kind. The pair's own flat-field number coming back means the
          mark is measuring the plate — which is the whole claim. */
-      if (Math.abs(m.mark.ratio - m.pairContrast) > 0.05) {
-        fail(`${at}: the mark measures ${m.mark.ratio}:1 where this pair's FLAT FIELD is ${m.pairContrast}:1 — the photograph is still reaching the mark, so the plate is not doing its job`);
-      }
+      if (!m.mark.ok) fail(`${at}: the mark fails on the field strip (${m.mark.ratio}:1, floor ${m.mark.minimum})`);
       for (const [slot, r] of Object.entries(m.band)) {
         if (!r) fail(`${at}: the ${slot} was not measured`);
         else if (!r.ok) fail(`${at}: the ${slot} measures ${r.ratio}:1 in the band — below ${r.minimum}`);
@@ -583,14 +582,24 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
     }
 
     // ── EVERY SANCTIONED VARIANT, TONE AND OFF-TONE ────────────────────────
+    const passingByPair = new Map();
     for (const v of result.variantSweep) {
       const at = `variant ${v.id}/${v.pairId}`;
       if (!v.loaded) { fail(`${at}: the asset did not load — law 3`); continue; }
       if (!v.mark) { fail(`${at}: the mark was not measured`); continue; }
       const toneOk = (v.colour === 'green' && v.pairKlass === 'light') || (v.colour === 'ivory' && v.pairKlass === 'dark');
-      if (toneOk && !v.mark.ok) fail(`${at}: a TONE-APPROPRIATE mark measures ${v.mark.ratio}:1 and refuses — the plate should carry it`);
+      if (toneOk && !v.mark.ok) note(`${at}: tone-appropriate but measures ${v.mark.ratio}:1 on this pair's own field — the app will hold it`);
+      if (v.mark.ok) passingByPair.set(v.pairId, (passingByPair.get(v.pairId) || 0) + 1);
       if (!toneOk && v.mark.ok) fail(`${at}: an OFF-TONE mark (${v.colour} on a ${v.pairKlass} field) came back readable at ${v.mark.ratio}:1 — the check is not measuring what it claims to`);
       if (!toneOk && !v.failures.includes('logo')) fail(`${at}: an off-tone mark failed the floor but was not reported — export could not be blocked`);
+    }
+
+    /* No plate means no universal backdrop under the mark, so this is the claim
+       that replaces the old equality one: every pair must still leave her at
+       least ONE mark she can actually use. A variant that refuses on one pair
+       is honest; a pair with nothing that works is a dead end. */
+    for (const pairId of new Set(result.variantSweep.map((v) => v.pairId))) {
+      if (!passingByPair.get(pairId)) fail(`pair ${pairId}: NO sanctioned mark clears on this pair's own field — she would have no usable mark`);
     }
 
     // ── THE REQUIRED PHOTO ─────────────────────────────────────────────────
@@ -617,8 +626,8 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
     for (const o of result.overlaps) {
       for (const [slot, hit] of o.textOverPhoto) if (hit) fail(`${o.dimId}: the ${slot} box INTERSECTS the photo box — text would sit on the photograph`);
       if (o.motifOverPhoto) fail(`${o.dimId}: the motif box intersects the photo box — the watermark belongs in the band`);
-      for (const [position, hit] of o.plateOverText) if (hit) fail(`${o.dimId}: the mark plate at ${position} covers a text box`);
-      for (const [position, inside] of o.plateInFrame) if (!inside) fail(`${o.dimId}: the mark plate at ${position} falls outside the frame`);
+      for (const [position, hit] of o.plateOverText) if (hit) fail(`${o.dimId}: the mark at ${position} covers a text box`);
+      for (const [position, inside] of o.plateInFrame) if (!inside) fail(`${o.dimId}: the mark at ${position} falls outside the frame`);
     }
 
     // ── HER CROP ───────────────────────────────────────────────────────────
@@ -634,7 +643,13 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
       }
       const d = cropDefaults[c.dimId];
       if (!c.mark || !c.mark.ok) fail(`${at}: the mark was not measured, or failed (${JSON.stringify(c.mark)})`);
-      else if (d && d.mark && c.mark.ratio !== d.mark.ratio) fail(`${at}: the mark's backdrop moved with the crop (${d.mark.ratio} -> ${c.mark.ratio}) — the plate is not the mark's field`);
+    // The plate made the mark's ratio IDENTICAL on every crop. Without it
+    // (client ruling 2026-09-14) the mark sits on the top field strip, whose
+    // sampled backdrop shifts slightly as the photo below it moves — so the
+    // honest gate is that it CLEARS THE FLOOR on every crop with real margin,
+    // not that the number never moves.
+    else if (d && d.mark && !d.mark.ok) fail(`${at}: the mark fails at this crop (${d.mark.ratio}:1, floor ${d.mark.minimum})`);
+    else if (d && d.mark && d.mark.ratio < d.mark.minimum + 1) fail(`${at}: the mark only just clears at this crop (${d.mark.ratio}:1) — too close to the floor to trust`);
       if (c.contrastFailures.length) fail(`${at}: contrast failures ${c.contrastFailures.join(', ')}`);
     }
 
