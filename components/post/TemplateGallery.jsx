@@ -55,11 +55,10 @@ export default function TemplateGallery({ onChoose }) {
         <a href="/" className={styles.wordmark} aria-label="The White Orchid home">
           <img src="/assets/logos/primary/primary-2-green.svg" alt="The White Orchid" />
         </a>
-        <div className={styles.headerCopy}>
-          <p className={styles.kicker}>Make a post</p>
-          <h1>Start with the right structure.</h1>
-          <p>Choose a brand-approved template. Add your words and photo next—we keep the layout, type and mark working together.</p>
-        </div>
+        {/* Client ruling 2026-09-14: the hero block is gone — the templates are the
+            page. An h1 is still required for document structure and screen
+            readers, so it stays, visually hidden rather than deleted. */}
+        <h1 className={styles.srOnly}>Make a post</h1>
       </header>
 
       <nav className={styles.filters} aria-label="Filter templates">

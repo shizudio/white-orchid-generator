@@ -83,7 +83,7 @@ test("photo-source: the shared chooser exposes the data-wo-photo-source driver c
 });
 
 test("photo-source: the landing flow wires the chooser through the shared policy", () => {
-  const src = read("app/page.jsx");
+  const src = read("app/create/page.jsx")  // the landing moved here when `/` became the gallery (2026-09-14);
   assert.match(src, /<PhotoSourceChooser/, "landing renders the shared chooser");
   assert.match(src, /planIsPhotoLed\(data\)/, "only photo-led plans pause");
   assert.match(src, /resolveLandingPhotoOutcome/, "outcomes resolve through the policy");
