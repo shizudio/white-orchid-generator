@@ -211,7 +211,9 @@ test('the default mark is still whatever the colour class implies (nothing chang
   assert.equal(resolveLogoAsset(T, 'light', 's1-ivory').src, '/assets/logos/secondary/secondary-1-ivory.svg');
   assert.equal(resolveLogoAsset(T, 'light', 's1-ivory').explicit, true);
   // An id the template never sanctioned falls back to the default, never draws.
-  assert.equal(resolveLogoAsset(T, 'light', 'p1-green').src, T.logoAssets.light);
+  // p2-* is the standing example: at 7.9-8.9:1 it cannot be placed as a corner
+  // mark at a legible height, so it is not in SANCTIONED_LOGO_ASSETS.
+  assert.equal(resolveLogoAsset(T, 'light', 'p2-green').src, T.logoAssets.light);
 });
 
 test('allowedLogoPositions is a real subset — no free placement (§3 non-goals)', () => {

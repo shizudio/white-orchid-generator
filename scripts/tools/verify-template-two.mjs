@@ -46,6 +46,12 @@ import { templateMaskAsset, templateMaskShapes } from '../../lib/templates/mask-
 import { TEMPLATE_PETAL_WINDOW as T } from '../../lib/templates/index.mjs';
 import { DIMENSIONS } from '../../lib/templates/template-contract.mjs';
 
+/* The mark is sized by HEIGHT (client ruling 2026-09-14); its width follows the
+   chosen lockup's aspect, so clearance is checked against the WIDEST sanctioned
+   one (p1-ivory, 2.40:1). */
+const MARK_MAX_ASPECT = 2.40;
+const markHeightFrac = (l) => l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87;
+
 const OUT_DIR = join(REPO_ROOT, 'generated', 'template-two');
 const FILLER = 'every child leads their own day here with us and we make room for what they want to try next in the garden';
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -372,8 +378,8 @@ async function run() {
         // The mark's real placed rect, for BOTH allowed corners.
         const markRects = tpl.allowedLogoPositions.map((position) => {
           const pad = (l.pad ?? 0.05) * dim.w;
-          const lw = (l.widthFrac ?? 0.12) * dim.w;
-          const lh = lw * 0.8333; // the secondary lockup's shipped ratio
+          const lw = (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * 2.40 * dim.w;  // widest sanctioned lockup
+          const lh = (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * dim.w;  // height is declared, width follows the lockup
           const x = position.endsWith('left') ? pad : position.endsWith('center') ? (dim.w - lw) / 2 : dim.w - pad - lw;
           const y = position.startsWith('top') ? pad : dim.h - pad - lh;
           return { position, x: x / dim.w, y: y / dim.h, r: (x + lw) / dim.w, b: (y + lh) / dim.h };
@@ -588,8 +594,8 @@ async function run() {
         const dim = DIMENSIONS[dimId];
         const lg = T.slots.logo.dimensions[dimId];
         const pad = (lg.pad ?? 0.05) * dim.w;
-        const lw = (lg.widthFrac ?? 0.12) * dim.w;
-        const lh = lw * 0.8333;
+        const lw = (lg.heightFrac ?? (lg.widthFrac ?? 0.12) * 0.87) * 2.40 * dim.w;  // widest sanctioned lockup
+        const lh = (lg.heightFrac ?? (lg.widthFrac ?? 0.12) * 0.87) * dim.w;  // height is declared, width follows the lockup
         for (const position of T.allowedLogoPositions) {
           const mx = position.endsWith('left') ? pad : dim.w - pad - lw;
           const my = dim.h - pad - lh;

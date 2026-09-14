@@ -47,6 +47,12 @@ import { templateLogoVariants } from '../../lib/templates/logo-assets.mjs';
 import { TEMPLATE_CAPTION_BAND as T } from '../../lib/templates/index.mjs';
 import { DIMENSIONS } from '../../lib/templates/template-contract.mjs';
 
+/* The mark is sized by HEIGHT (client ruling 2026-09-14); its width follows the
+   chosen lockup's aspect, so clearance is checked against the WIDEST sanctioned
+   one (p1-ivory, 2.40:1). */
+const MARK_MAX_ASPECT = 2.40;
+const markHeightFrac = (l) => l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87;
+
 const OUT_DIR = join(REPO_ROOT, 'generated', 'template-three');
 const CACHE_DIR = join(REPO_ROOT, 'generated', '.photo-cache');
 const MANIFEST = join(CACHE_DIR, 'manifest.json');
@@ -407,8 +413,8 @@ const motif = motifDeclared ? templateMotifAsset(T) : null;
         const plate = tpl.slots.logo.plate;
         const plateRects = tpl.allowedLogoPositions.map((position) => {
           const pad = (l.pad ?? 0.05) * dim.w;
-          const lw = (l.widthFrac ?? 0.12) * dim.w;
-          const lh = lw * 0.8333; // the secondary lockup's shipped ratio
+          const lw = (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * 2.40 * dim.w;  // widest sanctioned lockup
+          const lh = (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * dim.w;  // height is declared, width follows the lockup
           const x = position.endsWith('left') ? pad : dim.w - pad - lw;
           const y = position.startsWith('top') ? pad : dim.h - pad - lh;
           const pp = (plate?.pad ?? 0) * lw;

@@ -24,6 +24,19 @@ import { floorPxFor } from '../../lib/render-core/floor.mjs';
 import { MEASURED_BUDGETS } from '../../lib/templates/template-petal-window.mjs';
 import { svgSeedRefusal } from '../tools/export-template-svg.mjs';
 
+/* The mark is sized by HEIGHT (client ruling 2026-09-14), so its width depends
+   on which lockup is chosen. These tests assert clearance, so they use the
+   WIDEST sanctioned lockup — p1-ivory at 2.40:1 — as the worst case. */
+const MARK_MAX_ASPECT = 2.40;
+const markBox = (l, dim, position) => {
+  const pad = (l.pad ?? 0.05) * dim.w;
+  const lh = (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * dim.w;
+  const lw = lh * MARK_MAX_ASPECT;
+  const x = position.endsWith('left') ? pad : dim.w - pad - lw;
+  const y = dim.h - pad - lh;
+  return { x: x / dim.w, y: y / dim.h, r: (x + lw) / dim.w, b: (y + lh) / dim.h };
+};
+
 const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, '..', '..', 'public');
 
@@ -252,12 +265,7 @@ test('the mark stays clear of the petal AND the band, in both allowed corners', 
     const p = T.slots.photo.dimensions[dimId].box;
     const h = T.slots.heading.dimensions[dimId].box;
     for (const position of T.allowedLogoPositions) {
-      const pad = l.pad * dim.w;
-      const lw = l.widthFrac * dim.w;
-      const lh = lw * RATIO;
-      const x = position.endsWith('left') ? pad : dim.w - pad - lw;
-      const y = dim.h - pad - lh;
-      const m = { x: x / dim.w, y: y / dim.h, r: (x + lw) / dim.w, b: (y + lh) / dim.h };
+      const m = markBox(l, dim, position);
       for (const [name, box] of [['petal', p], ['band', h]]) {
         const hit = !(m.r <= box.x || box.x + box.w <= m.x || m.b <= box.y || box.y + box.h <= m.y);
         assert.equal(hit, false, `${dimId}/${position}: the mark overlaps the ${name}`);
@@ -351,7 +359,7 @@ test('photoOnly is a fully authored second layout — bigger petal, no band, in 
       // The shape-agnostic guarantee, stated where the geometry is: the BOX —
       // and so every shape contained in it — clears both sanctioned corners.
       const l = slotConstraint(T, 'logo', 'landscape');
-      const markW = (l.pad + l.widthFrac);
+      const markW = (l.pad ?? 0.05) + (l.heightFrac ?? (l.widthFrac ?? 0.12) * 0.87) * MARK_MAX_ASPECT;
       assert.ok(alt.box.x > markW, `landscape's window reaches the bottom-left mark column (${alt.box.x} <= ${markW})`);
       assert.ok(alt.box.x + alt.box.w < 1 - markW, 'landscape\'s window reaches the bottom-right mark column');
     } else {
@@ -392,12 +400,7 @@ test('THE MARK IS CLEAR OF THE PETAL IN THE photoOnly STATE TOO', () => {
     // size — so it is the one fixed thing the eye holds across the switch.
     assert.deepEqual(l, slotConstraint(T, 'logo', dimId), `${dimId}: the mark moved between states`);
     for (const position of T.allowedLogoPositions) {
-      const pad = (l.pad ?? 0.05) * dim.w;
-      const lw = (l.widthFrac ?? 0.12) * dim.w;
-      const lh = lw * 0.8333;
-      const x = position.endsWith('left') ? pad : dim.w - pad - lw;
-      const y = dim.h - pad - lh;
-      const m = { x: x / dim.w, y: y / dim.h, r: (x + lw) / dim.w, b: (y + lh) / dim.h };
+      const m = markBox(l, dim, position);
       const hit = !(m.r <= p.x || p.x + p.w <= m.x || m.b <= p.y || p.y + p.h <= m.y);
       assert.equal(hit, false, `${dimId}/${position}: the bigger photoOnly petal runs under the mark`);
     }
